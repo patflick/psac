@@ -63,7 +63,11 @@
  *                     j
  *
  */
+
 #include <vector>
+
+#include "algos.hpp"
+
 #define PSAC_TAG_EDGE_KMER 1
 
 typedef uint64_t kmer_t;
@@ -93,7 +97,8 @@ void kmer_gen(const std::basic_string<char>& local_str, std::vector<index_t>& B,
     //       as soon as it gets inefficient, normal sorting or bucket sorting
     //       ( non exact bucketing) might get much more efficient
     static constexpr unsigned int l = 8; // bits per character
-    std::vector<count_t> hist(static_cast<std::size_t>(1) << (l*k), 0);
+    static constexpr std::size_t hist_size = static_cast<std::size_t>(1) << (l*k);
+    std::vector<count_t> hist(hist_size, 0);
 
     // sliding window k-mer (for prototype only using ASCII alphabet)
     
@@ -151,7 +156,6 @@ void kmer_gen(const std::basic_string<char>& local_str, std::vector<index_t>& B,
     {
         // wait for the async receive to finish
         MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-
     }
     else
     {
@@ -162,7 +166,7 @@ void kmer_gen(const std::basic_string<char>& local_str, std::vector<index_t>& B,
     }
 
 
-    // construct last k-mers
+    // construct last (k-1) k-mers
     for (unsigned int i = 0; i < k-1; ++i)
     {
         kmer <<= l;
@@ -176,7 +180,22 @@ void kmer_gen(const std::basic_string<char>& local_str, std::vector<index_t>& B,
     }
 
     // all_reduce the histogram
-    MPI_Allreduce(&hist[0], &hist[0], hist.size(), MPI_UINT32_T, MPI_SUM, comm);
+    std::vector<count_t> all_hist(hist_size, 0);
+    MPI_Allreduce(&hist[0], &all_hist[0], hist.size(), MPI_UINT32_T, MPI_SUM, comm);
+    MPI_Exscan(&hist[0], &hist[0], hist.size(), MPI_UINT32_T, MPI_SUM, comm);
+
+    // in-place prefix sum
+    excl_prefix_sum(all_hist.begin(), all_hist.end());
+
+    // TODO:
+    // - local bucketing tuples (B[i], i) [needs internal excl_prefix_sum !?]
+    //   -> kinda is the local SA which then gets distributed
+    //   -> can I do this in-place by switching around buckets while keeping
+    //      track of all permutations with a permutation array (i.e., the SA)?
+    // - get borders for sending
+    // - all2all
+    std::vector<index_t> local_SA(local_str.size());
+
 
     // TODO: bucketing and all2all
     // - this could get tricky, since it isn't immediately clear which target
