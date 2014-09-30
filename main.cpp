@@ -66,6 +66,7 @@
 
 
 #include <vector>
+#include <limits>
 
 #include <assert.h>
 
@@ -74,6 +75,7 @@
 #include "mpi_utils.hpp"
 
 #define PSAC_TAG_EDGE_KMER 1
+#define PSAC_TAG_SHIFT 2
 
 typedef int kmer_t;
 // must be 64 bit int for strings > 4GB
@@ -441,22 +443,193 @@ void rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local_B2, MP
 // after local reordering: mark bucket starts and prefix sum for new bucket numbers
 // reorder to ISA/B space (only new bucket numbers)
 
+// needs 4n + 4p words storage (for all2all double buffering for SA and B)
 void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
 {
+    assert(local_SA.size() == local_B.size());
     // get processor id
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
     // 1.) local bucketing for each processor
-    std::vector<count_t> send_counts(p, 0);
-    for (
+    //
+    // counting the number of elements for each processor
+    std::vector<int> send_counts(p, 0);
+    for (index_t sa : local_SA)
+    {
+        int target_p = block_partition_target_processor(n, p, sa);
+        assert(0 <= target_p && target_p < p);
+        ++send_counts[target_p];
+    }
+    std::vector<int> send_displs = get_displacements(send_counts);
+    // TODO [ENH] (possible in-place?)
+    std::vector<index_t> send_SA(local_SA.size());
+    std::vector<index_t> send_B(local_B.size());
+    // bucket for send
+    for (std::size_t i = 0; i < local_SA.size(); ++i)
+    {
+        std::size_t target_p = block_partition_target_processor(n, p, local_SA[i]);
+        assert(target_p < p && target_p >= 0);
+        std::size_t out_idx = send_displs[target_p]++;
+        assert(out_idx < local_SA.size());
+        send_SA[out_idx] = local_SA[i];
+        send_B[out_idx] = local_B[i];
+    }
 
-    //   -> might be tricky [custom swap?]
-    // 2.) get send_count (boundaries) -> easy
-    // 3.)
+    // get displacements again (since they were modified above)
+    send_displs = get_displacements(send_counts);
+    // get receive information
+    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    std::vector<int> recv_displs = get_displacements(recv_counts);
+
+    // TODO: correct MPI_Datatype
+    MPI_Alltoallv(&send_B[0], &send_counts[0], &send_displs[0], MPI_INT,
+                  &local_B[0], &recv_counts[0], &recv_displs[0], MPI_INT,
+                  comm);
+    MPI_Alltoallv(&send_SA[0], &send_counts[0], &send_displs[0], MPI_INT,
+                  &local_SA[0], &recv_counts[0], &recv_displs[0], MPI_INT,
+                  comm);
+
+    // rearrange locally
+    // TODO [ENH]: more cache efficient by sorting rather than random assignment
+    for (std::size_t i = 0; i < local_SA.size(); ++i)
+    {
+        index_t out_idx = local_SA[i] - block_partition_excl_prefix_size(n, p, rank);
+        assert(0 <= out_idx && out_idx < local_SA.size());
+        // TODO: saving the local_SA is redundant
+        send_B[out_idx] = local_B[i];
+    }
+
+    std::copy(send_B.begin(), send_B.end(), local_B.begin());
+    for (std::size_t i = 0; i < local_SA.size(); ++i)
+    {
+        local_SA[i] = block_partition_excl_prefix_size(n, p, rank) + i;
+    }
 }
 
+// in: 2^m, B1
+// out: B2
+void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_B1, std::vector<index_t>& local_B2, MPI_Comm comm)
+{
+    // get MPI comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    // get # elements to the left
+    std::size_t prev_size = block_partition_excl_prefix_size(n, p, rank);
+    std::size_t local_size = block_partition_local_size(n, p, rank);
+    assert(local_size == local_B1.size());
+    local_B2.clear();
+    local_B2.resize(local_size, 0);
+
+    MPI_Request recv_reqs[2];
+    int n_irecvs = 0;
+    // receive elements from the right
+    if (prev_size + dist < n)
+    {
+        std::size_t right_first_gl_idx = prev_size + dist;
+        int p1 = block_partition_target_processor(n, p, right_first_gl_idx);
+
+        std::size_t p1_gl_end = block_partition_prefix_size(n, p, p1);
+        std::size_t p1_recv_cnt = p1_gl_end - right_first_gl_idx;
+
+        if (p1 != rank)
+        {
+            // only receive if the source is not myself (i.e., `rank`)
+            // [otherwise results are directly written instead of MPI_Sended]
+            assert(p1_recv_cnt < std::numeric_limits<int>::max());
+            int recv_cnt = p1_recv_cnt;
+            // TODO: MPI_Datatype
+            MPI_Irecv(&local_B2[0],recv_cnt, MPI_INT, p1,
+                      PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
+        }
+
+        if (p1_recv_cnt < local_size && p1 != p-1)
+        {
+            // also receive from one more processor
+            int p2 = p1+1;
+            // since p2 has at least local_size - 1 elements and at least
+            // one element came from p1, we can assume that the receive count
+            // is our local size minus the already received elements
+            std::size_t p2_recv_cnt = local_size - p1_recv_cnt;
+
+            assert(p2_recv_cnt < std::numeric_limits<int>::max());
+            int recv_cnt = p2_recv_cnt;
+            // send to `p1` (which is necessarily different from `rank`)
+            // TODO: MPI_Datatype
+            MPI_Irecv(&local_B2[0] + p1_recv_cnt, recv_cnt, MPI_INT, p2,
+                      PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
+        }
+    }
+
+    // send elements to the left (split to at most 2 target processors)
+    if (prev_size + local_size - 1 >= dist)
+    {
+        int p1 = -1;
+        if (prev_size >= dist)
+        {
+            std::size_t first_gl_idx = prev_size - dist;
+            p1 = block_partition_target_processor(n, p, first_gl_idx);
+        }
+        std::size_t last_gl_idx = prev_size + local_size - 1 - dist;
+        int p2 = block_partition_target_processor(n, p, last_gl_idx);
+
+        std::size_t local_split;
+        if (p1 != p2)
+        {
+            // local start index of area for second processor
+            if (p1 >= 0)
+            {
+                local_split = block_partition_prefix_size(n, p, p1) + dist - prev_size;
+                // send to first processor
+                assert(p1 != rank);
+                MPI_Send(&local_B1[0], local_split,
+                         MPI_INT, p1, PSAC_TAG_SHIFT, comm);
+            }
+            else
+            {
+                // p1 doesn't exist, start sending from `dist` to p2
+                local_split = dist;
+            }
+        }
+        else
+        {
+            // only one target processor
+            local_split = 0;
+        }
+
+        if (p2 != rank)
+        {
+            MPI_Send(&local_B1[0] + local_split, local_size - local_split,
+                     MPI_INT, p2, PSAC_TAG_SHIFT, comm);
+        }
+        else
+        {
+            // in this case the split should be exactly at `dist`
+            assert(local_split == dist);
+            // locally reassign
+            for (std::size_t i = local_split; i < local_size; ++i)
+            {
+                local_B2[i-local_split] = local_B1[i];
+            }
+        }
+
+    }
+
+    // wait for successful receive:
+    MPI_Waitall(n_irecvs, recv_reqs, MPI_STATUS_IGNORE);
+}
+
+/*
+// in: B1, B2
+// out: reordered B1, B2; and SA
+void isa_2b_to_sa(B1, B2, SA)
+{
+    // TODO
+}
+*/
 
 void test_sa(MPI_Comm comm)
 {
@@ -480,6 +653,21 @@ void test_sa(MPI_Comm comm)
     // re-assign new bucket numbers
     rebucket(local_B, local_B, comm);
     std::cerr << "B0: "; print_vec(local_B);
+
+    // SA->ISA
+    reorder_sa_to_isa(n, local_SA, local_B, comm);
+    std::cerr << "========  After reorder SA->ISA  ========" << std::endl;
+    std::cerr << "On processor rank = " << rank << std::endl;
+    std::cerr << "B : "; print_vec(local_B);
+    std::cerr << "SA: "; print_vec(local_SA);
+
+    // shifting by 2^x (test)
+    std::vector<index_t> local_B2;
+    shift_buckets(n, 7, local_B, local_B2, comm);
+    std::cerr << "========  After shift by 7  ========" << std::endl;
+    std::cerr << "On processor rank = " << rank << std::endl;
+    std::cerr << "B : "; print_vec(local_B);
+    std::cerr << "B2: "; print_vec(local_B2);
 }
 
 
