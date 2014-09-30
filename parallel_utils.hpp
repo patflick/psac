@@ -45,6 +45,29 @@ std::vector<int> block_partition(int n, int p)
     return partition;
 }
 
+// TODO: for bigger data sizes as well
+inline int block_partition_local_size(int n, int p, int i)
+{
+    return n/p + ((i < (n % p)) ? 1 : 0);
+}
+
+inline int block_partition_prefix_size(int n, int p, int i)
+{
+    return (n/p)*(i+1) + std::min(n % p, i+1);
+}
+
+inline int block_partition_excl_prefix_size(int n, int p, int i)
+{
+    return (n/p)*i + std::min(n % p, i);
+}
+
+// returns the target processor id {0,..,p-1} for an element with index i
+inline int block_partition_target_processor(int n, int p, int a_i)
+{
+    // basically mod (n/p), BUT first few might be (n/p)+1
+    return 
+}
+
 /**
  * @brief Outputs the number of elements that need to be sent to each processor.
  *

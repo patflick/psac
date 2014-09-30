@@ -50,7 +50,7 @@ void excl_prefix_sum(Iterator begin, const Iterator end)
     typename std::iterator_traits<Iterator>::value_type sum = 0;
     typename std::iterator_traits<Iterator>::value_type tmp;
 
-    // calculate the inclusive prefix sum
+    // calculate the exclusive prefix sum
     while (begin != end)
     {
         tmp = sum;
