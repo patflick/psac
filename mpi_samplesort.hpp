@@ -25,15 +25,18 @@
 
 #include "timer.hpp"
 
-#define TIMER_START() timer _t; double _last_time = _t.get_ms();\
-                      if (rank == 0) {\
-                          fprintf(stderr, "-------- p = %d ---------\n", p);\
-                          fflush(stderr);}
-#define TIMER_END_SECTION(str) if (rank == 0) {\
-                          fprintf(stderr, "SECTION `%s`: \t%f ms\n", str,\
-                                  _t.get_ms() - _last_time);\
-                                  _last_time = _t.get_ms(); fflush(stderr);}
-
+//#define TIMER_START() timer _t; double _last_time = _t.get_ms();\
+//                      if (rank == 0) {\
+//                          fprintf(stderr, "-------- p = %d ---------\n", p);\
+//                          fflush(stderr);}
+//#define TIMER_END_SECTION(str) if (rank == 0) {\
+//                          fprintf(stderr, "SECTION `%s`: \t%f ms\n", str,\
+//                                  _t.get_ms() - _last_time);\
+//                                  _last_time = _t.get_ms(); fflush(stderr);}
+//
+// no timing:
+#define TIMER_START()
+#define TIMER_END_SECTION(s)
 
 template<typename _Iterator>
 void print_range(_Iterator begin, _Iterator end)
@@ -188,6 +191,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
 
     // get MPI datatype
     MPI_Datatype mpi_dt = get_mpi_dt<value_type>();
+    MPI_Type_commit(&mpi_dt);
 
     // number of samples
     int s = p-1;
@@ -356,6 +360,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     redo_block_decomposition(recv_elements.begin(), recv_elements.end(), begin, comm);
 
     TIMER_END_SECTION("fix_partition");
+    MPI_Type_free(&mpi_dt);
 }
 
 

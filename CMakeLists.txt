@@ -8,6 +8,7 @@ project(psac)
 # Initialize CXXFLAGS.
 #set(CMAKE_CXX_FLAGS                "-Wall -O0 -g --std=c++11")
 set(CMAKE_CXX_FLAGS                "-Wall -O3 -funroll-loops -msse3 -DNDEBUG --std=c++11")
+#set(CMAKE_CXX_FLAGS                "-Wall -O3 -DNDEBUG --std=c++11 -Wuninitialized -g")
 
 
 
@@ -52,8 +53,9 @@ set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin CACHE PATH "Output director
 
 
 
-#add_executable(test_sac main.cpp)
-#target_link_libraries(test_sac ${MPI_LIBRARIES})
+add_executable(test_sac main.cpp timer.cpp)
+target_link_libraries(test_sac ${MPI_LIBRARIES})
+target_link_libraries(test_sac rt)
 
 add_executable(test_samplesort test_sort.cpp timer.cpp)
 target_link_libraries(test_samplesort ${MPI_LIBRARIES})

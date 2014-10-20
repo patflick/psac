@@ -134,9 +134,17 @@ MPI_Datatype get_mpi_dt<long double>()
  *                                    of all distributed vectors.
  *         (On the slave processors): An empty vector.
  */
-template <typename T>
+template<typename T>
 std::vector<T> gather_vectors(std::vector<T>& local_vec, MPI_Comm comm)
 {
+    return gather_range(local_vec.begin(), local_vec.end(), comm);
+}
+
+template <typename Iterator>
+std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(Iterator begin, Iterator end, MPI_Comm comm)
+{
+    //static_assert(std::is_same<T, typename std::iterator_traits<Iterator>::value_type>::value, "Return type must of of same type as iterator value type");
+    typedef typename std::iterator_traits<Iterator>::value_type T;
     // get MPI parameters
     int rank;
     int p;
@@ -144,7 +152,7 @@ std::vector<T> gather_vectors(std::vector<T>& local_vec, MPI_Comm comm)
     MPI_Comm_size(comm, &p);
 
     // get local size
-    int local_size = local_vec.size();
+    int local_size = std::distance(begin, end);
 
     // init result
     std::vector<T> result;
@@ -167,7 +175,7 @@ std::vector<T> gather_vectors(std::vector<T>& local_vec, MPI_Comm comm)
         std::vector<int> recv_displs = get_displacements(local_sizes);
 
         // gather v the vector data to the root
-        MPI_Gatherv(&local_vec[0], local_size, mpi_dt,
+        MPI_Gatherv(&(*begin), local_size, mpi_dt,
                     &result[0], &local_sizes[0], &recv_displs[0], mpi_dt,
                     0, MPI_COMM_WORLD);
     }
@@ -178,7 +186,7 @@ std::vector<T> gather_vectors(std::vector<T>& local_vec, MPI_Comm comm)
         MPI_Gather(&local_size, 1, MPI_INT, NULL, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
         // sent the actual data
-        MPI_Gatherv(&local_vec[0], local_size, mpi_dt,
+        MPI_Gatherv(&(*begin), local_size, mpi_dt,
                     NULL, NULL, NULL, mpi_dt,
                     0, MPI_COMM_WORLD);
     }
