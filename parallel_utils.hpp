@@ -50,10 +50,24 @@ inline int block_partition_local_size(int n, int p, int i)
 {
     return n/p + ((i < (n % p)) ? 1 : 0);
 }
+inline std::size_t block_partition_local_size(std::size_t n, int p, int i)
+{
+    return n/p + ((static_cast<std::size_t>(i) < (n % static_cast<std::size_t>(p))) ? 1 : 0);
+}
+
+inline std::size_t block_partition_prefix_size(std::size_t n, int p, int i)
+{
+    return (n/p)*(i+1) + std::min<std::size_t>(n % p, i+1);
+}
 
 inline int block_partition_prefix_size(int n, int p, int i)
 {
     return (n/p)*(i+1) + std::min(n % p, i+1);
+}
+
+inline std::size_t block_partition_excl_prefix_size(std::size_t n, int p, int i)
+{
+    return (n/p)*i + std::min<std::size_t>(n % p, i);
 }
 
 inline int block_partition_excl_prefix_size(int n, int p, int i)
@@ -62,10 +76,21 @@ inline int block_partition_excl_prefix_size(int n, int p, int i)
 }
 
 // returns the target processor id {0,..,p-1} for an element with index i
+inline int block_partition_target_processor(std::size_t n, int p, std::size_t a_i)
+{
+    // TODO: in constant time with a fixed formula!
+    for (unsigned int i = 0; i < static_cast<unsigned int>(p); ++i)
+    {
+        if (block_partition_prefix_size(n, p, i) > a_i)
+            return i;
+    }
+    return p-1;
+}
+
 inline int block_partition_target_processor(int n, int p, int a_i)
 {
     // TODO: in constant time with a fixed formula!
-    for (unsigned int i = 0; i < p; ++i)
+    for (unsigned int i = 0; i < static_cast<unsigned int>(p); ++i)
     {
         if (block_partition_prefix_size(n, p, i) > a_i)
             return i;

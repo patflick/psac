@@ -13,6 +13,9 @@
 #ifndef HPC_MPI_UTILS
 #define HPC_MPI_UTILS
 
+// MPI include
+#include <mpi.h>
+
 // for sleep()
 #include <unistd.h>
 
@@ -21,8 +24,6 @@
 #include <numeric>
 #include <stdexcept>
 
-// MPI include
-#include <mpi.h>
 
 
 // own includes
@@ -36,6 +37,36 @@ MPI_Datatype get_mpi_dt()
     throw std::runtime_error("Unsupported MPI datatype");
     // default to int
     return MPI_INT;
+}
+
+template <>
+MPI_Datatype get_mpi_dt<char>()
+{
+    return MPI_CHAR;
+}
+
+template <>
+MPI_Datatype get_mpi_dt<unsigned char>()
+{
+    return MPI_UNSIGNED_CHAR;
+}
+
+template <>
+MPI_Datatype get_mpi_dt<signed char>()
+{
+    return MPI_SIGNED_CHAR;
+}
+
+template <>
+MPI_Datatype get_mpi_dt<unsigned short>()
+{
+    return MPI_UNSIGNED_SHORT;
+}
+
+template <>
+MPI_Datatype get_mpi_dt<signed short>()
+{
+    return MPI_SHORT;
 }
 
 template <>
@@ -63,6 +94,18 @@ MPI_Datatype get_mpi_dt<long>()
 }
 
 template <>
+MPI_Datatype get_mpi_dt<unsigned long long>()
+{
+    return MPI_UNSIGNED_LONG_LONG;
+}
+
+template <>
+MPI_Datatype get_mpi_dt<long long>()
+{
+    return MPI_LONG_LONG;
+}
+
+template <>
 MPI_Datatype get_mpi_dt<float>()
 {
     return MPI_FLOAT;
@@ -74,6 +117,11 @@ MPI_Datatype get_mpi_dt<double>()
     return MPI_DOUBLE;
 }
 
+template <>
+MPI_Datatype get_mpi_dt<long double>()
+{
+    return MPI_LONG_DOUBLE;
+}
 
 /**
  * @brief   Gathers local std::vectors to the master processor inside the
@@ -359,9 +407,9 @@ void global_prefix_sum(Iterator begin, Iterator end, MPI_Comm comm)
   // the global prefix sum value
   while (begin != end)
   {
-      sum += *begin;
-      *begin = sum;
-      ++begin;
+    sum += *begin;
+    *begin = sum;
+    ++begin;
   }
 }
 
