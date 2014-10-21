@@ -1,16 +1,6 @@
 
-#include <mpi.h>
 
 
-/*
- * TODO;
- * - [ ] read string and distribute by block decomposition
- * - [ ] initial bucketing (local -> distributed)
- * - [ ] code for transfering SA -> ISA
- * - [ ] code for transfering ISA -> SA
- * - [ ] prefix sum for backet numbers
- * - [ ] prefix doubling
- */
 
 
 /*
@@ -64,7 +54,9 @@
  *
  */
 
+#include <mpi.h>
 
+#include <iostream>
 #include <vector>
 #include <limits>
 #include <algorithm>
@@ -170,15 +162,7 @@ unsigned int alphabet_unique_chars(const std::vector<index_t>& global_hist)
     return unique_count;
 }
 
-/* FIXME: the following doesn't work :-/
 unsigned int ceillog2(unsigned int x)
-{
-    unsigned int log_floor = sizeof(unsigned int)*8 - 1 - __builtin_clz(x);
-    // add one if not power of 2
-    return log_floor + (x&(x-1)) ? 1 : 0;
-}
-*/
-unsigned int myceillog2(unsigned int x)
 {
     unsigned int log_floor = 0;
     unsigned int n = x;
@@ -194,7 +178,7 @@ unsigned int myceillog2(unsigned int x)
 unsigned int alphabet_bits_per_char(unsigned int sigma)
 {
     // since we have to account for the `0` character, we use ceil(log(unique_chars + 1))
-    return myceillog2(sigma+1);
+    return ceillog2(sigma+1);
 }
 
 template<typename word_t>
@@ -235,7 +219,6 @@ void initial_bucketing(const std::basic_string<char>& local_str, std::vector<ind
     // get k-mer mask
     index_t kmer_mask = ((static_cast<index_t>(1) << (l*k)) - static_cast<index_t>(1));
 
-
     // sliding window k-mer (for prototype only using ASCII alphabet)
 
     // fill first k-mer (until k-1 positions) and send to left processor
@@ -255,16 +238,17 @@ void initial_bucketing(const std::basic_string<char>& local_str, std::vector<ind
     // start receiving for end
     index_t last_kmer = 0;
     MPI_Request recv_req;
+    MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
     if (rank < p-1) // if not last processor
     {
-        MPI_Irecv(&last_kmer, 1, MPI_INT, rank+1, PSAC_TAG_EDGE_KMER,
+        MPI_Irecv(&last_kmer, 1, mpi_dt, rank+1, PSAC_TAG_EDGE_KMER,
                   comm, &recv_req);
     }
     if (rank > 0) // if not first processor
     {
         // TODO: [ENH] use async send as well and start with the computation
         //             immediately
-        MPI_Send(&kmer, 1,MPI_INT, rank-1, PSAC_TAG_EDGE_KMER, comm);
+        MPI_Send(&kmer, 1, mpi_dt, rank-1, PSAC_TAG_EDGE_KMER, comm);
     }
 
 
@@ -298,7 +282,8 @@ void initial_bucketing(const std::basic_string<char>& local_str, std::vector<ind
         // in this case the last k-mers contains shifting `$` signs
         // we assume this to be the `\0` value
         // TODO: how can we solve this efficiently when using on 4 character
-        // DNA strings? (5 character alphabet seems dumb)
+        // DNA strings? (using a 5 character alphabet might be unnessesary
+        // overhead)
     }
 
 
@@ -316,14 +301,6 @@ void initial_bucketing(const std::basic_string<char>& local_str, std::vector<ind
 }
 
 
-/*
-template <typename Iterator>
-void mpi_multiseq_sort(Iterator begin, Iterator end, MPI_Comm comm)
-{
-    typedef typename std::iterator_traits<Iterator>::value_type T;
-    MPI_Datatype mpi_dt = get_mpi_dt<T>();
-}
-*/
 
 #if 0
 
@@ -519,13 +496,13 @@ std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local
     // assert inputs are of equal size
     assert(local_B1.size() == local_B2.size() && local_B1.size() > 0);
 
+    // init result
     std::size_t result = 0;
 
-    // get processor id
+    // get communication parameters
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
-
 
     /*
      * send right most element to one processor to the right
@@ -533,11 +510,12 @@ std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local
      * or a new bucket starts with it's first element
      */
     MPI_Request recv_req;
+    MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
     index_t prevRight[2];
     if (rank > 0) // if not last processor
     {
         // TODO: fix MPI datatype
-        MPI_Irecv(prevRight, 2, MPI_INT, rank-1, PSAC_TAG_EDGE_KMER,
+        MPI_Irecv(prevRight, 2, mpi_dt, rank-1, PSAC_TAG_EDGE_KMER,
                   comm, &recv_req);
     }
     if (rank < p-1) // if not first processor
@@ -546,7 +524,7 @@ std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local
         index_t myRight[2] = {local_B1.back(), local_B2.back()};
         // TODO: [ENH] use async send as well and start with the computation
         //             immediately
-        MPI_Send(myRight, 2, MPI_INT, rank+1, PSAC_TAG_EDGE_KMER, comm);
+        MPI_Send(myRight, 2, mpi_dt, rank+1, PSAC_TAG_EDGE_KMER, comm);
     }
     if (rank > 0)
     {
@@ -587,7 +565,7 @@ std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local
         // (i.e. identical)
         // (i.e. `i` is the second equal element in a bucket)
         // which means counting unfinished buckets, then allreduce
-        std::size_t local_unfinished_buckets = firstDiff ? 0 : 1;
+        index_t local_unfinished_buckets = firstDiff ? 0 : 1;
         if (rank == 0)
             local_unfinished_buckets = 0;
         for (std::size_t i = 1; i < local_B1.size(); ++i)
@@ -596,11 +574,8 @@ std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local
                 ++local_unfinished_buckets;
         }
 
-        std::cerr << "rank = " << rank << " unfinished buckets: " << local_unfinished_buckets << std::endl;
-
-        MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
         MPI_Allreduce(&local_unfinished_buckets, &result, 1,
-                      mpi_size_t, MPI_SUM, comm);
+                      mpi_dt, MPI_SUM, comm);
     }
 
     /*
@@ -612,14 +587,7 @@ std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local
     return result;
 }
 
-// TODO:
-// function for shift in ISA/B space, tupleling, reorder to SA space by first element
-// of each tuple, then localized sorting of each bucket (equivalent to global sort)
-// this could be done similar to the quicksort from the HPC lab (additional communicators)
-// after local reordering: mark bucket starts and prefix sum for new bucket numbers
-// reorder to ISA/B space (only new bucket numbers)
 
-// needs 4n + 4p words storage (for all2all double buffering for SA and B)
 void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
 {
     assert(local_SA.size() == local_B.size());
@@ -627,6 +595,7 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
 
     // 1.) local bucketing for each processor
     //
@@ -639,13 +608,13 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
         ++send_counts[target_p];
     }
     std::vector<int> send_displs = get_displacements(send_counts);
-    // TODO [ENH] (possible in-place?)
     std::vector<index_t> send_SA(local_SA.size());
     std::vector<index_t> send_B(local_B.size());
-    // bucket for send
+    // Reorder the SA and B arrays into buckets, one for each target processor.
+    // The target processor is given by the value in the SA.
     for (std::size_t i = 0; i < local_SA.size(); ++i)
     {
-        std::size_t target_p = block_partition_target_processor(n, p, static_cast<std::size_t>(local_SA[i]));
+        int target_p = block_partition_target_processor(n, p, static_cast<std::size_t>(local_SA[i]));
         assert(target_p < p && target_p >= 0);
         std::size_t out_idx = send_displs[target_p]++;
         assert(out_idx < local_SA.size());
@@ -659,12 +628,12 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
     std::vector<int> recv_displs = get_displacements(recv_counts);
 
-    // TODO: correct MPI_Datatype
-    MPI_Alltoallv(&send_B[0], &send_counts[0], &send_displs[0], MPI_INT,
-                  &local_B[0], &recv_counts[0], &recv_displs[0], MPI_INT,
+    // perform the all2all communication
+    MPI_Alltoallv(&send_B[0], &send_counts[0], &send_displs[0], mpi_dt,
+                  &local_B[0], &recv_counts[0], &recv_displs[0], mpi_dt,
                   comm);
-    MPI_Alltoallv(&send_SA[0], &send_counts[0], &send_displs[0], MPI_INT,
-                  &local_SA[0], &recv_counts[0], &recv_displs[0], MPI_INT,
+    MPI_Alltoallv(&send_SA[0], &send_counts[0], &send_displs[0], mpi_dt,
+                  &local_SA[0], &recv_counts[0], &recv_displs[0], mpi_dt,
                   comm);
 
     // rearrange locally
@@ -673,14 +642,15 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     {
         index_t out_idx = local_SA[i] - block_partition_excl_prefix_size(n, p, rank);
         assert(0 <= out_idx && out_idx < local_SA.size());
-        // TODO: saving the local_SA is redundant
         send_B[out_idx] = local_B[i];
     }
-
     std::copy(send_B.begin(), send_B.end(), local_B.begin());
+
+    // reassign the SA
+    std::size_t global_offset = block_partition_excl_prefix_size(n, p, rank);
     for (std::size_t i = 0; i < local_SA.size(); ++i)
     {
-        local_SA[i] = block_partition_excl_prefix_size(n, p, rank) + i;
+        local_SA[i] = global_offset + i;
     }
 }
 
@@ -692,13 +662,18 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
 
     // get # elements to the left
     std::size_t prev_size = block_partition_excl_prefix_size(n, p, rank);
     std::size_t local_size = block_partition_local_size(n, p, rank);
     assert(local_size == local_B1.size());
-    local_B2.clear();
-    local_B2.resize(local_size, 0);
+
+    // init B2
+    if (local_B2.size() != local_size){
+        local_B2.clear();
+        local_B2.resize(local_size, 0);
+    }
 
     MPI_Request recv_reqs[2];
     int n_irecvs = 0;
@@ -718,7 +693,7 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
             assert(p1_recv_cnt < std::numeric_limits<int>::max());
             int recv_cnt = p1_recv_cnt;
             // TODO: MPI_Datatype
-            MPI_Irecv(&local_B2[0],recv_cnt, MPI_INT, p1,
+            MPI_Irecv(&local_B2[0],recv_cnt, mpi_dt, p1,
                       PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
         }
 
@@ -735,7 +710,7 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
             int recv_cnt = p2_recv_cnt;
             // send to `p1` (which is necessarily different from `rank`)
             // TODO: MPI_Datatype
-            MPI_Irecv(&local_B2[0] + p1_recv_cnt, recv_cnt, MPI_INT, p2,
+            MPI_Irecv(&local_B2[0] + p1_recv_cnt, recv_cnt, mpi_dt, p2,
                       PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
         }
     }
@@ -762,7 +737,7 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
                 // send to first processor
                 assert(p1 != rank);
                 MPI_Send(&local_B1[0], local_split,
-                         MPI_INT, p1, PSAC_TAG_SHIFT, comm);
+                         mpi_dt, p1, PSAC_TAG_SHIFT, comm);
             }
             else
             {
@@ -779,7 +754,7 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
         if (p2 != rank)
         {
             MPI_Send(&local_B1[0] + local_split, local_size - local_split,
-                     MPI_INT, p2, PSAC_TAG_SHIFT, comm);
+                     mpi_dt, p2, PSAC_TAG_SHIFT, comm);
         }
         else
         {
@@ -812,6 +787,7 @@ struct TwoBSA
 };
 
 // template specialization for MPI_Datatype for the two buckets and SA structure
+// Needed for the samplesort implementation
 template<>
 MPI_Datatype get_mpi_dt<TwoBSA>()
 {
@@ -827,11 +803,11 @@ MPI_Datatype get_mpi_dt<TwoBSA>()
 // out: reordered B1, B2; and SA
 void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>& B2, std::vector<index_t>& SA, MPI_Comm comm)
 {
-    // TODO: tuples array as input
-    // for now: create tuples array
+    // check input sizes
     std::size_t local_size = B1.size();
     assert(B2.size() == local_size);
     assert(SA.size() == local_size);
+    // initialize tuple array
     std::vector<TwoBSA> tuple_vec(local_size);
 
     // get comm parameters
@@ -851,12 +827,12 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
         tuple_vec[i].SA = str_offset + i;
     }
 
-    // release memory for sorting (to remain at the necessary 6x words memory usage)
+    // release memory of input (to remain at the minimum 6x words memory usage)
     B1.clear(); B1.shrink_to_fit();
     B2.clear(); B2.shrink_to_fit();
     SA.clear(); SA.shrink_to_fit();
 
-    // sorting of tuples (B1, B2, SA)
+    // parallel, distributed sample-sorting of tuples (B1, B2, SA)
     samplesort(tuple_vec.begin(), tuple_vec.end(), std::less<TwoBSA>());
 
     // reallocate output
@@ -913,31 +889,19 @@ bool gl_check_correct_SA(const std::vector<index_t> SA, const std::vector<index_
     return success;
 }
 
-void sa_construction(const std::basic_string<char>& local_str, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
+void sa_construction(const std::string& local_str, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
 {
     // get comm parameters
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
-    // TODO:
-    // compress_alphabet() function: (prior to initial k-mer bucketing)
-    //  - create global histogram of all characters that appear
-    //  - reassign to {0,...,sigma-1} inside the `char` array / std::string
+    // create initial k-mers and use these as the initial bucket numbers
+    // for each character position
+    // `k` depends on the alphabet size and the word size of each suffix array
+    // element. `k` is choosen to maximize the number of alphabet characters
+    // that fit into one machine word
     initial_bucketing(local_str, local_B, comm);
-    /*
-    // into SA form (without 2nd bucket nr)
-    std::vector<index_t> x;
-    large_buckets_b_to_sa<false>(n, local_B, x, local_SA, comm);
-
-    std::cerr << "On processor rank = " << rank << std::endl;
-    std::cerr << "B : "; print_vec(local_B);
-    std::cerr << "SA: "; print_vec(local_SA);
-
-    // re-assign new bucket numbers
-    rebucket(local_B, local_B, comm);
-    std::cerr << "B0: "; print_vec(local_B);
-    */
 
     // TODO: get `n` once by allreduction
     std::size_t n = p*local_str.size();
