@@ -915,20 +915,12 @@ bool gl_check_correct_SA(const std::vector<index_t> SA, const std::vector<index_
 
 
 template <typename index_t>
-void sa_construction(const std::string& local_str, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
+void sa_construction_impl(std::size_t n, const std::string& local_str, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
 {
     // get comm parameters
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
-
-    // get local and global size
-    std::size_t local_size = local_str.size();
-    std::size_t n = 0;
-    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
-    MPI_Allreduce(&local_size, &n, 1, mpi_size_t, MPI_SUM, comm);
-    // assert the input is distributed as a block decomposition
-    assert(local_size == block_decomposition(n, p, rank));
 
 
     /***********************
@@ -942,9 +934,9 @@ void sa_construction(const std::string& local_str, std::vector<index_t>& local_S
     // that fit into one machine word
     unsigned int k = initial_bucketing(n, local_str, local_B, comm);
 #if 0
-        std::cerr << "========  After initial bucketing  ========" << std::endl;
-        std::cerr << "On processor rank = " << rank << std::endl;
-        std::cerr << "B : "; print_vec(local_B);
+    std::cerr << "========  After initial bucketing  ========" << std::endl;
+    std::cerr << "On processor rank = " << rank << std::endl;
+    std::cerr << "B : "; print_vec(local_B);
 #endif
 
     // init local_SA
@@ -1027,6 +1019,47 @@ void sa_construction(const std::string& local_str, std::vector<index_t>& local_S
 }
 
 
+void sa_construction(const std::string& local_str, std::vector<std::size_t>& local_SA, std::vector<std::size_t>& local_ISA, MPI_Comm comm)
+{
+    // get comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    // get local and global size
+    std::size_t local_size = local_str.size();
+    std::size_t n = 0;
+    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    MPI_Allreduce(&local_size, &n, 1, mpi_size_t, MPI_SUM, comm);
+    // assert the input is distributed as a block decomposition
+    assert(local_size == block_decomposition(n, p, rank));
+
+    // check if the input size fits in 32 bits (< 4 GiB input)
+    if (sizeof(std::size_t) != sizeof(std::uint32_t))
+    {
+        if (n > std::numeric_limits<std::uint32_t>::max())
+        {
+            // use 64 bits for the suffix array and the ISA
+            // -> Suffix array construction needs 49x Bytes
+            sa_construction_impl<std::size_t>(n, local_str, local_SA, local_ISA, comm);
+        }
+        else
+        {
+            // 32 bits is enough -> Suffix array construction needs 25x Bytes
+            std::vector<std::uint32_t> local_SA32;
+            std::vector<std::uint32_t> local_ISA32;
+            // call the suffix array construction implementation
+            sa_construction_impl<std::uint32_t>(n, local_str, local_SA32, local_ISA32, comm);
+            // transform back into std::size_t
+            local_SA.resize(local_size);
+            std::copy(local_SA32.begin(), local_SA32.end(), local_SA.begin());
+            local_ISA.resize(local_size);
+            std::copy(local_ISA32.begin(), local_ISA32.end(), local_ISA.begin());
+        }
+    }
+}
+
+
 inline char rand_dna_char()
 {
     char DNA[4] = {'A', 'C', 'G', 'T'};
@@ -1056,8 +1089,8 @@ void test_sa(MPI_Comm comm, std::size_t input_size, bool test_correct = false)
     //std::string local_str = "missisippi";
     std::string local_str = rand_dna(input_size, rank);
 
-    std::vector<index_t> local_SA;
-    std::vector<index_t> local_ISA;
+    std::vector<std::size_t> local_SA;
+    std::vector<std::size_t> local_ISA;
 
     // construct local SA for input string
     sa_construction(local_str, local_SA, local_ISA, comm);
@@ -1066,8 +1099,8 @@ void test_sa(MPI_Comm comm, std::size_t input_size, bool test_correct = false)
     if (test_correct)
     {
         // gather SA and ISA to local
-        std::vector<index_t> global_SA = gather_vectors(local_SA, comm);
-        std::vector<index_t> global_ISA = gather_vectors(local_ISA, comm);
+        std::vector<std::size_t> global_SA = gather_vectors(local_SA, comm);
+        std::vector<std::size_t> global_ISA = gather_vectors(local_ISA, comm);
         std::vector<char> global_str_vec = gather_range(local_str.begin(), local_str.end(), comm);
         std::string global_str(global_str_vec.begin(), global_str_vec.end());
         if (rank == 0)
