@@ -1078,7 +1078,6 @@ std::string rand_dna(std::size_t size, int seed)
     return str;
 }
 
-template <typename index_t>
 void test_sa(MPI_Comm comm, std::size_t input_size, bool test_correct = false)
 {
     // get comm parameters
@@ -1155,8 +1154,8 @@ int main(int argc, char *argv[])
 
     // attach to process 0
     //wait_gdb_attach(0, comm);
-    //test_sa<unsigned int>(comm, 5000000);
-    test_sa<unsigned int>(comm, 1379, true);
+    test_sa(comm, 5000000);
+    //test_sa(comm, 1379, true);
 
     // finalize MPI
     MPI_Finalize();
