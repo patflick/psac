@@ -25,15 +25,16 @@
 
 #include "timer.hpp"
 
-//#define TIMER_START() timer _t; double _last_time = _t.get_ms();\
-//                      if (rank == 0) {\
-//                          fprintf(stderr, "-------- p = %d ---------\n", p);\
-//                          fflush(stderr);}
-//#define TIMER_END_SECTION(str) if (rank == 0) {\
-//                          fprintf(stderr, "SECTION `%s`: \t%f ms\n", str,\
-//                                  _t.get_ms() - _last_time);\
-//                                  _last_time = _t.get_ms(); fflush(stderr);}
-//
+#if 0
+#define TIMER_START() timer _t; double _last_time = _t.get_ms();\
+                      if (rank == 0) {\
+                          fprintf(stderr, "-------- p = %d ---------\n", p);\
+                          fflush(stderr);}
+#define TIMER_END_SECTION(str) if (rank == 0) {\
+                          fprintf(stderr, "SECTION `%s`: \t%f ms\n", str,\
+                                  _t.get_ms() - _last_time);\
+                                  _last_time = _t.get_ms(); fflush(stderr);}
+#endif
 // no timing:
 #define TIMER_START()
 #define TIMER_END_SECTION(s)

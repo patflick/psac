@@ -71,11 +71,6 @@
 #define PSAC_TAG_EDGE_KMER 1
 #define PSAC_TAG_SHIFT 2
 
-// must be 64 bit int for strings > 4GB
-// those need special handleing with MPI anyway, since MPI only works with ints
-typedef int index_t; // content of SA and ISA and Bucket-numbers
-typedef index_t count_t; // bucket counts for histogram
-
 
 template<typename T>
 void print_vec(const std::vector<T>& vec)
@@ -119,6 +114,7 @@ std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0)
 }
 
 // TODO: global character histogram + required bits per character + compression
+template <typename index_t>
 std::vector<index_t> alphabet_histogram(const std::string& local_str, MPI_Comm comm)
 {
     // get local histogram of alphabet characters
@@ -133,6 +129,7 @@ std::vector<index_t> alphabet_histogram(const std::string& local_str, MPI_Comm c
     return out_hist;
 }
 
+template <typename index_t>
 std::vector<char> alphabet_mapping_tbl(const std::vector<index_t>& global_hist)
 {
     std::vector<char> mapping(256, 0);
@@ -149,6 +146,7 @@ std::vector<char> alphabet_mapping_tbl(const std::vector<index_t>& global_hist)
     return mapping;
 }
 
+template <typename index_t>
 unsigned int alphabet_unique_chars(const std::vector<index_t>& global_hist)
 {
     unsigned int unique_count = 0;
@@ -189,7 +187,8 @@ unsigned int alphabet_chars_per_word(unsigned int bits_per_char)
     return (sizeof(word_t)*8)/bits_per_char;
 }
 
-void initial_bucketing(const std::basic_string<char>& local_str, std::vector<index_t>& local_B, MPI_Comm comm)
+template <typename index_t>
+unsigned int initial_bucketing(const std::size_t n, const std::basic_string<char>& local_str, std::vector<index_t>& local_B, MPI_Comm comm)
 {
     // get local size
     std::size_t local_size = local_str.size();
@@ -199,8 +198,10 @@ void initial_bucketing(const std::basic_string<char>& local_str, std::vector<ind
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &p);
 
+    std::size_t min_local_size = block_partition_local_size(n, p, p-1);
+
     // get global alphabet histogram
-    std::vector<index_t> alphabet_hist = alphabet_histogram(local_str, comm);
+    std::vector<index_t> alphabet_hist = alphabet_histogram<index_t>(local_str, comm);
     // get mapping table and alphabet sizes
     std::vector<char> alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
     unsigned int sigma = alphabet_unique_chars(alphabet_hist);
@@ -208,16 +209,19 @@ void initial_bucketing(const std::basic_string<char>& local_str, std::vector<ind
     unsigned int l = alphabet_bits_per_char(sigma);
     // number of characters per word => the `k` in `k-mer`
     unsigned int k = alphabet_chars_per_word<index_t>(l);
+    // if the input is too small for `k`, choose a smaller `k`
+    if (k > min_local_size)
+    {
+        k = min_local_size;
+    }
 
     std::cerr << "Detecting alphabet with " << sigma << " characters" << std::endl;
     std::cerr << "  choosing bit size = " << l << " and k=" << k << std::endl;
-    std::cerr << "  mapping 'A'->" << (int)alphabet_mapping['A'] << std::endl;
-    std::cerr << "  mapping 'C'->" << (int)alphabet_mapping['C'] << std::endl;
-    std::cerr << "  mapping 'G'->" << (int)alphabet_mapping['G'] << std::endl;
-    std::cerr << "  mapping 'T'->" << (int)alphabet_mapping['T'] << std::endl;
 
     // get k-mer mask
     index_t kmer_mask = ((static_cast<index_t>(1) << (l*k)) - static_cast<index_t>(1));
+    if (kmer_mask == 0)
+        kmer_mask = ~static_cast<index_t>(0);
 
     // sliding window k-mer (for prototype only using ASCII alphabet)
 
@@ -298,6 +302,10 @@ void initial_bucketing(const std::basic_string<char>& local_str, std::vector<ind
         *buk_it = kmer;
         ++buk_it;
     }
+
+    // return the number of characters which are part of each bucket number
+    // (i.e., k-mer)
+    return k;
 }
 
 
@@ -491,6 +499,7 @@ void large_buckets_b_to_sa(std::size_t n, std::vector<index_t>& local_B, std::ve
 
 // assumed sorted order (globally) by tuple (B1[i], B2[i])
 // this reassigns new, unique bucket numbers in {1,...,n} globally
+template <typename index_t>
 std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local_B2, MPI_Comm comm, bool count_unfinished)
 {
     // assert inputs are of equal size
@@ -587,7 +596,7 @@ std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local
     return result;
 }
 
-
+template <typename index_t>
 void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
 {
     assert(local_SA.size() == local_B.size());
@@ -656,6 +665,7 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
 
 // in: 2^m, B1
 // out: B2
+template <typename index_t>
 void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_B1, std::vector<index_t>& local_B2, MPI_Comm comm)
 {
     // get MPI comm parameters
@@ -772,11 +782,13 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
     MPI_Waitall(n_irecvs, recv_reqs, MPI_STATUS_IGNORE);
 }
 
+
+template <typename T>
 struct TwoBSA
 {
-    index_t B1;
-    index_t B2;
-    index_t SA;
+    T B1;
+    T B2;
+    T SA;
 
     inline bool operator<(const TwoBSA& other) const
     {
@@ -789,18 +801,29 @@ struct TwoBSA
 // template specialization for MPI_Datatype for the two buckets and SA structure
 // Needed for the samplesort implementation
 template<>
-MPI_Datatype get_mpi_dt<TwoBSA>()
+MPI_Datatype get_mpi_dt<TwoBSA<unsigned int>>()
 {
     // keep only one instance around
     // NOTE: this memory will not be destructed.
     MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<index_t>();
+    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
+    MPI_Type_contiguous(3, element_t, &dt);
+    return dt;
+}
+template<>
+MPI_Datatype get_mpi_dt<TwoBSA<std::size_t>>()
+{
+    // keep only one instance around
+    // NOTE: this memory will not be destructed.
+    MPI_Datatype dt;
+    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
     MPI_Type_contiguous(3, element_t, &dt);
     return dt;
 }
 
 // in: B1, B2
 // out: reordered B1, B2; and SA
+template <typename index_t>
 void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>& B2, std::vector<index_t>& SA, MPI_Comm comm)
 {
     // check input sizes
@@ -808,7 +831,7 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     assert(B2.size() == local_size);
     assert(SA.size() == local_size);
     // initialize tuple array
-    std::vector<TwoBSA> tuple_vec(local_size);
+    std::vector<TwoBSA<index_t> > tuple_vec(local_size);
 
     // get comm parameters
     int p, rank;
@@ -833,7 +856,7 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     SA.clear(); SA.shrink_to_fit();
 
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
-    samplesort(tuple_vec.begin(), tuple_vec.end(), std::less<TwoBSA>());
+    samplesort(tuple_vec.begin(), tuple_vec.end(), std::less<TwoBSA<index_t> >());
 
     // reallocate output
     B1.resize(local_size);
@@ -849,6 +872,7 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     }
 }
 
+template <typename index_t>
 bool gl_check_correct_SA(const std::vector<index_t> SA, const std::vector<index_t>& ISA, const std::string& str)
 {
     std::size_t n = SA.size();
@@ -889,6 +913,8 @@ bool gl_check_correct_SA(const std::vector<index_t> SA, const std::vector<index_
     return success;
 }
 
+
+template <typename index_t>
 void sa_construction(const std::string& local_str, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
 {
     // get comm parameters
@@ -896,16 +922,30 @@ void sa_construction(const std::string& local_str, std::vector<index_t>& local_S
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
+    // get local and global size
+    std::size_t local_size = local_str.size();
+    std::size_t n = 0;
+    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    MPI_Allreduce(&local_size, &n, 1, mpi_size_t, MPI_SUM, comm);
+    // assert the input is distributed as a block decomposition
+    assert(local_size == block_decomposition(n, p, rank));
+
+
+    /***********************
+     *  Initial bucketing  *
+     ***********************/
+
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
     // `k` depends on the alphabet size and the word size of each suffix array
     // element. `k` is choosen to maximize the number of alphabet characters
     // that fit into one machine word
-    initial_bucketing(local_str, local_B, comm);
-
-    // TODO: get `n` once by allreduction
-    std::size_t n = p*local_str.size();
-    // TODO: assert(local_size == block_decomposition(n, p, rank));
+    unsigned int k = initial_bucketing(n, local_str, local_B, comm);
+#if 0
+        std::cerr << "========  After initial bucketing  ========" << std::endl;
+        std::cerr << "On processor rank = " << rank << std::endl;
+        std::cerr << "B : "; print_vec(local_B);
+#endif
 
     // init local_SA
     if (local_SA.size() != local_B.size())
@@ -913,22 +953,32 @@ void sa_construction(const std::string& local_str, std::vector<index_t>& local_S
         local_SA.resize(local_B.size());
     }
 
-    // TODO: start loop at shift size of k (from inital bucketing)
-    for (std::size_t i = 2; i < n; i <<= 1)
+
+    /*******************************
+     *  Prefix Doubling main loop  *
+     *******************************/
+
+    for (std::size_t shift_by = k; shift_by < n; shift_by <<= 1)
     {
-        // shifting by 2^x
+        /**************************************************
+         *  Pairing buckets by shifting `shift_by` = 2^k  *
+         **************************************************/
+        // shift the B1 buckets by 2^k to the left => equals B2
         std::vector<index_t> local_B2;
-        shift_buckets(n, i, local_B, local_B2, comm);
-#ifndef NDEBUG
-        std::cerr << "========  After shift by " << i << "  ========" << std::endl;
+        shift_buckets(n, shift_by, local_B, local_B2, comm);
+#if 0
+        std::cerr << "========  After shift by " << shift_by << "  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
         std::cerr << "B : "; print_vec(local_B);
         std::cerr << "B2: "; print_vec(local_B2);
 #endif
 
-        // ISA -> SA (both buckets) [sorting first by bucket 1]
+        /*************
+         *  ISA->SA  *
+         *************/
+        // by using sample sort on tuples (B1,B2)
         isa_2b_to_sa(n, local_B, local_B2, local_SA, comm);
-#ifndef NDEBUG
+#if 0
         std::cerr << "========  After reorder ISA->SA  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
         std::cerr << "B : "; print_vec(local_B);
@@ -936,18 +986,23 @@ void sa_construction(const std::string& local_str, std::vector<index_t>& local_S
         std::cerr << "SA: "; print_vec(local_SA);
 #endif
 
-        // rebucketing (assign new B1 bucket numbers)
+        /*******************************
+         *  Assign new bucket numbers  *
+         *******************************/
         std::size_t unfinished_buckets = rebucket(local_B, local_B2, comm ,true);
         if (rank == 0)
-            std::cerr << "iteration " << i << ": unfinished buckets = " << unfinished_buckets << std::endl;
-#ifndef NDEBUG
+            std::cerr << "iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << std::endl;
+#if 0
         std::cerr << "========  After rebucket  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
         std::cerr << "B : "; print_vec(local_B);
 #endif
 
-        // SA->ISA
-        if (i << 1 >= n || unfinished_buckets == 0)
+        /*************
+         *  SA->ISA  *
+         *************/
+        // by bucketing to correct target processor using the `SA` array
+        if ((shift_by << 1) >= n || unfinished_buckets == 0)
         {
             // if last iteration, use copy of local_SA for reorder and keep
             // original SA
@@ -958,7 +1013,7 @@ void sa_construction(const std::string& local_str, std::vector<index_t>& local_S
         {
             reorder_sa_to_isa(n, local_SA, local_B, comm);
         }
-#ifndef NDEBUG
+#if 0
         std::cerr << "========  After reorder SA->ISA  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
         std::cerr << "B : "; print_vec(local_B);
@@ -968,13 +1023,14 @@ void sa_construction(const std::string& local_str, std::vector<index_t>& local_S
             break;
     }
 
-    // now local_SA is actual SA and local_B is actual ISA
+    // now local_SA is actual block decomposed SA and local_B is actual ISA
 }
+
 
 inline char rand_dna_char()
 {
     char DNA[4] = {'A', 'C', 'G', 'T'};
-    return DNA[rand() % 4];
+    return DNA[rand() % 2];
 }
 
 std::string rand_dna(std::size_t size, int seed)
@@ -989,6 +1045,7 @@ std::string rand_dna(std::size_t size, int seed)
     return str;
 }
 
+template <typename index_t>
 void test_sa(MPI_Comm comm, std::size_t input_size, bool test_correct = false)
 {
     // get comm parameters
@@ -1015,7 +1072,7 @@ void test_sa(MPI_Comm comm, std::size_t input_size, bool test_correct = false)
         std::string global_str(global_str_vec.begin(), global_str_vec.end());
         if (rank == 0)
         {
-#ifndef NDEBUG
+#if 0
             std::cerr << "##################################################" << std::endl;
             std::cerr << "#               Final SA and ISA                 #" << std::endl;
             std::cerr << "##################################################" << std::endl;
@@ -1065,8 +1122,8 @@ int main(int argc, char *argv[])
 
     // attach to process 0
     //wait_gdb_attach(0, comm);
-    test_sa(comm, 20000000);
-    //test_sa(comm, 100, true);
+    //test_sa<unsigned int>(comm, 5000000);
+    test_sa<unsigned int>(comm, 1379, true);
 
     // finalize MPI
     MPI_Finalize();
