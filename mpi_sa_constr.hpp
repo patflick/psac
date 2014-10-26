@@ -80,6 +80,20 @@
 #define PSAC_TAG_EDGE_KMER 1
 #define PSAC_TAG_SHIFT 2
 
+#include "timer.hpp"
+
+#define SAC_ENABLE_TIMER 1
+#if SAC_ENABLE_TIMER
+#define SAC_TIMER_START() TIMER_START()
+#define SAC_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
+#define SAC_TIMER_LOOP_START() TIMER_LOOP_START()
+#define SAC_TIMER_END_LOOP_SECTION(iter, str) TIMER_END_LOOP_SECTION(iter, str)
+#else
+#define SAC_TIMER_START()
+#define SAC_TIMER_END_SECTION(str)
+#define SAC_TIMER_LOOP_START()
+#define SAC_TIMER_END_LOOP_SECTION(iter, str)
+#endif
 
 template<typename T>
 void print_vec(const std::vector<T>& vec)
@@ -224,8 +238,8 @@ unsigned int initial_bucketing(const std::size_t n, const std::basic_string<char
         k = min_local_size;
     }
 
-    std::cerr << "Detecting alphabet with " << sigma << " characters" << std::endl;
-    std::cerr << "  choosing bit size = " << l << " and k=" << k << std::endl;
+    if (rank == 0)
+        std::cerr << "Detecting sigma=" << sigma << " => l=" << l << ", k=" << k << std::endl;
 
     // get k-mer mask
     index_t kmer_mask = ((static_cast<index_t>(1) << (l*k)) - static_cast<index_t>(1));
@@ -743,6 +757,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
+    SAC_TIMER_START();
 
     /***********************
      *  Initial bucketing  *
@@ -760,6 +775,8 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
     std::cerr << "B : "; print_vec(local_B);
 #endif
 
+    SAC_TIMER_END_SECTION("initial-bucketing");
+
     // init local_SA
     if (local_SA.size() != local_B.size())
     {
@@ -773,6 +790,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
 
     for (std::size_t shift_by = k; shift_by < n; shift_by <<= 1)
     {
+        SAC_TIMER_LOOP_START();
         /**************************************************
          *  Pairing buckets by shifting `shift_by` = 2^k  *
          **************************************************/
@@ -785,6 +803,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         std::cerr << "B : "; print_vec(local_B);
         std::cerr << "B2: "; print_vec(local_B2);
 #endif
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets");
 
         /*************
          *  ISA->SA  *
@@ -798,6 +817,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         std::cerr << "B2: "; print_vec(local_B2);
         std::cerr << "SA: "; print_vec(local_SA);
 #endif
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "ISA-to-SA");
 
         /*******************************
          *  Assign new bucket numbers  *
@@ -810,6 +830,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         std::cerr << "On processor rank = " << rank << std::endl;
         std::cerr << "B : "; print_vec(local_B);
 #endif
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "rebucket");
 
         /*************
          *  SA->ISA  *
@@ -832,8 +853,12 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         std::cerr << "B : "; print_vec(local_B);
         std::cerr << "SA: "; print_vec(local_SA);
 #endif
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
+
         if (unfinished_buckets == 0)
             break;
+
+        SAC_TIMER_END_SECTION("sac-iteration");
     }
 
     // now local_SA is actual block decomposed SA and local_B is actual ISA

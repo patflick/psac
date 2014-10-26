@@ -19,6 +19,18 @@
 
 #include "mpi_utils.hpp"
 #include "mpi_sa_constr.hpp"
+#include "mpi_file.hpp"
+
+#include "timer.hpp"
+
+#define SAC_TEST_ENABLE_TIMER 1
+#if SAC_TEST_ENABLE_TIMER
+#define SAC_TEST_TIMER_START() TIMER_START()
+#define SAC_TEST_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
+#else
+#define SAC_TEST_TIMER_START()
+#define SAC_TEST_TIMER_END_SECTION(str)
+#endif
 
 /*****************************
  *  create random DNA input  *
@@ -46,7 +58,7 @@ std::string rand_dna(std::size_t size, int seed)
  *  test correctness of suffix array  *
  **************************************/
 
-void test_sa(MPI_Comm comm, std::size_t input_size, bool test_correct = false)
+void sa_test_random_dna(MPI_Comm comm, std::size_t input_size, bool test_correct = false)
 {
     // get comm parameters
     int p, rank;
@@ -93,8 +105,61 @@ void test_sa(MPI_Comm comm, std::size_t input_size, bool test_correct = false)
             }
         }
     }
-    std::cerr << " === Rank " << rank << " is finished === " << std::endl;
 }
 
 
+void sa_test_file(const char* filename, MPI_Comm comm, std::size_t max_local_size=0, bool test_correct = false)
+{
+    // get comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    SAC_TIMER_START();
+
+    // block decompose input file
+    std::string local_str = file_block_decompose(filename, comm, max_local_size);
+
+    SAC_TEST_TIMER_END_SECTION("load-input");
+
+    std::vector<std::size_t> local_SA;
+    std::vector<std::size_t> local_ISA;
+
+    // construct local SA for input string
+    sa_construction(local_str, local_SA, local_ISA, comm);
+
+    SAC_TEST_TIMER_END_SECTION("sac");
+
+    // final SA and ISA
+    if (test_correct)
+    {
+        // gather SA and ISA to local
+        std::vector<std::size_t> global_SA = gather_vectors(local_SA, comm);
+        std::vector<std::size_t> global_ISA = gather_vectors(local_ISA, comm);
+        std::vector<char> global_str_vec = gather_range(local_str.begin(), local_str.end(), comm);
+        std::string global_str(global_str_vec.begin(), global_str_vec.end());
+        if (rank == 0)
+        {
+#if 0
+            std::cerr << "##################################################" << std::endl;
+            std::cerr << "#               Final SA and ISA                 #" << std::endl;
+            std::cerr << "##################################################" << std::endl;
+            std::cerr << "STR: " << global_str << std::endl;
+            std::cerr << "SA : "; print_vec(global_SA);
+            std::cerr << "ISA: "; print_vec(global_ISA);
+#endif
+
+            // check if correct
+            if (!gl_check_correct_SA(global_SA, global_ISA, global_str))
+            {
+                std::cerr << "[ERROR] Test unsuccessful" << std::endl;
+                exit(1);
+            }
+            else
+            {
+                std::cerr << "[SUCCESS]" << std::endl;
+            }
+        }
+    }
+}
 #endif // MPI_SA_TEST_HPP

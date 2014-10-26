@@ -123,23 +123,6 @@ MPI_Datatype get_mpi_dt<long double>()
     return MPI_LONG_DOUBLE;
 }
 
-/**
- * @brief   Gathers local std::vectors to the master processor inside the
- *          given communicator.
- *
- * @param local_vec The local vectors to be gathered.
- * @param comm      The communicator.
- *
- * @return (On the master processor): The vector containing the concatenation
- *                                    of all distributed vectors.
- *         (On the slave processors): An empty vector.
- */
-template<typename T>
-std::vector<T> gather_vectors(std::vector<T>& local_vec, MPI_Comm comm)
-{
-    return gather_range(local_vec.begin(), local_vec.end(), comm);
-}
-
 template <typename Iterator>
 std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(Iterator begin, Iterator end, MPI_Comm comm)
 {
@@ -194,6 +177,23 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
     return result;
 }
 
+
+/**
+ * @brief   Gathers local std::vectors to the master processor inside the
+ *          given communicator.
+ *
+ * @param local_vec The local vectors to be gathered.
+ * @param comm      The communicator.
+ *
+ * @return (On the master processor): The vector containing the concatenation
+ *                                    of all distributed vectors.
+ *         (On the slave processors): An empty vector.
+ */
+template<typename T>
+std::vector<T> gather_vectors(std::vector<T>& local_vec, MPI_Comm comm)
+{
+    return gather_range(local_vec.begin(), local_vec.end(), comm);
+}
 
 template <typename InputIterator, typename OutputIterator>
 void copy_n(InputIterator& in, std::size_t n, OutputIterator out)

@@ -33,8 +33,14 @@ int main(int argc, char *argv[])
     //wait_gdb_attach(0, comm);
 
     // run the suffix array construction
-    test_sa(comm, 30000000);
-    //test_sa(comm, 1379, true);
+    //sa_test_random_dna(comm, 20000000);
+    //sa_test_random_dna(comm, 1379, true);
+    if (argc < 2)
+    {
+        std::cerr << "Usage ./test_sac <filename>" << std::endl;
+        exit(1);
+    }
+    sa_test_file(argv[1], comm, 10000000);
 
     // finalize MPI
     MPI_Finalize();

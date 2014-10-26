@@ -61,4 +61,7 @@ add_executable(test_samplesort test_sort.cpp timer.cpp)
 target_link_libraries(test_samplesort ${MPI_LIBRARIES})
 target_link_libraries(test_samplesort rt) # for timer
 
+add_executable(test_file test_file.cpp)
+target_link_libraries(test_file ${MPI_LIBRARIES})
+
 add_executable(ref reference.cpp)

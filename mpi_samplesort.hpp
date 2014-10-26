@@ -25,19 +25,14 @@
 
 #include "timer.hpp"
 
-#if 0
-#define TIMER_START() timer _t; double _last_time = _t.get_ms();\
-                      if (rank == 0) {\
-                          fprintf(stderr, "-------- p = %d ---------\n", p);\
-                          fflush(stderr);}
-#define TIMER_END_SECTION(str) if (rank == 0) {\
-                          fprintf(stderr, "SECTION `%s`: \t%f ms\n", str,\
-                                  _t.get_ms() - _last_time);\
-                                  _last_time = _t.get_ms(); fflush(stderr);}
+#define SS_ENABLE_TIMER 1
+#if SS_ENABLE_TIMER
+#define SS_TIMER_START() TIMER_START()
+#define SS_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
+#else
+#define SS_TIMER_START()
+#define SS_TIMER_END_SECTION(str)
 #endif
-// no timing:
-#define TIMER_START()
-#define TIMER_END_SECTION(s)
 
 template<typename _Iterator>
 void print_range(_Iterator begin, _Iterator end)
@@ -172,7 +167,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
-    TIMER_START();
+    SS_TIMER_START();
 
     // perform local (stable) sorting
     if (_Stable)
@@ -183,7 +178,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     if (p == 1)
         return;
 
-    TIMER_END_SECTION("local_sort");
+    SS_TIMER_END_SECTION("local_sort");
 
     /*
     std::cerr << "on rank = " << rank << std::endl;
@@ -238,7 +233,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
         MPI_Gather(&local_splitters[0], s, mpi_dt,
                    &all_samples[0], s, mpi_dt, 0, comm);
 
-        TIMER_END_SECTION("gather_samples");
+        SS_TIMER_END_SECTION("gather_samples");
 
         // 3. local sort on master
         std::stable_sort(all_samples.begin(), all_samples.end(), comp);
@@ -273,7 +268,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     // 4. broadcast and receive final splitters
     MPI_Bcast(&local_splitters[0], local_splitters.size(), mpi_dt, 0, comm);
 
-    TIMER_END_SECTION("bcast_splitters");
+    SS_TIMER_END_SECTION("bcast_splitters");
 
     //std::cerr << "SP="; print_range(local_splitters.begin(), local_splitters.end());
 
@@ -311,7 +306,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
         pos = next;
     }
 
-    TIMER_END_SECTION("send_counts");
+    SS_TIMER_END_SECTION("send_counts");
 
     // send last elements to last processor
     std::size_t out_bucket_size = std::distance(pos, end);
@@ -335,11 +330,11 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     // 8. all2all
     std::vector<int> send_displs = get_displacements(send_counts);
     std::vector<int> recv_displs = get_displacements(recv_counts);
-    TIMER_END_SECTION("all2all_params");
+    SS_TIMER_END_SECTION("all2all_params");
     MPI_Alltoallv(&(*begin), &send_counts[0], &send_displs[0], mpi_dt,
                   &recv_elements[0], &recv_counts[0], &recv_displs[0], mpi_dt,
                   comm);
-    TIMER_END_SECTION("all2all");
+    SS_TIMER_END_SECTION("all2all");
 
     // 9. local reordering
     //    TODO: multisequence merge instead of resorting
@@ -348,7 +343,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     else
         std::sort(recv_elements.begin(), recv_elements.end(), comp);
 
-    TIMER_END_SECTION("local_merge");
+    SS_TIMER_END_SECTION("local_merge");
 
     /*
     std::cerr << "on rank = " << rank << std::endl;
@@ -360,7 +355,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     //    and save elements into the original iterator positions
     redo_block_decomposition(recv_elements.begin(), recv_elements.end(), begin, comm);
 
-    TIMER_END_SECTION("fix_partition");
+    SS_TIMER_END_SECTION("fix_partition");
     MPI_Type_free(&mpi_dt);
 }
 
