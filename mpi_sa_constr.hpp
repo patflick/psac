@@ -68,6 +68,7 @@
 #include <iostream>
 #include <vector>
 #include <limits>
+#include <type_traits>
 #include <algorithm>
 
 #include <assert.h>
@@ -207,7 +208,13 @@ unsigned int alphabet_chars_per_word(unsigned int bits_per_char)
 {
     // using bit concatenation, NOT multiplication by base
     // TODO: try multiplication by base
-    return (sizeof(word_t)*8)/bits_per_char;
+
+    unsigned int bits_per_word = sizeof(word_t)*8;
+    // TODO: this is currently a "work-around": if the type is signed, we
+    //       can't use the msb, thus we need to subtract one
+    if (std::is_signed<word_t>::value)
+        --bits_per_word;
+    return bits_per_word/bits_per_char;
 }
 
 template <typename index_t>
@@ -375,20 +382,19 @@ std::size_t rebucket(std::vector<index_t>& local_B1, std::vector<index_t>& local
       // wait for the async receive to finish
       MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
     }
-    else
-    {
-        prevRight[0] = local_B1[0];
-        prevRight[1] = local_B2[0];
-    }
 
     /*
      * assign local zero or one, depending on whether the bucket is the same
      * as the previous one
      */
     bool firstDiff = false;
-    if (prevRight[0] != local_B1[0] || prevRight[1] != local_B2[0])
+    if (rank == 0)
     {
-      firstDiff = true;
+        firstDiff = true;
+    }
+    else if (prevRight[0] != local_B1[0] || prevRight[1] != local_B2[0])
+    {
+        firstDiff = true;
     }
 
     // set local_B1 to `1` if previous entry is different:
@@ -642,6 +648,16 @@ MPI_Datatype get_mpi_dt<TwoBSA<unsigned int>>()
     // NOTE: this memory will not be destructed.
     MPI_Datatype dt;
     MPI_Datatype element_t = get_mpi_dt<unsigned int>();
+    MPI_Type_contiguous(3, element_t, &dt);
+    return dt;
+}
+template<>
+MPI_Datatype get_mpi_dt<TwoBSA<int>>()
+{
+    // keep only one instance around
+    // NOTE: this memory will not be destructed.
+    MPI_Datatype dt;
+    MPI_Datatype element_t = get_mpi_dt<int>();
     MPI_Type_contiguous(3, element_t, &dt);
     return dt;
 }
@@ -905,5 +921,33 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
     }
 }
 
-#endif // MPI_SA_CONSTR_HPP
 
+template<typename index_t>
+void sa_construction_gl(std::string& global_str, std::vector<index_t>& SA, std::vector<index_t>& ISA, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    // distribute input
+    std::string local_str = scatter_string_block_decomp(global_str, comm);
+
+    // distribute the global size
+    std::size_t n = global_str.size();
+    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    MPI_Bcast(&n, 1, mpi_size_t, 0, comm);
+
+    // allocate local output
+    std::vector<index_t> local_SA;
+    std::vector<index_t> local_ISA;
+
+    // call sa implementation
+    sa_construction_impl<index_t>(n, local_str, local_SA, local_ISA, comm);
+
+    // gather output to processor 0
+    SA = gather_vectors(local_SA, comm);
+    ISA = gather_vectors(local_ISA, comm);
+}
+
+#endif // MPI_SA_CONSTR_HPP

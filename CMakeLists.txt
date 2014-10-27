@@ -64,4 +64,13 @@ target_link_libraries(test_samplesort rt) # for timer
 add_executable(test_file test_file.cpp)
 target_link_libraries(test_file ${MPI_LIBRARIES})
 
+
+add_subdirectory(ext/libdivsufsort)
+include_directories(${libdivsufsort_BINARY_DIR}/include)
+include_directories(${libdivsufsort_SOURCE_DIR}/include)
+add_executable(test_ldss test_libdss.cpp timer.cpp)
+target_link_libraries(test_ldss divsufsort)
+target_link_libraries(test_ldss ${MPI_LIBRARIES})
+target_link_libraries(test_ldss rt)
+
 add_executable(ref reference.cpp)

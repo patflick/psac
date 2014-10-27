@@ -332,8 +332,6 @@ std::vector<T> scatter_vector_block_decomp(std::vector<T>& global_vec, MPI_Comm 
         MPI_Scatter(&block_decomp[0], 1, MPI_INT, &local_size, 1, MPI_INT, 0, comm);
 
         // scatter-v the actual data
-        // or stream
-        //
         local_elements.resize(local_size);
         std::vector<int> displs = get_displacements(block_decomp);
         MPI_Scatterv(&global_vec[0], &block_decomp[0], &displs[0],
@@ -357,6 +355,63 @@ std::vector<T> scatter_vector_block_decomp(std::vector<T>& global_vec, MPI_Comm 
 
     // return local array
     return local_elements;
+}
+
+// same as scatter_vector_block_decomp, but for std::basic_string
+template<typename CharT>
+std::basic_string<CharT> scatter_string_block_decomp(std::basic_string<CharT>& global_str, MPI_Comm comm)
+{
+    // get MPI Communicator properties
+    int rank, p;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    // the local vector size (MPI restricts message sizes to `int`)
+    int local_size;
+
+    // get the MPI data type
+    MPI_Datatype mpi_dt = get_mpi_dt<typename std::basic_string<CharT>::value_type>();
+
+    // init result
+    std::basic_string<CharT> local_str;
+
+    if (rank == 0)
+    {
+        /* I am the root process */
+
+        // get size of global array
+        uint32_t n = global_str.size();
+
+        //Read from the input filename
+        std::vector<int> block_decomp = block_partition(n, p);
+
+        // scatter the sizes to expect
+        MPI_Scatter(&block_decomp[0], 1, MPI_INT, &local_size, 1, MPI_INT, 0, comm);
+
+        // scatter-v the actual data
+        local_str.resize(local_size);
+        std::vector<int> displs = get_displacements(block_decomp);
+        MPI_Scatterv(const_cast<CharT*>(global_str.data()), &block_decomp[0], &displs[0],
+                     mpi_dt, const_cast<CharT*>(local_str.data()), local_size, mpi_dt, 0, comm);
+    }
+    else
+    {
+        /* I am NOT the root process */
+
+        // receive the size of my local array
+        MPI_Scatter(NULL, 1, MPI_INT,
+                    &local_size, 1, MPI_INT,
+                    0, comm);
+
+        // resize result buffer
+        local_str.resize(local_size);
+        // actually receive all the data
+        MPI_Scatterv(NULL, NULL, NULL,
+                     mpi_dt, const_cast<CharT*>(local_str.data()), local_size, mpi_dt, 0, comm);
+    }
+
+    // return local array
+    return local_str;
 }
 
 template<typename T>

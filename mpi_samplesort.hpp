@@ -34,6 +34,7 @@
 #define SS_TIMER_END_SECTION(str)
 #endif
 
+// TODO put this function elsewhere [io utils!?]
 template<typename _Iterator>
 void print_range(_Iterator begin, _Iterator end)
 {

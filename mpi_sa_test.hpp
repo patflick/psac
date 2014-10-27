@@ -36,6 +36,7 @@
  *  create random DNA input  *
  *****************************/
 
+// TODO: put these functions elsewhere
 inline char rand_dna_char()
 {
     char DNA[4] = {'A', 'C', 'G', 'T'};
