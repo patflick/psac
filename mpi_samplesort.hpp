@@ -25,7 +25,7 @@
 
 #include "timer.hpp"
 
-#define SS_ENABLE_TIMER 1
+#define SS_ENABLE_TIMER 0
 #if SS_ENABLE_TIMER
 #define SS_TIMER_START() TIMER_START()
 #define SS_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
@@ -274,17 +274,21 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     //std::cerr << "SP="; print_range(local_splitters.begin(), local_splitters.end());
 
     // 5. locally find splitter positions in data
-    //    (if an identical splitter appears twice (or more), then split evenly)
-    //    => send_counts
+    //    (if an identical splitter appears at least three times (or more),
+    //    then split the intermediary buckets evenly) => send_counts
     std::vector<int> send_counts(p);
     pos = begin;
     for (std::size_t i = 0; i < local_splitters.size();)
     {
         // the number of splitters which are equal starting from `i`
         unsigned int split_by = 1;
-        while (i+split_by < local_splitters.size() && !comp(local_splitters[i], local_splitters[i+split_by]))
+        if (i > 0 && !comp(local_splitters[i-1], local_splitters[i]))
         {
-            ++split_by;
+            while (i+split_by < local_splitters.size()
+                   && !comp(local_splitters[i], local_splitters[i+split_by]))
+            {
+                ++split_by;
+            }
         }
 
         // get bucket boundary and size

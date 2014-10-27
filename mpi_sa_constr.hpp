@@ -83,7 +83,68 @@
 
 #include "timer.hpp"
 
-#define SAC_ENABLE_TIMER 1
+
+/*********************************************************************
+ *                 macros for debugging with distributed vectors     *
+ *********************************************************************/
+// whether to gather all vectors to rank 0 prior to debug output
+// set both to `0` to disable debug output
+#define DO_DEBUG_GLOBAL_VEC 0
+#define DO_DEBUG_LOCAL_VEC 0
+
+// print vector helpers
+#define DEBUG_PRINT_STAGE(stage) \
+    std::cerr << "========  " << stage << "  =======" << std::endl;\
+
+#define DEBUG_PRINT_LOCAL_VEC(vec) \
+    fprintf(stderr, "%-10s: ",#vec);print_vec(vec);
+
+#define DEBUG_PRINT_GLOBAL_VEC(vec) \
+    {\
+        std::vector<index_t> gl_##vec = gather_vectors(vec,comm);\
+        if (rank == 0) {\
+            fprintf(stderr, "GLOBAL %-10s: ",#vec);print_vec(gl_##vec);\
+    }}
+
+// defining common macros for stage vector output
+#if DO_DEBUG_GLOBAL_VEC
+#define DEBUG_STAGE_VEC(stage, vec)\
+        DEBUG_PRINT_STAGE(stage)\
+        DEBUG_PRINT_GLOBAL_VEC(vec)
+#define DEBUG_STAGE_VEC2(stage, vec, vec2)\
+        DEBUG_PRINT_STAGE(stage)\
+        DEBUG_PRINT_GLOBAL_VEC(vec)\
+        DEBUG_PRINT_GLOBAL_VEC(vec2)
+#define DEBUG_STAGE_VEC3(stage, vec, vec2, vec3)\
+        DEBUG_PRINT_STAGE(stage)\
+        DEBUG_PRINT_GLOBAL_VEC(vec)\
+        DEBUG_PRINT_GLOBAL_VEC(vec2)\
+        DEBUG_PRINT_GLOBAL_VEC(vec3)
+#elif DO_DEBUG_LOCAL_VEC
+#define DEBUG_STAGE_VEC(stage, vec)\
+        DEBUG_PRINT_STAGE(stage)\
+        DEBUG_PRINT_LOCAL_VEC(vec)
+#define DEBUG_STAGE_VEC2(stage, vec, vec2)\
+        DEBUG_PRINT_STAGE(stage)\
+        DEBUG_PRINT_LOCAL_VEC(vec)\
+        DEBUG_PRINT_LOCAL_VEC(vec2)
+#define DEBUG_STAGE_VEC3(stage, vec, vec2, vec3)\
+        DEBUG_PRINT_STAGE(stage)\
+        DEBUG_PRINT_LOCAL_VEC(vec)\
+        DEBUG_PRINT_LOCAL_VEC(vec2)\
+        DEBUG_PRINT_LOCAL_VEC(vec3)
+#else
+#define DEBUG_STAGE_VEC(stage, vec)
+#define DEBUG_STAGE_VEC2(stage, vec, vec2)
+#define DEBUG_STAGE_VEC3(stage, vec, vec2, vec3)
+#endif
+
+
+/*********************************************************************
+ *              Macros for timing sections in the code               *
+ *********************************************************************/
+
+#define SAC_ENABLE_TIMER 0
 #if SAC_ENABLE_TIMER
 #define SAC_TIMER_START() TIMER_START()
 #define SAC_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
@@ -95,6 +156,7 @@
 #define SAC_TIMER_LOOP_START()
 #define SAC_TIMER_END_LOOP_SECTION(iter, str)
 #endif
+
 
 template<typename T>
 void print_vec(const std::vector<T>& vec)
@@ -785,6 +847,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
     // element. `k` is choosen to maximize the number of alphabet characters
     // that fit into one machine word
     unsigned int k = initial_bucketing(n, local_str, local_B, comm);
+    DEBUG_STAGE_VEC("after initial bucketing", local_B);
 #if 0
     std::cerr << "========  After initial bucketing  ========" << std::endl;
     std::cerr << "On processor rank = " << rank << std::endl;
@@ -813,6 +876,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         // shift the B1 buckets by 2^k to the left => equals B2
         std::vector<index_t> local_B2;
         shift_buckets(n, shift_by, local_B, local_B2, comm);
+        DEBUG_STAGE_VEC2("after shift by " << shift_by, local_B, local_B2);
 #if 0
         std::cerr << "========  After shift by " << shift_by << "  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
@@ -826,6 +890,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
          *************/
         // by using sample sort on tuples (B1,B2)
         isa_2b_to_sa(n, local_B, local_B2, local_SA, comm);
+        DEBUG_STAGE_VEC3("after reorder ISA->SA", local_B, local_B2, local_SA);
 #if 0
         std::cerr << "========  After reorder ISA->SA  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
@@ -841,6 +906,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         std::size_t unfinished_buckets = rebucket(local_B, local_B2, comm ,true);
         if (rank == 0)
             std::cerr << "iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << std::endl;
+        DEBUG_STAGE_VEC("after rebucket", local_B);
 #if 0
         std::cerr << "========  After rebucket  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
@@ -863,6 +929,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         {
             reorder_sa_to_isa(n, local_SA, local_B, comm);
         }
+        DEBUG_STAGE_VEC2("after reorder SA->ISA", local_B, local_SA);
 #if 0
         std::cerr << "========  After reorder SA->ISA  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;

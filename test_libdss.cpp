@@ -26,7 +26,7 @@ int main(int argc, char *argv[])
         test_compare_divsufsort_psac(str, comm);
     }
     */
-    for (int i = 10; i <= 1031; ++i)
+    for (int i = 2*p; i <= 1031; ++i)
     {
         std::string str = rand_dna(i, 0);
         if (!test_compare_divsufsort_psac(str,comm))
