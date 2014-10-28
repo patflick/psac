@@ -20,12 +20,17 @@
 #include <vector>
 #include <limits>
 
+// for multiway-merge
+// TODO: impelement own in case it is not GNU C++
+#include <parallel/multiway_merge.h>
+#include <parallel/merge.h>
+
 #include "mpi_utils.hpp"
 
 
 #include "timer.hpp"
 
-#define SS_ENABLE_TIMER 0
+#define SS_ENABLE_TIMER 1
 #if SS_ENABLE_TIMER
 #define SS_TIMER_START() TIMER_START()
 #define SS_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
@@ -342,11 +347,45 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     SS_TIMER_END_SECTION("all2all");
 
     // 9. local reordering
-    //    TODO: multisequence merge instead of resorting
+    /*
     if (_Stable)
         std::stable_sort(recv_elements.begin(), recv_elements.end(), comp);
     else
         std::sort(recv_elements.begin(), recv_elements.end(), comp);
+    */
+    /* multiway-merge (using the implementation in __gnu_parallel) */
+    // prepare the sequence offsets
+    typedef typename std::vector<value_type>::iterator val_it;
+    std::vector<std::pair<val_it, val_it> > seqs(p);
+    for (int i = 0; i < p; ++i)
+    {
+        seqs[i].first = recv_elements.begin() + recv_displs[i];
+        seqs[i].second = seqs[i].first + recv_counts[i];
+    }
+    val_it start_merge_it = recv_elements.begin();
+    for (; recv_n > 0;)
+    {
+        std::size_t merge_n = local_size;
+        if (recv_n < local_size)
+            merge_n = recv_n;
+        // i)   merge at most `local_size` many elements sequentially
+        __gnu_parallel::sequential_tag seq_tag;
+        __gnu_parallel::multiway_merge(seqs.begin(), seqs.end(), begin, merge_n, comp, seq_tag);
+
+        // ii)  compact the remaining elements in `recv_elements`
+        for (int i = p-1; i > 0; --i)
+        {
+            seqs[i-1].first = std::copy_backward(seqs[i-1].first, seqs[i-1].second, seqs[i].first);
+            seqs[i-1].second = seqs[i].first;
+        }
+        // iii) copy the output buffer `local_size` elements back into
+        //      `recv_elements`
+        start_merge_it = std::copy(begin, begin + merge_n, start_merge_it);
+        assert(start_merge_it == seqs[0].first);
+
+        // reduce the number of elements to be merged
+        recv_n -= merge_n;
+    }
 
     SS_TIMER_END_SECTION("local_merge");
 

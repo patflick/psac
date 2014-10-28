@@ -14,6 +14,7 @@
 
 #include <divsufsort.h>
 #include "mpi_sa_constr.hpp"
+#include "timer.hpp"
 
 // TODO: put this elsewhere
 /*
@@ -47,7 +48,11 @@ bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
     // run PSAC (same index type)
     std::vector<saidx_t> psac_SA;
     std::vector<saidx_t> psac_ISA;
+    timer t;
+    double start = t.get_ms();
     sa_construction_gl<saidx_t>(str, psac_SA, psac_ISA, comm);
+    double end = t.get_ms() - start;
+    std::cerr << "PSAC Time: " << end << " ms" << std::endl;
 
     // get rank
     int rank;
@@ -57,7 +62,10 @@ bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
     {
         // run libdivsufsort
         std::vector<saidx_t> dss_SA;
+        double start = t.get_ms();
         divsufsort_sa_construction(str, dss_SA);
+        double end = t.get_ms() - start;
+        std::cerr << "Libdivsufsort Time: " << end << " ms" << std::endl;
 
         // print out both resultsS
         //std::cerr << "STR: " << str << std::endl;

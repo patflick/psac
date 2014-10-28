@@ -144,7 +144,7 @@
  *              Macros for timing sections in the code               *
  *********************************************************************/
 
-#define SAC_ENABLE_TIMER 0
+#define SAC_ENABLE_TIMER 1
 #if SAC_ENABLE_TIMER
 #define SAC_TIMER_START() TIMER_START()
 #define SAC_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
@@ -509,6 +509,7 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
 
+    SAC_TIMER_START();
     // 1.) local bucketing for each processor
     //
     // counting the number of elements for each processor
@@ -533,6 +534,7 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
         send_SA[out_idx] = local_SA[i];
         send_B[out_idx] = local_B[i];
     }
+    SAC_TIMER_END_SECTION("sa2isa_bucketing");
 
     // get displacements again (since they were modified above)
     send_displs = get_displacements(send_counts);
@@ -547,6 +549,7 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     MPI_Alltoallv(&send_SA[0], &send_counts[0], &send_displs[0], mpi_dt,
                   &local_SA[0], &recv_counts[0], &recv_displs[0], mpi_dt,
                   comm);
+    SAC_TIMER_END_SECTION("sa2isa_all2all");
 
     // rearrange locally
     // TODO [ENH]: more cache efficient by sorting rather than random assignment
@@ -564,6 +567,7 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     {
         local_SA[i] = global_offset + i;
     }
+    SAC_TIMER_END_SECTION("sa2isa_rearrange");
 }
 
 // in: 2^m, B1
@@ -743,13 +747,16 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     std::size_t local_size = B1.size();
     assert(B2.size() == local_size);
     assert(SA.size() == local_size);
-    // initialize tuple array
-    std::vector<TwoBSA<index_t> > tuple_vec(local_size);
 
     // get comm parameters
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+
+    SAC_TIMER_START();
+
+    // initialize tuple array
+    std::vector<TwoBSA<index_t> > tuple_vec(local_size);
 
     // get global index offset
     std::size_t str_offset = block_partition_excl_prefix_size(n, p, rank);
@@ -768,8 +775,12 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     B2.clear(); B2.shrink_to_fit();
     SA.clear(); SA.shrink_to_fit();
 
+    SAC_TIMER_END_SECTION("isa2sa_tupleize");
+
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
     samplesort(tuple_vec.begin(), tuple_vec.end(), std::less<TwoBSA<index_t> >());
+
+    SAC_TIMER_END_SECTION("isa2sa_samplesort");
 
     // reallocate output
     B1.resize(local_size);
@@ -783,6 +794,7 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
         B2[i] = tuple_vec[i].B2;
         SA[i] = tuple_vec[i].SA;
     }
+    SAC_TIMER_END_SECTION("isa2sa_untupleize");
 }
 
 template <typename index_t>

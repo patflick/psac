@@ -1,8 +1,9 @@
-- [ ] integrate libdivsufsort as reference (for single node run time and
+- [x] integrate libdivsufsort as reference (for single node run time and
       testing)
-- [ ] unified C++ interface between libdivsufsort and psac
-- [ ] (see previous) psac interface for global mem (scatter + psac + gather)
-- [ ] implement testing against libdivsufsort
+- [~] unified C++ interface between libdivsufsort and psac
+- [x] (see previous) psac interface for global mem (scatter + psac + gather)
+- [x] implement testing against libdivsufsort
+- [x] test against chr22
 - [ ] document library functions
 - [ ] clean iterator interface
 - [ ] distributed correctness test

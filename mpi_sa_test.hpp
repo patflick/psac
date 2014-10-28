@@ -40,7 +40,7 @@
 inline char rand_dna_char()
 {
     char DNA[4] = {'A', 'C', 'G', 'T'};
-    return DNA[rand() % 2];
+    return DNA[rand() % 4];
 }
 
 std::string rand_dna(std::size_t size, int seed)
