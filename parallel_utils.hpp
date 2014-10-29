@@ -78,24 +78,28 @@ inline int block_partition_excl_prefix_size(int n, int p, int i)
 // returns the target processor id {0,..,p-1} for an element with index i
 inline int block_partition_target_processor(std::size_t n, int p, std::size_t a_i)
 {
-    // TODO: in constant time with a fixed formula!
-    for (unsigned int i = 0; i < static_cast<unsigned int>(p); ++i)
+    if (a_i < ((n/p)+1)*(n % p))
     {
-        if (block_partition_prefix_size(n, p, i) > a_i)
-            return i;
+        // a_i is within the first n % p processors
+        return a_i/((n/p)+1);
     }
-    return p-1;
+    else
+    {
+        return n%p + (a_i - ((n/p)+1)*(n % p))/(n/p);
+    }
 }
 
 inline int block_partition_target_processor(int n, int p, int a_i)
 {
-    // TODO: in constant time with a fixed formula!
-    for (unsigned int i = 0; i < static_cast<unsigned int>(p); ++i)
+    if (a_i < ((n/p)+1)*(n % p))
     {
-        if (block_partition_prefix_size(n, p, i) > a_i)
-            return i;
+        // a_i is within the first n % p processors
+        return a_i/((n/p)+1);
     }
-    return p-1;
+    else
+    {
+        return n%p + (a_i - ((n/p)+1)*(n % p))/(n/p);
+    }
 }
 
 /**

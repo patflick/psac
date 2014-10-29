@@ -276,8 +276,6 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
 
     SS_TIMER_END_SECTION("bcast_splitters");
 
-    //std::cerr << "SP="; print_range(local_splitters.begin(), local_splitters.end());
-
     // 5. locally find splitter positions in data
     //    (if an identical splitter appears at least three times (or more),
     //    then split the intermediary buckets evenly) => send_counts
@@ -323,8 +321,6 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     assert(out_bucket_size < std::numeric_limits<int>::max());
     send_counts[p-1] = static_cast<int>(out_bucket_size);
     assert(std::accumulate(send_counts.begin(), send_counts.end(), 0) == local_size);
-
-    //std::cerr << "SC="; print_range(send_counts.begin(), send_counts.end());
 
 
     // 6. distribute send_counts with all2all to get recv_counts
