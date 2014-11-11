@@ -45,7 +45,6 @@ std::vector<int> block_partition(int n, int p)
     return partition;
 }
 
-// TODO: for bigger data sizes as well
 inline int block_partition_local_size(int n, int p, int i)
 {
     return n/p + ((i < (n % p)) ? 1 : 0);

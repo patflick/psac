@@ -116,6 +116,9 @@ void sa_test_file(const char* filename, MPI_Comm comm, std::size_t max_local_siz
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
+    // print out node distribution
+    print_node_distribution(comm);
+
     SAC_TIMER_START();
 
     // block decompose input file

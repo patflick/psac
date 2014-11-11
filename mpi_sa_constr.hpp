@@ -778,6 +778,8 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     SAC_TIMER_END_SECTION("isa2sa_tupleize");
 
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
+    if(rank == 0)
+        std::cerr << "  sorting local size = " << tuple_vec.size() << std::endl;
     samplesort(tuple_vec.begin(), tuple_vec.end(), std::less<TwoBSA<index_t> >());
 
     SAC_TIMER_END_SECTION("isa2sa_samplesort");
