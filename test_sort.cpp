@@ -58,6 +58,12 @@ void print_usage()
     exit(1);
 }
 
+void my_mpi_errorhandler(MPI_Comm* comm, int* errorcode, ...)
+{
+    // throw exception, enables gdb stack trace analysis
+    throw std::runtime_error("Shit: mpi fuckup");
+}
+
 int main(int argc, char *argv[])
 {
     // set up MPI
@@ -68,6 +74,12 @@ int main(int argc, char *argv[])
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+
+    // set custom error handler (for debugging with working stack-trace on gdb)
+    MPI_Errhandler errhandler;
+    MPI_Errhandler_create(&my_mpi_errorhandler, &errhandler);
+    MPI_Errhandler_set(comm, errhandler);
+
 
     // parse input
     std::size_t input_size = 0;

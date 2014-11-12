@@ -40,7 +40,7 @@ int main(int argc, char *argv[])
         std::cerr << "Usage ./test_sac <filename>" << std::endl;
         exit(1);
     }
-    sa_test_file(argv[1], comm, 10000000);
+    sa_test_file(argv[1], comm);
 
     // finalize MPI
     MPI_Finalize();

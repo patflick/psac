@@ -975,12 +975,12 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
     MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
     MPI_Allreduce(&local_size, &n, 1, mpi_size_t, MPI_SUM, comm);
     // assert the input is distributed as a block decomposition
-    assert(local_size == block_decomposition(n, p, rank));
+    assert(local_size == block_partition_local_size(n, p, rank));
 
     // check if the input size fits in 32 bits (< 4 GiB input)
     if (sizeof(std::size_t) != sizeof(std::uint32_t))
     {
-        if (n > std::numeric_limits<std::uint32_t>::max())
+        if (n >= std::numeric_limits<std::uint32_t>::max())
         {
             // use 64 bits for the suffix array and the ISA
             // -> Suffix array construction needs 49x Bytes
@@ -999,6 +999,11 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
             local_ISA.resize(local_size);
             std::copy(local_ISA32.begin(), local_ISA32.end(), local_ISA.begin());
         }
+    }
+    else
+    {
+        assert(n < std::numeric_limits<std::uint32_t>::max());
+        sa_construction_impl<std::size_t>(n, local_str, local_SA, local_ISA, comm);
     }
 }
 

@@ -56,12 +56,6 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
 {
     // get types from iterators
     typedef typename std::iterator_traits<_InIterator>::value_type value_type;
-    /*
-    static_assert(std::is_same<value_type,
-                      typename std::iterator_traits<_OutIterator>::value_type
-                  >::value,
-                  "Input and Output Iterators must be of same value_type");
-    */
 
     // get communicator properties
     int p, rank;
@@ -74,7 +68,7 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     // get local size
     std::size_t local_size = std::distance(begin, end);
 
-    // get prefix and total size
+    // get prefix sum of size and total size
     std::size_t prefix;
     std::size_t total_size;
     MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
@@ -106,6 +100,88 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
                   &(*out),   &recv_counts[0], &recv_displs[0], mpi_dt,
                   comm);
 }
+
+/**
+ * @brief Redistributes elements from the given decomposition across processors
+ *        into the decomposition given by the requested local_size
+ */
+template<typename _InIterator, typename _OutIterator>
+void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator out, std::size_t new_local_size, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get types from iterators
+    typedef typename std::iterator_traits<_InIterator>::value_type value_type;
+
+    // get communicator properties
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    // get MPI Datatype for the underlying type
+    MPI_Datatype mpi_dt = get_mpi_dt<value_type>();
+
+    // get local size
+    std::size_t local_size = std::distance(begin, end);
+
+    // get prefix sum of size and total size
+    std::size_t prefix;
+    std::size_t total_size;
+    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    MPI_Allreduce(&local_size, &total_size, 1, mpi_size_t, MPI_SUM, comm);
+    MPI_Exscan(&local_size, &prefix, 1, mpi_size_t, MPI_SUM, comm);
+    if (rank == 0)
+        prefix = 0;
+
+    // get the new local sizes from all processors
+    std::vector<std::size_t> new_local_sizes(p);
+    // this all-gather is what makes the arbitrary decomposition worse
+    // in terms of complexity than when assuming a block decomposition
+    MPI_Allgather(&new_local_size, 1, mpi_size_t, &new_local_sizes[0], 1, mpi_size_t, comm);
+#ifndef NDEBUG
+    std::size_t new_total_size = std::accumulate(new_local_sizes.begin(), new_local_sizes.end(), 0);
+    assert(total_size == new_total_size);
+#endif
+
+    // calculate where to send elements
+    std::vector<int> send_counts(p, 0);
+    int first_p;
+    std::size_t new_prefix = 0;
+    for (first_p = 0; first_p < p-1; ++first_p)
+    {
+        // find processor for which the prefix sum exceeds mine
+        // i have to send to the previous
+        if (new_prefix + new_local_sizes[first_p] > prefix)
+            break;
+        new_prefix += new_local_sizes[first_p];
+    }
+
+    //= block_partition_target_processor(total_size, p, prefix);
+    std::size_t left_to_send = local_size;
+    for (; left_to_send > 0 && first_p < p; ++first_p)
+    {
+        // make the `new` prefix inclusive (is an exlcusive prefix prior)
+        new_prefix += new_local_sizes[first_p];
+        // send as many elements to the current processor as it needs to fill
+        // up, but at most as many as I have left
+        std::size_t nsend = std::min<std::size_t>(new_prefix - prefix, left_to_send);
+        assert(nsend < std::numeric_limits<int>::max());
+        send_counts[first_p] = nsend;
+        // update the number of elements i have left (`left_to_send`) and
+        // at which global index they start `prefix`
+        left_to_send -= nsend;
+        prefix += nsend;
+    }
+
+    // prepare all2all
+    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    std::vector<int> send_displs = get_displacements(send_counts);
+    std::vector<int> recv_displs = get_displacements(recv_counts);
+
+    // execute all2all into output iterator
+    MPI_Alltoallv(&(*begin), &send_counts[0], &send_displs[0], mpi_dt,
+                  &(*out),   &recv_counts[0], &recv_displs[0], mpi_dt,
+                  comm);
+}
+
 
 template<typename _Iterator, typename _Compare>
 bool is_sorted(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MPI_COMM_WORLD)
@@ -161,7 +237,161 @@ bool is_sorted(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MP
     return (all_sorted > 0);
 }
 
-template<typename _Iterator, typename _Compare, bool _Stable = false>
+template <typename _Iterator, typename _Compare>
+std::vector<typename std::iterator_traits<_Iterator>::value_type>
+sample_arbit_decomp(_Iterator begin, _Iterator end, _Compare comp, int s, MPI_Comm comm, MPI_Datatype mpi_dt)
+{
+    typedef typename std::iterator_traits<_Iterator>::value_type value_type;
+    std::size_t local_size = std::distance(begin, end);
+    assert(local_size > 0);
+
+    // get communicator properties
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    // get total size n
+    std::size_t total_size;
+    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    MPI_Allreduce(&local_size, &total_size, 1, mpi_size_t, MPI_SUM, comm);
+
+    //  pick a total of s*p samples, thus locally pick ceil((local_size/n)*s*p)
+    //  and at least one samples from each processor.
+    //  this will result in at least s*p samples.
+    std::size_t local_s = ((local_size*s*p)+total_size-1)/total_size;
+    local_s = std::max<std::size_t>(local_s, 1);
+
+    //. init samples
+    std::vector<value_type> local_splitters(local_s);
+
+    // pick local samples
+    _Iterator pos = begin;
+    for (std::size_t i = 0; i < local_splitters.size(); ++i)
+    {
+        std::size_t bucket_size = local_size / (local_s+1) + (i < (local_size % (local_s+1)) ? 1 : 0);
+        // pick last element of each bucket
+        pos += (bucket_size-1);
+        local_splitters[i] = *pos;
+        ++pos;
+    }
+
+    // 2. gather samples to `rank = 0`
+    // - TODO: rather call sample sort
+    //         recursively and implement a base case for samplesort which does
+    //         gather to rank=0, local sort and redistribute
+    std::vector<value_type> all_samples = gather_vectors(local_splitters, comm);
+
+    // sort and pick p-1 samples on master
+    if (rank == 0)
+    {
+        // 3. local sort on master
+        std::sort(all_samples.begin(), all_samples.end(), comp);
+
+        // 4. pick p-1 splitters and broadcast them
+        if (local_splitters.size() != p-1)
+        {
+            local_splitters.resize(p-1);
+        }
+        // split into `p` pieces and choose the `p-1` splitting elements
+        _Iterator pos = all_samples.begin();
+        for (std::size_t i = 0; i < local_splitters.size(); ++i)
+        {
+            std::size_t bucket_size = (p*s) / p + (i < static_cast<std::size_t>((p*s) % p) ? 1 : 0);
+            // pick last element of each bucket
+            local_splitters[i] = *(pos + (bucket_size-1));
+            pos += bucket_size;
+        }
+    }
+
+    // size splitters for receiving
+    if (local_splitters.size() != p-1)
+    {
+        local_splitters.resize(p-1);
+    }
+
+    // 4. broadcast and receive final splitters
+    MPI_Bcast(&local_splitters[0], local_splitters.size(), mpi_dt, 0, comm);
+
+    return local_splitters;
+}
+
+
+template <typename _Iterator, typename _Compare>
+std::vector<typename std::iterator_traits<_Iterator>::value_type>
+sample_block_decomp(_Iterator begin, _Iterator end, _Compare comp, int s, MPI_Comm comm, MPI_Datatype mpi_dt)
+{
+    typedef typename std::iterator_traits<_Iterator>::value_type value_type;
+    std::size_t local_size = std::distance(begin, end);
+    assert(local_size > 0);
+
+    // get communicator properties
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+
+    // 1. samples
+    //  - pick `s` samples equally spaced such that `s` samples define `s+1`
+    //    subsequences in the sorted order
+    std::vector<value_type> local_splitters(s);
+    _Iterator pos = begin;
+    for (std::size_t i = 0; i < local_splitters.size(); ++i)
+    {
+        std::size_t bucket_size = local_size / (s+1) + (i < (local_size % (s+1)) ? 1 : 0);
+        // pick last element of each bucket
+        pos += (bucket_size-1);
+        local_splitters[i] = *pos;
+        ++pos;
+    }
+
+    // 2. gather samples to `rank = 0`
+    // - TODO: rather call sample sort
+    //         recursively and implement a base case for samplesort which does
+    //         gather to rank=0, local sort and redistribute
+    if (rank == 0)
+    {
+        std::vector<value_type> all_samples(p*s);
+        MPI_Gather(&local_splitters[0], s, mpi_dt,
+                   &all_samples[0], s, mpi_dt, 0, comm);
+
+        // 3. local sort on master
+        std::sort(all_samples.begin(), all_samples.end(), comp);
+
+        // 4. pick p-1 splitters and broadcast them
+        if (local_splitters.size() != p-1)
+        {
+            local_splitters.resize(p-1);
+        }
+        // split into `p` pieces and choose the `p-1` splitting elements
+        _Iterator pos = all_samples.begin();
+        for (std::size_t i = 0; i < local_splitters.size(); ++i)
+        {
+            std::size_t bucket_size = (p*s) / p + (i < static_cast<std::size_t>((p*s) % p) ? 1 : 0);
+            // pick last element of each bucket
+            local_splitters[i] = *(pos + (bucket_size-1));
+            pos += bucket_size;
+        }
+    }
+    else
+    {
+        // simply send
+        MPI_Gather(&local_splitters[0], s, mpi_dt, NULL, 0, mpi_dt, 0, comm);
+
+        // resize splitters for receiving
+        if (local_splitters.size() != p-1)
+        {
+            local_splitters.resize(p-1);
+        }
+    }
+
+    // 4. broadcast and receive final splitters
+    MPI_Bcast(&local_splitters[0], local_splitters.size(), mpi_dt, 0, comm);
+
+    return local_splitters;
+}
+
+
+template<typename _Iterator, typename _Compare, bool _Stable = false, bool _AssumeBlockDecomp = true>
 void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MPI_COMM_WORLD)
 {
     // get value type of underlying data
@@ -199,6 +429,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     int s = p-1;
 
     std::size_t local_size = std::distance(begin, end);
+    assert(local_size > 0);
 
     // sample sort
     // 1. pick `s` samples on each processor
@@ -215,72 +446,20 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     // A. equalizing distribution into original size (e.g.,block decomposition)
     //    by elements to neighbors
 
-    // 1. samples
-    //  - pick `s` samples equally spaced such that `s` samples define `s+1`
-    //    subsequences in the sorted order
-    std::vector<value_type> local_splitters(s);
-    _Iterator pos = begin;
-    for (std::size_t i = 0; i < local_splitters.size(); ++i)
-    {
-        std::size_t bucket_size = local_size / (s+1) + (i < (local_size % (s+1)) ? 1 : 0);
-        // pick last element of each bucket
-        pos += (bucket_size-1);
-        local_splitters[i] = *pos;
-        ++pos;
-    }
-
-    // 2. gather samples to `rank = 0`
-    // - TODO: rather call sample sort
-    //         recursively and implement a base case for samplesort which does
-    //         gather to rank=0, local sort and redistribute
-    if (rank == 0)
-    {
-        std::vector<value_type> all_samples(p*s);
-        MPI_Gather(&local_splitters[0], s, mpi_dt,
-                   &all_samples[0], s, mpi_dt, 0, comm);
-
-        SS_TIMER_END_SECTION("gather_samples");
-
-        // 3. local sort on master
-        std::stable_sort(all_samples.begin(), all_samples.end(), comp);
-
-        // 4. pick p-1 splitters and broadcast them
-        if (local_splitters.size() != p-1)
-        {
-            local_splitters.resize(p-1);
-        }
-        // split into `p` pieces and choose the `p-1` splitting elements
-        _Iterator pos = all_samples.begin();
-        for (std::size_t i = 0; i < local_splitters.size(); ++i)
-        {
-            std::size_t bucket_size = (p*s) / p + (i < static_cast<std::size_t>((p*s) % p) ? 1 : 0);
-            // pick last element of each bucket
-            local_splitters[i] = *(pos + (bucket_size-1));
-            pos += bucket_size;
-        }
-    }
+    // get splitters, using the method depending on whether the input consists
+    // of arbitrary decompositions or not
+    std::vector<value_type> local_splitters;
+    if(_AssumeBlockDecomp)
+        local_splitters = sample_block_decomp(begin, end, comp, s, comm, mpi_dt);
     else
-    {
-        // simply send
-        MPI_Gather(&local_splitters[0], s, mpi_dt, NULL, 0, mpi_dt, 0, comm);
-
-        // resize splitters for receiving
-        if (local_splitters.size() != p-1)
-        {
-            local_splitters.resize(p-1);
-        }
-    }
-
-    // 4. broadcast and receive final splitters
-    MPI_Bcast(&local_splitters[0], local_splitters.size(), mpi_dt, 0, comm);
-
-    SS_TIMER_END_SECTION("bcast_splitters");
+        local_splitters = sample_arbit_decomp(begin, end, comp, s, comm, mpi_dt);
+    SS_TIMER_END_SECTION("get_splitters");
 
     // 5. locally find splitter positions in data
     //    (if an identical splitter appears at least three times (or more),
     //    then split the intermediary buckets evenly) => send_counts
     std::vector<int> send_counts(p);
-    pos = begin;
+    _Iterator pos = begin;
     for (std::size_t i = 0; i < local_splitters.size();)
     {
         // the number of splitters which are equal starting from `i`
@@ -393,10 +572,12 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     // A. equalizing distribution into original size (e.g.,block decomposition)
     //    by elements to neighbors
     //    and save elements into the original iterator positions
-    redo_block_decomposition(recv_elements.begin(), recv_elements.end(), begin, comm);
+    if (_AssumeBlockDecomp)
+        redo_block_decomposition(recv_elements.begin(), recv_elements.end(), begin, comm);
+    else
+        redo_arbit_decomposition(recv_elements.begin(), recv_elements.end(), begin, local_size, comm);
 
     SS_TIMER_END_SECTION("fix_partition");
-    MPI_Type_free(&mpi_dt);
 }
 
 
