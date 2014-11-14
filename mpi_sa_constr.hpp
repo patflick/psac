@@ -895,13 +895,15 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
     //     of a bucket, this should be somewhere at the end -> start scanning
     //     from the end
     auto rev_it = tuples.rbegin();
-    index_t local_max = 0;
+    std::size_t local_max = 0;
     while (rev_it != tuples.rend() && (local_max = rev_it->B1) == 0)
         ++rev_it;
 
     // 2.) distributed scan with max() to get starting max for each sequence
     std::size_t pre_max;
     MPI_Exscan(&local_max, &pre_max, 1, mpi_size_t, MPI_MAX, comm);
+    if (rank == 0)
+        pre_max = 0;
 
     // 3.) linear scan and assign bucket numbers
     for (std::size_t i = 0; i < local_size; ++i)
@@ -910,7 +912,6 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
             tuples[i].B1 = pre_max;
         else
             pre_max = tuples[i].B1;
-        assert(tuples[i].B1 >= prefix);
         assert(tuples[i].B1 <= i+prefix);
         // first element of bucket has id of it's own global index:
         assert(i == 0 || (tuples[i-1].B1 ==  tuples[i].B1 || tuples[i].B1 == i+prefix));
@@ -1215,12 +1216,12 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         std::size_t bucket_begin = local_B[0];
         std::cerr << " on rank " << rank <<  ", left_B=" << left_B << ", B[0..] = "; print_range(local_B.begin(), local_B.begin()+10);
         std::cerr << " on rank " << rank << " B[end]=" << local_B.back() << ", right_B=" << right_B << std::endl;
-        if (msgs.size() > 0)
-            bucket_begin = local_B[msgit->second - prefix];
         std::size_t first_bucket_begin = bucket_begin;
         std::size_t right_bucket_offset = 0;
         do
         {
+            if (msgit != msgs.end())
+                bucket_begin = local_B[msgit->second - prefix];
             // find end of bucket
             while (msgit != msgs.end() && local_B[msgit->second - prefix] == bucket_begin)
             {
@@ -1354,12 +1355,15 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             int left_p = block_partition_target_processor(n, p, first_bucket_begin);
             bool participate = (overlap_type != 0 && my_schedule == phase);
             std::size_t bucket_offset = 0; // left bucket starts from beginning
+            std::size_t rebucket_offset = first_bucket_begin;
             if ((my_schedule != phase && overlap_type == 3) || (my_schedule == phase && overlap_type == 2))
             {
+                // starting a bucket at the end
                 border_bucket = right_bucket;
                 left_p = rank;
                 participate = true;
                 bucket_offset = right_bucket_offset;
+                rebucket_offset = prefix + bucket_offset;
             }
 
             MPI_Comm subcomm;
@@ -1373,7 +1377,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 samplesort(border_bucket.begin(), border_bucket.end(), std::less<TwoBSA<index_t> >(), subcomm, false);
 
                 // rebucket with global offset of first -> in tuple form
-                rebucket_tuples(border_bucket, subcomm, first_bucket_begin);
+                rebucket_tuples(border_bucket, subcomm, rebucket_offset);
 
                 // save into full array (if this was left -> save to beginning)
                 // (else, need offset of last)

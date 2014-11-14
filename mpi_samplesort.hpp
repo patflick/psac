@@ -507,7 +507,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
 
     // 7. allocate enough space (may be more than previously allocated) for receiving
     std::size_t recv_n = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
-    assert(recv_n <= 2* local_size);
+    assert(!_AssumeBlockDecomp || recv_n <= 2* local_size);
 
     //std::cerr << "Allocating for RECV: " << recv_n << std::endl;
     std::vector<value_type> recv_elements(recv_n);

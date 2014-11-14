@@ -154,7 +154,7 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
         std::vector<int> local_sizes(p);
         MPI_Gather(&local_size, 1, MPI_INT,
                    &local_sizes[0], 1, MPI_INT,
-                   0, MPI_COMM_WORLD);
+                   0, comm);
 
         // gather-v to collect all the elements
         int total_size = std::accumulate(local_sizes.begin(), local_sizes.end(), 0);
@@ -164,18 +164,18 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
         // gather v the vector data to the root
         MPI_Gatherv(&(*begin), local_size, mpi_dt,
                     &result[0], &local_sizes[0], &recv_displs[0], mpi_dt,
-                    0, MPI_COMM_WORLD);
+                    0, comm);
     }
     // else: send results
     else
     {
         // gather local array sizes
-        MPI_Gather(&local_size, 1, MPI_INT, NULL, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Gather(&local_size, 1, MPI_INT, NULL, 1, MPI_INT, 0, comm);
 
         // sent the actual data
         MPI_Gatherv(&(*begin), local_size, mpi_dt,
                     NULL, NULL, NULL, mpi_dt,
-                    0, MPI_COMM_WORLD);
+                    0, comm);
     }
 
     return result;
