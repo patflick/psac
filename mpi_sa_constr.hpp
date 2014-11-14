@@ -1214,8 +1214,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         //                  4: contiguous overlap with both sides
         int overlap_type = 0; // init to no overlaps
         std::size_t bucket_begin = local_B[0];
-        std::cerr << " on rank " << rank <<  ", left_B=" << left_B << ", B[0..] = "; print_range(local_B.begin(), local_B.begin()+10);
-        std::cerr << " on rank " << rank << " B[end]=" << local_B.back() << ", right_B=" << right_B << std::endl;
         std::size_t first_bucket_begin = bucket_begin;
         std::size_t right_bucket_offset = 0;
         do
@@ -1274,7 +1272,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 }
                 else
                 {
-                    std::cerr << "+++++++ on rank " << rank << " bucket_begin=" << bucket_begin << ", prefix =" << prefix << std::endl;
                     overlap_type += 1;
                     left_bucket = bucket;
                 }
@@ -1369,7 +1366,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             MPI_Comm subcomm;
             if (participate)
             {
-                std::cerr << "++++++ rank = " << rank << " participates in " << left_p << std::endl;
                 // split communicator to `left_p`
                 MPI_Comm_split(comm, left_p, 0, &subcomm);
 
