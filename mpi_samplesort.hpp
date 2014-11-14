@@ -391,8 +391,8 @@ sample_block_decomp(_Iterator begin, _Iterator end, _Compare comp, int s, MPI_Co
 }
 
 
-template<typename _Iterator, typename _Compare, bool _Stable = false, bool _AssumeBlockDecomp = true>
-void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MPI_COMM_WORLD)
+template<typename _Iterator, typename _Compare, bool _Stable = false>
+void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MPI_COMM_WORLD, bool _AssumeBlockDecomp = true)
 {
     // get value type of underlying data
     typedef typename std::iterator_traits<_Iterator>::value_type value_type;

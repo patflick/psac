@@ -41,7 +41,7 @@ int main(int argc, char *argv[])
     else
     {
         std::cerr << "Warning: no input file provided, testing with random DNA string." << std::endl;
-        str = rand_dna(1000,0);
+        str = rand_dna(10000000,0);
     }
     if (!test_compare_divsufsort_psac(str,comm))
     {
