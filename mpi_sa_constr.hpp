@@ -504,7 +504,7 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
     //     of a bucket, this should be somewhere at the end -> start scanning
     //     from the end
     auto rev_it = local_B1.rbegin();
-    index_t local_max = 0;
+    std::size_t local_max = 0;
     while (rev_it != local_B1.rend() && (local_max = *rev_it) == 0)
         ++rev_it;
 
@@ -512,8 +512,19 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
     std::size_t pre_max;
     MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
     MPI_Exscan(&local_max, &pre_max, 1, mpi_size_t, MPI_MAX, comm);
-    if (rank == 0)
+    if (rank == 0){
+        std::vector<index_t> pre_maxs(p);
+        MPI_Gather(&pre_max, 1, mpi_dt, &pre_maxs[0], 1, mpi_dt, 0, comm);
+        std::cerr << "~~~~~~PRE-MAX: "; print_range(pre_maxs.begin(), pre_maxs.end());
+        MPI_Gather(&local_max, 1, mpi_dt, &pre_maxs[0], 1, mpi_dt, 0, comm);
+        std::cerr << "~~~~~~LOC-MAX: "; print_range(pre_maxs.begin(), pre_maxs.end());
         pre_max = 0;
+    }
+    else
+    {
+        MPI_Gather(&pre_max, 1, mpi_dt, NULL, 1, mpi_dt, 0, comm);
+        MPI_Gather(&local_max, 1, mpi_dt, NULL, 1, mpi_dt, 0, comm);
+    }
 
     // 3.) linear scan and assign bucket numbers
     for (std::size_t i = 0; i < local_B1.size(); ++i)
@@ -522,7 +533,6 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
             local_B1[i] = pre_max;
         else
             pre_max = local_B1[i];
-        assert(local_B1[i] >= prefix);
         assert(local_B1[i] <= i+prefix);
         // first element of bucket has id of it's own global index:
         assert(i == 0 || (local_B1[i-1] ==  local_B1[i] || local_B1[i] == i+prefix));
@@ -1203,6 +1213,8 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         //                  4: contiguous overlap with both sides
         int overlap_type = 0; // init to no overlaps
         std::size_t bucket_begin = local_B[0];
+        std::cerr << " on rank " << rank <<  ", left_B=" << left_B << ", B[0..] = "; print_range(local_B.begin(), local_B.begin()+10);
+        std::cerr << " on rank " << rank << " B[end]=" << local_B.back() << ", right_B=" << right_B << std::endl;
         if (msgs.size() > 0)
             bucket_begin = local_B[msgit->second - prefix];
         std::size_t first_bucket_begin = bucket_begin;
@@ -1261,6 +1273,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 }
                 else
                 {
+                    std::cerr << "+++++++ on rank " << rank << " bucket_begin=" << bucket_begin << ", prefix =" << prefix << std::endl;
                     overlap_type += 1;
                     left_bucket = bucket;
                 }
@@ -1281,6 +1294,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             // gather all types to first processor
             std::vector<int> overlaps(p);
             MPI_Gather(&overlap_type, 1, MPI_INT, &overlaps[0], 1, MPI_INT, 0, comm);
+            std::cerr << "HAVE OVERLAPS: "; print_range(overlaps.begin(), overlaps.end());
 
             // create schedule using linear scan over the overlap types
             std::vector<int> schedule(p);

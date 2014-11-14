@@ -144,6 +144,7 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
     std::vector<T> result;
 
     MPI_Datatype mpi_dt = get_mpi_dt<T>();
+    MPI_Type_commit(&mpi_dt);
 
     // master process: receive results
     if (rank == 0)
