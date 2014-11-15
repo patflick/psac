@@ -478,7 +478,10 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
 
     local_B1.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
 
-    write_files("/home/pflick/lustre/debugout/test2/local_B", local_B1.begin(), local_B2.end(), comm);
+    // this will take some time, thus wait for all processes to finish
+    MPI_Barrier(comm);
+    write_files("/home/pflick/lustre/debugout/test2/local_B", local_B1.begin(), local_B1.end(), comm);
+    MPI_Barrier(comm);
 
     if (count_unfinished)
     {
