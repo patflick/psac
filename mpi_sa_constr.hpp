@@ -478,11 +478,7 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
 
     local_B1.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
 
-    // this will take some time, thus wait for all processes to finish
-    MPI_Barrier(comm);
-    write_files("/home/pflick/lustre/debugout/test2/local_B", local_B1.begin(), local_B1.end(), comm);
-    MPI_Barrier(comm);
-
+    // count unfinished buckets
     if (count_unfinished)
     {
         // mark 1->0 transitions with 1, if i am the zero and previous is 1
@@ -490,18 +486,36 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
         // (i.e. `i` is the second equal element in a bucket)
         // which means counting unfinished buckets, then allreduce
         index_t local_unfinished_buckets;
+        index_t prev_right;
+        if (rank > 0) // if not last processor
+        {
+            MPI_Irecv(&prev_right, 1, mpi_dt, rank-1, PSAC_TAG_EDGE_KMER,
+                      comm, &recv_req);
+        }
+        if (rank < p-1) // if not first processor
+        {
+            // send my most right element to the right
+            MPI_Send(&local_B1.back(), 1, mpi_dt, rank+1, PSAC_TAG_EDGE_KMER, comm);
+        }
+        if (rank > 0)
+        {
+            // wait for the async receive to finish
+            MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+        }
         if (rank == 0)
             local_unfinished_buckets = 0;
         else
-            local_unfinished_buckets = (local_B1[0] == (prefix-1)+1) ? 1 : 0;
+            local_unfinished_buckets = (prev_right > 0 && local_B1[0] == 0) ? 1 : 0;
         for (std::size_t i = 1; i < local_B1.size(); ++i)
         {
             if(local_B1[i-1] > 0 && local_B1[i] == 0)
                 ++local_unfinished_buckets;
         }
 
-        MPI_Allreduce(&local_unfinished_buckets, &result, 1,
+        index_t total_unfinished;
+        MPI_Allreduce(&local_unfinished_buckets, &total_unfinished, 1,
                       mpi_dt, MPI_SUM, comm);
+        result = total_unfinished;
     }
 
     /*
@@ -651,7 +665,6 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
             // [otherwise results are directly written instead of MPI_Sended]
             assert(p1_recv_cnt < std::numeric_limits<int>::max());
             int recv_cnt = p1_recv_cnt;
-            // TODO: MPI_Datatype
             MPI_Irecv(&local_B2[0],recv_cnt, mpi_dt, p1,
                       PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
         }
@@ -668,7 +681,6 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
             assert(p2_recv_cnt < std::numeric_limits<int>::max());
             int recv_cnt = p2_recv_cnt;
             // send to `p1` (which is necessarily different from `rank`)
-            // TODO: MPI_Datatype
             MPI_Irecv(&local_B2[0] + p1_recv_cnt, recv_cnt, mpi_dt, p2,
                       PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
         }
