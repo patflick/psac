@@ -7,7 +7,8 @@ project(psac)
 
 # Initialize CXXFLAGS.
 #set(CMAKE_CXX_FLAGS                "-Wall -O0 -g --std=c++11")
-set(CMAKE_CXX_FLAGS                "-Wall -O3 -funroll-loops -msse3 -DNDEBUG --std=c++11 -g -march=native")
+set(CMAKE_CXX_FLAGS                "-Wall -O3 -funroll-loops -msse3 --std=c++11 -g -march=native")
+#set(CMAKE_CXX_FLAGS                "-Wall -O3 -funroll-loops -msse3 -DNDEBUG --std=c++11 -g -march=native")
 #set(CMAKE_CXX_FLAGS                "-Wall -O3 -DNDEBUG --std=c++11 -Wuninitialized -g")
 
 

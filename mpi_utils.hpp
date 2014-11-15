@@ -25,6 +25,11 @@
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
+#include <sstream>
+#include <string>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 
 #include <assert.h>
 
@@ -259,12 +264,45 @@ void print_node_distribution(MPI_Comm comm = MPI_COMM_WORLD)
         for (auto it = proc_distr.begin(); it != proc_distr.end(); ++it)
         {
             std::cerr << "--  Node: '" << it->first << "' (" << it->second.size() << "/" << p << ")" << std::endl;
+            std::cerr << "        Ranks: ";
             for (auto rank_it = it->second.begin(); rank_it != it->second.end(); ++rank_it)
             {
-                std::cerr << "        Rank " << *rank_it << std::endl;
+                std::cerr << *rank_it;
+                if (rank_it+1 != it->second.end())
+                    std::cerr << ", ";
             }
+            std::cerr << std::endl;
         }
     }
+}
+
+template <typename _Iterator>
+void write_files(const std::string filename, _Iterator begin, _Iterator end, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get MPI Communicator properties
+    int rank, p;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    // get max rank string length:
+    std::stringstream sslen;
+    sslen << p;
+    int rank_slen = sslen.str().size();
+
+    // concat rank at end of filename
+    std::stringstream ss;
+    ss << filename << "." << std::setfill('0') << std::setw(rank_slen) << p << "." << std::setfill('0') << std::setw(rank_slen) << rank;
+
+    // open file with stream
+    std::cerr << "writing to file " << ss.str() << std::endl;
+    std::ofstream outfs(ss.str());
+
+    // write the content into the file, sep by newline
+    while (begin != end)
+    {
+        outfs << *(begin++) << std::endl;
+    }
+    outfs.close();
 }
 
 template <typename InputIterator, typename OutputIterator>

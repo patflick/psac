@@ -403,10 +403,15 @@ unsigned int initial_bucketing(const std::size_t n, const std::basic_string<char
 
 
 // assumed sorted order (globally) by tuple (B1[i], B2[i])
-// this reassigns new, unique bucket numbers in {0,...,n-1} globally
+// this reassigns new, unique bucket numbers in {1,...,n} globally
 template <typename index_t>
 std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<index_t>& local_B2, MPI_Comm comm, bool count_unfinished)
 {
+    /*
+     * NOTE: buckets are indexed by the global index of the first element in
+     *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
+     *       reserved for out-of-bounds)
+     */
     // assert inputs are of equal size
     assert(local_B1.size() == local_B2.size() && local_B1.size() > 0);
     std::size_t local_size = local_B1.size();
@@ -420,7 +425,7 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
     MPI_Comm_rank(comm, &rank);
 
     /*
-     * send right most element to one processor to the right
+     * send right-most element to one processor to the right
      * so that that processor can determine whether the same bucket continues
      * or a new bucket starts with it's first element
      */
@@ -468,10 +473,12 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
     {
         bool setOne = nextDiff;
         nextDiff = (local_B1[i] != local_B1[i+1] || local_B2[i] != local_B2[i+1]);
-        local_B1[i] = setOne ? prefix+i : 0;
+        local_B1[i] = setOne ? prefix+i+1 : 0;
     }
 
-    local_B1.back() = nextDiff ? prefix+local_size-1 : 0;
+    local_B1.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
+
+    write_files("/home/pflick/lustre/debugout/test2/local_B", local_B1.begin(), local_B2.end(), comm);
 
     if (count_unfinished)
     {
@@ -479,9 +486,11 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
         // (i.e. identical)
         // (i.e. `i` is the second equal element in a bucket)
         // which means counting unfinished buckets, then allreduce
-        index_t local_unfinished_buckets = firstDiff ? 0 : 1;
+        index_t local_unfinished_buckets;
         if (rank == 0)
             local_unfinished_buckets = 0;
+        else
+            local_unfinished_buckets = (local_B1[0] == (prefix-1)+1) ? 1 : 0;
         for (std::size_t i = 1; i < local_B1.size(); ++i)
         {
             if(local_B1[i-1] > 0 && local_B1[i] == 0)
@@ -491,7 +500,6 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
         MPI_Allreduce(&local_unfinished_buckets, &result, 1,
                       mpi_dt, MPI_SUM, comm);
     }
-
 
     /*
      * Global prefix MAX:
@@ -512,19 +520,8 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
     std::size_t pre_max;
     MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
     MPI_Exscan(&local_max, &pre_max, 1, mpi_size_t, MPI_MAX, comm);
-    if (rank == 0){
-        std::vector<index_t> pre_maxs(p);
-        MPI_Gather(&pre_max, 1, mpi_dt, &pre_maxs[0], 1, mpi_dt, 0, comm);
-        std::cerr << "~~~~~~PRE-MAX: "; print_range(pre_maxs.begin(), pre_maxs.end());
-        MPI_Gather(&local_max, 1, mpi_dt, &pre_maxs[0], 1, mpi_dt, 0, comm);
-        std::cerr << "~~~~~~LOC-MAX: "; print_range(pre_maxs.begin(), pre_maxs.end());
+    if (rank == 0)
         pre_max = 0;
-    }
-    else
-    {
-        MPI_Gather(&pre_max, 1, mpi_dt, NULL, 1, mpi_dt, 0, comm);
-        MPI_Gather(&local_max, 1, mpi_dt, NULL, 1, mpi_dt, 0, comm);
-    }
 
     // 3.) linear scan and assign bucket numbers
     for (std::size_t i = 0; i < local_B1.size(); ++i)
@@ -533,9 +530,9 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
             local_B1[i] = pre_max;
         else
             pre_max = local_B1[i];
-        assert(local_B1[i] <= i+prefix);
+        assert(local_B1[i] <= i+prefix+1);
         // first element of bucket has id of it's own global index:
-        assert(i == 0 || (local_B1[i-1] ==  local_B1[i] || local_B1[i] == i+prefix));
+        assert(i == 0 || (local_B1[i-1] ==  local_B1[i] || local_B1[i] == i+prefix+1));
     }
 
     return result;
@@ -813,10 +810,15 @@ MPI_Datatype get_mpi_dt<std::pair<int, int> >()
 }
 
 // assumed sorted order (globally) by tuple (B1[i], B2[i])
-// this reassigns new, unique bucket numbers in {0,...,n-1} globally
+// this reassigns new, unique bucket numbers in {1,...,n} globally
 template <typename index_t>
 void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::size_t gl_offset)
 {
+    /*
+     * NOTE: buckets are indexed by the global index of the first element in
+     *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
+     *       reserved for out-of-bounds)
+     */
     // assert inputs are of equal size
     std::size_t local_size = tuples.size();
 
@@ -879,10 +881,10 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
     {
         bool setOne = nextDiff;
         nextDiff = (tuples[i].B1 != tuples[i+1].B1 || tuples[i].B2 != tuples[i+1].B2);
-        tuples[i].B1 = setOne ? prefix+i : 0;
+        tuples[i].B1 = setOne ? prefix+i+1 : 0;
     }
 
-    tuples.back().B1 = nextDiff ? prefix+local_size-1 : 0;
+    tuples.back().B1 = nextDiff ? prefix+(local_size-1)+1 : 0;
 
     /*
      * Global prefix MAX:
@@ -912,9 +914,9 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
             tuples[i].B1 = pre_max;
         else
             pre_max = tuples[i].B1;
-        assert(tuples[i].B1 <= i+prefix);
+        assert(tuples[i].B1 <= i+prefix+1);
         // first element of bucket has id of it's own global index:
-        assert(i == 0 || (tuples[i-1].B1 ==  tuples[i].B1 || tuples[i].B1 == i+prefix));
+        assert(i == 0 || (tuples[i-1].B1 ==  tuples[i].B1 || tuples[i].B1 == i+prefix+1));
     }
 }
 
@@ -1135,7 +1137,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
          * 1.) on i: send tuple (`to:` Sa[i]+2^k, `from:` i)
          */
         std::vector<std::pair<index_t, index_t> > msgs;
-        //std::vector<std::pair<index_t, index_t> > out_of_bounds_msgs;
+        std::vector<std::pair<index_t, index_t> > out_of_bounds_msgs;
         // linear scan for bucket boundaries
         // and create tuples/pairs
         std::size_t prefix = block_partition_excl_prefix_size(n, p, rank);
@@ -1146,16 +1148,15 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             std::size_t i =  prefix + j;
             // check if this is a unresolved bucket
             // relying on the property that for resolved buckets:
-            //   B[i] == i and B[i+1] == i+1
+            //   B[i] == i+1 and B[i+1] == i+2
             //   (where `i' is the global index)
-            if (local_B[j] != i || (local_B[j] == i
-                && ((j < local_size-1 && local_B[j+1] == i)
-                    || (j == local_size-1 && right_B == i))))
+            if (local_B[j] != i+1 || (local_B[j] == i+1
+                && ((j < local_size-1 && local_B[j+1] == i+1)
+                    || (j == local_size-1 && right_B == i+1))))
             {
                 // add tuple
                 if (local_SA[j] + shift_by >= n)
-                    unresolved--;
-         //           out_of_bounds_msgs.push_back(std::make_pair<index_t,index_t>(0, static_cast<index_t>(i)));
+                    out_of_bounds_msgs.push_back(std::make_pair<index_t,index_t>(0, static_cast<index_t>(i)));
                 else
                     msgs.push_back(std::make_pair<index_t,index_t>(local_SA[j]+shift_by, static_cast<index_t>(i)));
                 unresolved++;
@@ -1189,9 +1190,9 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.second));}, comm);
 
         // append the previous out-of-bounds messages (since they all have B2 = 0)
-        //if (out_of_bounds_msgs.size() > 0)
-        //    msgs.insert(msgs.end(), out_of_bounds_msgs.begin(), out_of_bounds_msgs.end());
-        //out_of_bounds_msgs.clear();
+        if (out_of_bounds_msgs.size() > 0)
+            msgs.insert(msgs.end(), out_of_bounds_msgs.begin(), out_of_bounds_msgs.end());
+        out_of_bounds_msgs.clear();
 
         // sort received messages by the target index to enable consecutive
         // scanning of local buckets and messages
@@ -1213,15 +1214,15 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         //                  3: separate overlaps on left and right
         //                  4: contiguous overlap with both sides
         int overlap_type = 0; // init to no overlaps
-        std::size_t bucket_begin = local_B[0];
+        std::size_t bucket_begin = local_B[0]-1;
         std::size_t first_bucket_begin = bucket_begin;
         std::size_t right_bucket_offset = 0;
         do
         {
             if (msgit != msgs.end())
-                bucket_begin = local_B[msgit->second - prefix];
+                bucket_begin = local_B[msgit->second - prefix]-1;
             // find end of bucket
-            while (msgit != msgs.end() && local_B[msgit->second - prefix] == bucket_begin)
+            while (msgit != msgs.end() && local_B[msgit->second - prefix]-1 == bucket_begin)
             {
                 TwoBSA<index_t> tuple;
                 tuple.SA = local_SA[msgit->second - prefix];
@@ -1256,14 +1257,14 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                     std::sort(bucket.begin(), bucket.end());
                     // local rebucket
                     // save back into local_B, local_SA, etc
-                    index_t cur_b = bucket_begin;
+                    index_t cur_b = bucket_begin + 1;
                     std::size_t out_idx = bucket_begin - prefix;
                     for (auto it = bucket.begin(); it != bucket.end(); ++it)
                     {
                         // if this is a new bucket, then update number
                         if (it != bucket.begin() && (it-1)->B2 != it->B2)
                         {
-                            cur_b = out_idx + prefix;
+                            cur_b = out_idx + prefix + 1;
                         }
                         local_SA[out_idx] = it->SA;
                         local_B[out_idx] = cur_b;
@@ -1508,6 +1509,9 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         if (rank == 0)
             std::cerr << "iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << std::endl;
         DEBUG_STAGE_VEC("after rebucket", local_B);
+
+        //write_files("/home/pflick/lustre/debugout/local_B",local_B.begin(), local_B.end(), comm);
+        return;
 #if 0
         std::cerr << "========  After rebucket  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
@@ -1520,6 +1524,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
          *************/
         // by bucketing to correct target processor using the `SA` array
         // // TODO by number of unresolved elements rather than buckets!!
+        //if(false)
         if (unfinished_buckets < n/10)
         {
             // prepare for bucket chaising (needs SA, and bucket arrays in both
