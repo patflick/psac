@@ -1188,8 +1188,10 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         MPI_Allreduce(&unresolved_els, &gl_unresolved, 1, mpi_size_t, MPI_SUM, comm);
         MPI_Allreduce(&unfinished_b, &gl_unfinished, 1, mpi_size_t, MPI_SUM, comm);
         if (rank == 0)
+        {
             std::cerr << "==== chaising iteration " << shift_by << " unresolved = " << gl_unresolved << std::endl;
             std::cerr << "==== chaising iteration " << shift_by << " unfinished = " << gl_unfinished << std::endl;
+        }
         if (gl_unresolved == 0)
             // finished!
             break;
@@ -1532,7 +1534,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         DEBUG_STAGE_VEC("after rebucket", local_B);
 
         //write_files("/home/pflick/lustre/debugout/local_B",local_B.begin(), local_B.end(), comm);
-        return;
+        //return;
 #if 0
         std::cerr << "========  After rebucket  ========" << std::endl;
         std::cerr << "On processor rank = " << rank << std::endl;
