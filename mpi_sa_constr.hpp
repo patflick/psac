@@ -1123,12 +1123,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         index_t left_B, right_B;
         int reqc = 0;
         MPI_Request recv_reqs[2];
-        if (rank > 0)
-        {
-            // receive from left
-            MPI_Irecv(&left_B, 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B,
-                      comm, &recv_reqs[reqc++]);
-        }
         if (rank < p-1)
         {
             // receive from right
@@ -1139,6 +1133,12 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         {
             // send to left
             MPI_Send(&local_B[0], 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B, comm);
+        }
+        if (rank > 0)
+        {
+            // receive from left
+            MPI_Irecv(&left_B, 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B,
+                      comm, &recv_reqs[reqc++]);
         }
         if (rank < p-1)
         {
@@ -1156,7 +1156,8 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         // linear scan for bucket boundaries
         // and create tuples/pairs
         std::size_t prefix = block_partition_excl_prefix_size(n, p, rank);
-        std::size_t unresolved = 0;
+        std::size_t unresolved_els = 0;
+        std::size_t unfinished_b = 0;
         for (std::size_t j = 0; j < local_B.size(); ++j)
         {
             // get global index for each local index
@@ -1174,21 +1175,27 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                     out_of_bounds_msgs.push_back(std::make_pair<index_t,index_t>(0, static_cast<index_t>(i)));
                 else
                     msgs.push_back(std::make_pair<index_t,index_t>(local_SA[j]+shift_by, static_cast<index_t>(i)));
-                unresolved++;
+                unresolved_els++;
+                if (local_B[j] == i+1) // if first element of unfinished bucket:
+                    unfinished_b++;
             }
         }
 
         // check if all resolved
         std::size_t gl_unresolved;
+        std::size_t gl_unfinished;
         MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
-        MPI_Allreduce(&unresolved, &gl_unresolved, 1, mpi_size_t, MPI_SUM, comm);
+        MPI_Allreduce(&unresolved_els, &gl_unresolved, 1, mpi_size_t, MPI_SUM, comm);
+        MPI_Allreduce(&unfinished_b, &gl_unfinished, 1, mpi_size_t, MPI_SUM, comm);
         if (rank == 0)
             std::cerr << "==== chaising iteration " << shift_by << " unresolved = " << gl_unresolved << std::endl;
+            std::cerr << "==== chaising iteration " << shift_by << " unfinished = " << gl_unfinished << std::endl;
         if (gl_unresolved == 0)
             // finished!
             break;
 
         // message exchange to processor which contains first index
+        std::size_t nmsg = msgs.size();
         msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.first));}, comm);
 
         // for each message, add the bucket no. into the `first` field
@@ -1204,14 +1211,18 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         // send messages back to originator
         msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.second));}, comm);
 
+        assert(nmsg == msgs.size());
+
         // append the previous out-of-bounds messages (since they all have B2 = 0)
         if (out_of_bounds_msgs.size() > 0)
             msgs.insert(msgs.end(), out_of_bounds_msgs.begin(), out_of_bounds_msgs.end());
         out_of_bounds_msgs.clear();
 
+        assert(msgs.size() == unresolved_els);
+
         // sort received messages by the target index to enable consecutive
         // scanning of local buckets and messages
-        std::sort(msgs.begin(), msgs.end(), [&](const std::pair<index_t, index_t>& x, const std::pair<index_t, index_t>& y){ return x.second < y.second;});
+        std::sort(msgs.begin(), msgs.end(), [](const std::pair<index_t, index_t>& x, const std::pair<index_t, index_t>& y){ return x.second < y.second;});
 
 
         /*
@@ -1232,10 +1243,11 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         std::size_t bucket_begin = local_B[0]-1;
         std::size_t first_bucket_begin = bucket_begin;
         std::size_t right_bucket_offset = 0;
-        do
+        while (msgit != msgs.end())
         {
-            if (msgit != msgs.end())
-                bucket_begin = local_B[msgit->second - prefix]-1;
+            bucket_begin = local_B[msgit->second - prefix]-1;
+            assert(bucket_begin < prefix || bucket_begin == msgit->second-1);
+
             // find end of bucket
             while (msgit != msgs.end() && local_B[msgit->second - prefix]-1 == bucket_begin)
             {
@@ -1247,7 +1259,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 msgit++;
             }
             // get bucket end (could be on other processor)
-            std::size_t bucket_end = 0;
             if (msgit == msgs.end() && right_bucket_crosses_proc)
             {
                 if (bucket_begin >= prefix)
@@ -1263,8 +1274,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                     overlap_type = 4;
                 }
             } else {
-                if (msgit != msgs.end())
-                    bucket_end = msgit->second;
                 if (bucket_begin >= prefix)
                 {
                     // this is a local bucket => sort by B2, rebucket, and save
@@ -1293,13 +1302,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 }
             }
             bucket.clear();
-            // quit loop
-            if (msgit == msgs.end())
-                break;
-            bucket_begin = bucket_end;
-            // sort bucket (if local), otherwise remember for interleaved parallel
-            // sorting
-        } while(1);
+        }
 
         // if we have left/right/both/or double buckets, do global comm in two phases
         int my_schedule = -1;
@@ -1398,6 +1401,9 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                     local_SA[i+bucket_offset] = border_bucket[i].SA;
                     local_B[i+bucket_offset] = border_bucket[i].B1;
                 }
+                int subrank;
+                MPI_Comm_rank(subcomm, &subrank);
+                assert(subrank != 0 || local_B[bucket_offset] == bucket_offset+1);
             }
             else
             {
