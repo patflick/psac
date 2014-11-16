@@ -1226,7 +1226,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         // scanning of local buckets and messages
         std::sort(msgs.begin(), msgs.end(), [](const std::pair<index_t, index_t>& x, const std::pair<index_t, index_t>& y){ return x.second < y.second;});
 
-
         /*
          * 3.)
          */
@@ -1248,21 +1247,24 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         while (msgit != msgs.end())
         {
             bucket_begin = local_B[msgit->second - prefix]-1;
-            assert(bucket_begin < prefix || bucket_begin == msgit->second-1);
+            assert(bucket_begin < prefix || bucket_begin == msgit->second);
 
             // find end of bucket
             while (msgit != msgs.end() && local_B[msgit->second - prefix]-1 == bucket_begin)
             {
                 TwoBSA<index_t> tuple;
+                assert(msgit->second >= prefix && msgit->second < prefix+local_size);
                 tuple.SA = local_SA[msgit->second - prefix];
                 tuple.B1 = local_B[msgit->second - prefix];
                 tuple.B2 = msgit->first;
                 bucket.push_back(tuple);
                 msgit++;
             }
+
             // get bucket end (could be on other processor)
             if (msgit == msgs.end() && right_bucket_crosses_proc)
             {
+                assert(rank < p-1 && local_B.back() == right_B);
                 if (bucket_begin >= prefix)
                 {
                     overlap_type += 2;
@@ -1285,6 +1287,8 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                     // save back into local_B, local_SA, etc
                     index_t cur_b = bucket_begin + 1;
                     std::size_t out_idx = bucket_begin - prefix;
+                    // assert previous bucket index is smaller
+                    assert(out_idx == 0 || local_B[out_idx-1] < cur_b);
                     for (auto it = bucket.begin(); it != bucket.end(); ++it)
                     {
                         // if this is a new bucket, then update number
@@ -1296,9 +1300,12 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                         local_B[out_idx] = cur_b;
                         out_idx++;
                     }
+                    // assert next bucket index is larger
+                    assert(out_idx == local_size || local_B[out_idx] == prefix+out_idx+1);
                 }
                 else
                 {
+                    assert(rank > 0 && local_B[0] == left_B);
                     overlap_type += 1;
                     left_bucket = bucket;
                 }
@@ -1368,7 +1375,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         // two phase sorting across boundaries using sub communicators
         for (int phase = 0; phase <= 1; ++phase)
         {
-            std::vector<TwoBSA<index_t> >& border_bucket = left_bucket;
+            std::vector<TwoBSA<index_t> > border_bucket = left_bucket;
             // the leftmost processor of a group will be used as split
             int left_p = block_partition_target_processor(n, p, first_bucket_begin);
             bool participate = (overlap_type != 0 && my_schedule == phase);
@@ -1389,23 +1396,29 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             {
                 // split communicator to `left_p`
                 MPI_Comm_split(comm, left_p, 0, &subcomm);
+                int subrank;
+                MPI_Comm_rank(subcomm, &subrank);
 
                 // sample sort the bucket with arbitrary distribution
                 samplesort(border_bucket.begin(), border_bucket.end(), std::less<TwoBSA<index_t> >(), subcomm, false);
 
+                index_t first_bucket = border_bucket[0].B1;
                 // rebucket with global offset of first -> in tuple form
                 rebucket_tuples(border_bucket, subcomm, rebucket_offset);
+                // assert first bucket index remains the same
+                assert(subrank != 0 || first_bucket == border_bucket[0].B1);
 
                 // save into full array (if this was left -> save to beginning)
                 // (else, need offset of last)
+                assert(bucket_offset == 0 || local_B[bucket_offset-1] < border_bucket[0].B1);
+                assert(bucket_offset+border_bucket.size() <= local_size);
                 for (std::size_t i = 0; i < border_bucket.size(); ++i)
                 {
                     local_SA[i+bucket_offset] = border_bucket[i].SA;
                     local_B[i+bucket_offset] = border_bucket[i].B1;
                 }
-                int subrank;
-                MPI_Comm_rank(subcomm, &subrank);
-                assert(subrank != 0 || local_B[bucket_offset] == bucket_offset+1);
+                assert(bucket_offset+border_bucket.size() == local_size || (local_B[bucket_offset+border_bucket.size()] > local_B[bucket_offset+border_bucket.size()-1]));
+                assert(subrank != 0 || local_B[bucket_offset] == bucket_offset+prefix+1);
             }
             else
             {
