@@ -1197,7 +1197,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             break;
 
         // message exchange to processor which contains first index
-        std::size_t nmsg = msgs.size();
         msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.first));}, comm);
 
         // for each message, add the bucket no. into the `first` field
@@ -1212,8 +1211,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
          */
         // send messages back to originator
         msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.second));}, comm);
-
-        assert(nmsg == msgs.size());
 
         // append the previous out-of-bounds messages (since they all have B2 = 0)
         if (out_of_bounds_msgs.size() > 0)
@@ -1268,13 +1265,13 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 if (bucket_begin >= prefix)
                 {
                     overlap_type += 2;
-                    right_bucket = bucket;
+                    right_bucket.swap(bucket);
                     right_bucket_offset = bucket_begin - prefix;
                 }
                 else
                 {
                     // bucket extends to left AND right
-                    left_bucket = bucket;
+                    left_bucket.swap(bucket);
                     overlap_type = 4;
                 }
             } else {
@@ -1307,7 +1304,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 {
                     assert(rank > 0 && local_B[0] == left_B);
                     overlap_type += 1;
-                    left_bucket = bucket;
+                    left_bucket.swap(bucket);
                 }
             }
             bucket.clear();
@@ -1320,7 +1317,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             // gather all types to first processor
             std::vector<int> overlaps(p);
             MPI_Gather(&overlap_type, 1, MPI_INT, &overlaps[0], 1, MPI_INT, 0, comm);
-            std::cerr << "HAVE OVERLAPS: "; print_range(overlaps.begin(), overlaps.end());
+            //std::cerr << "HAVE OVERLAPS: "; print_range(overlaps.begin(), overlaps.end());
 
             // create schedule using linear scan over the overlap types
             std::vector<int> schedule(p);
@@ -1356,7 +1353,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 }
             }
 
-            std::cerr << "FOUND SCHEDULE: "; print_range(schedule.begin(), schedule.end());
+            //std::cerr << "FOUND SCHEDULE: "; print_range(schedule.begin(), schedule.end());
             // scatter the schedule to the processors
             MPI_Scatter(&schedule[0], 1, MPI_INT, &my_schedule, 1, MPI_INT, 0, comm);
         }
@@ -1402,7 +1399,9 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 // sample sort the bucket with arbitrary distribution
                 samplesort(border_bucket.begin(), border_bucket.end(), std::less<TwoBSA<index_t> >(), subcomm, false);
 
+#ifndef NDEBUG
                 index_t first_bucket = border_bucket[0].B1;
+#endif
                 // rebucket with global offset of first -> in tuple form
                 rebucket_tuples(border_bucket, subcomm, rebucket_offset);
                 // assert first bucket index remains the same
