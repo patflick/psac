@@ -1131,7 +1131,8 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         // send to left
         MPI_Send(&local_B[0], 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B, comm);
     }
-    MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+    if (rank < p-1)
+        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
 
     // get global offset
     const std::size_t prefix = block_partition_excl_prefix_size(n, p, rank);
@@ -1433,17 +1434,15 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
 
         // get new bucket number to the right
         if (rank < p-1)
-        {
             // receive from right
             MPI_Irecv(&right_B, 1, mpi_dt, rank+1, PSAC_TAG_EDGE_B,
                     comm, &recv_req);
-        }
         if (rank > 0)
-        {
             // send to left
             MPI_Send(&local_B[0], 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B, comm);
-        }
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+        if (rank < p-1)
+            MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+
         // remember all the remaining active elements
         active_elements.clear();
         for (auto it = msgs.begin(); it != msgs.end(); ++it)
