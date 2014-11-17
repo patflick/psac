@@ -4,6 +4,8 @@
 - [x] (see previous) psac interface for global mem (scatter + psac + gather)
 - [x] implement testing against libdivsufsort
 - [x] test against chr22
+- [ ] no 3-tuples in samplesort -> use only initial bucket and then switch
+      to bucket chaising
 - [ ] document library functions
 - [ ] clean iterator interface
 - [ ] distributed correctness test
