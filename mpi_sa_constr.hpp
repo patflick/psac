@@ -1104,7 +1104,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
      *
      */
     // get input size
-    std::size_t local_size = local_SA.size();
+    const std::size_t local_size = local_SA.size();
     assert(local_B.size() == local_size);
     assert(local_ISA.size() == local_size);
 
@@ -1114,40 +1114,51 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
 
+    /*
+     * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
+     */
+    // exchange border elements (left and right)
+    index_t right_B;
+    MPI_Request recv_req;
+    if (rank < p-1)
+    {
+        // receive from right
+        MPI_Irecv(&right_B, 1, mpi_dt, rank+1, PSAC_TAG_EDGE_B,
+                comm, &recv_req);
+    }
+    if (rank > 0)
+    {
+        // send to left
+        MPI_Send(&local_B[0], 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B, comm);
+    }
+    MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+
+    // get global offset
+    const std::size_t prefix = block_partition_excl_prefix_size(n, p, rank);
+
+    // get active elements
+    std::vector<index_t> active_elements;
+    for (std::size_t j = 0; j < local_B.size(); ++j)
+    {
+        // get global index for each local index
+        std::size_t i =  prefix + j;
+        // check if this is a unresolved bucket
+        // relying on the property that for resolved buckets:
+        //   B[i] == i+1 and B[i+1] == i+2
+        //   (where `i' is the global index)
+        if (local_B[j] != i+1 || (local_B[j] == i+1
+                    && ((j < local_size-1 && local_B[j+1] == i+1)
+                        || (j == local_size-1 && rank < p-1 && right_B == i+1))))
+        {
+            // save local active indexes
+            active_elements.push_back(j);
+        }
+    }
+
+    bool right_bucket_crosses_proc = (rank < p-1 && local_B.back() == right_B);
+
     for (std::size_t shift_by = dist<<1; shift_by < n; shift_by <<= 1)
     {
-        /*
-         * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
-         */
-        // exchange border elements (left and right)
-        index_t left_B, right_B;
-        int reqc = 0;
-        MPI_Request recv_reqs[2];
-        if (rank < p-1)
-        {
-            // receive from right
-            MPI_Irecv(&right_B, 1, mpi_dt, rank+1, PSAC_TAG_EDGE_B,
-                      comm, &recv_reqs[reqc++]);
-        }
-        if (rank > 0)
-        {
-            // send to left
-            MPI_Send(&local_B[0], 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B, comm);
-        }
-        if (rank > 0)
-        {
-            // receive from left
-            MPI_Irecv(&left_B, 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B,
-                      comm, &recv_reqs[reqc++]);
-        }
-        if (rank < p-1)
-        {
-            // send to right
-            MPI_Send(&local_B.back(), 1, mpi_dt, rank+1, PSAC_TAG_EDGE_B, comm);
-        }
-        MPI_Waitall(reqc, recv_reqs, MPI_STATUS_IGNORE);
-        bool right_bucket_crosses_proc = (rank < p-1 && local_B.back() == right_B);
-
         /*
          * 1.) on i: send tuple (`to:` Sa[i]+2^k, `from:` i)
          */
@@ -1155,30 +1166,20 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         std::vector<std::pair<index_t, index_t> > out_of_bounds_msgs;
         // linear scan for bucket boundaries
         // and create tuples/pairs
-        std::size_t prefix = block_partition_excl_prefix_size(n, p, rank);
         std::size_t unresolved_els = 0;
         std::size_t unfinished_b = 0;
-        for (std::size_t j = 0; j < local_B.size(); ++j)
+        for (index_t j : active_elements)
         {
             // get global index for each local index
             std::size_t i =  prefix + j;
-            // check if this is a unresolved bucket
-            // relying on the property that for resolved buckets:
-            //   B[i] == i+1 and B[i+1] == i+2
-            //   (where `i' is the global index)
-            if (local_B[j] != i+1 || (local_B[j] == i+1
-                && ((j < local_size-1 && local_B[j+1] == i+1)
-                    || (j == local_size-1 && right_B == i+1))))
-            {
-                // add tuple
-                if (local_SA[j] + shift_by >= n)
-                    out_of_bounds_msgs.push_back(std::make_pair<index_t,index_t>(0, static_cast<index_t>(i)));
-                else
-                    msgs.push_back(std::make_pair<index_t,index_t>(local_SA[j]+shift_by, static_cast<index_t>(i)));
-                unresolved_els++;
-                if (local_B[j] == i+1) // if first element of unfinished bucket:
-                    unfinished_b++;
-            }
+            // add tuple
+            if (local_SA[j] + shift_by >= n)
+                out_of_bounds_msgs.push_back(std::make_pair<index_t,index_t>(0, static_cast<index_t>(i)));
+            else
+                msgs.push_back(std::make_pair<index_t,index_t>(local_SA[j]+shift_by, static_cast<index_t>(i)));
+            unresolved_els++;
+            if (local_B[j] == i+1) // if first element of unfinished bucket:
+                unfinished_b++;
         }
 
         // check if all resolved
@@ -1302,7 +1303,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 }
                 else
                 {
-                    assert(rank > 0 && local_B[0] == left_B);
                     overlap_type += 1;
                     left_bucket.swap(bucket);
                 }
@@ -1431,6 +1431,38 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         }
 
 
+        // get new bucket number to the right
+        if (rank < p-1)
+        {
+            // receive from right
+            MPI_Irecv(&right_B, 1, mpi_dt, rank+1, PSAC_TAG_EDGE_B,
+                    comm, &recv_req);
+        }
+        if (rank > 0)
+        {
+            // send to left
+            MPI_Send(&local_B[0], 1, mpi_dt, rank-1, PSAC_TAG_EDGE_B, comm);
+        }
+        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+        // remember all the remaining active elements
+        active_elements.clear();
+        for (auto it = msgs.begin(); it != msgs.end(); ++it)
+        {
+            index_t j = it->second - prefix;
+            index_t i = it->second;
+            // check if this is a unresolved bucket
+            // relying on the property that for resolved buckets:
+            //   B[i] == i+1 and B[i+1] == i+2
+            //   (where `i' is the global index)
+            if (local_B[j] != i+1 || (local_B[j] == i+1
+                        && ((j < local_size-1 && local_B[j+1] == i+1)
+                            || (j == local_size-1 && rank < p-1 && right_B == i+1))))
+            {
+                // save local active indexes
+                active_elements.push_back(j);
+            }
+        }
+
         /*
          * 4.)
          */
@@ -1439,9 +1471,6 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         // since the message array is still available with the indices of unfinished
         // buckets -> reuse that information => no need to rescan the whole 
         // local array
-        // TODO: if i keep this information (active buffer indeces) around,
-        // i can reuse it in every iteration and thus never have to scan the full
-        // array ever again!
         for (auto it = msgs.begin(); it != msgs.end(); ++it)
         {
             it->first = local_SA[it->second - prefix]; // SA[i]
