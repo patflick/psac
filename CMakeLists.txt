@@ -6,9 +6,10 @@ project(psac)
 ##### General Compilation Settings
 
 # Initialize CXXFLAGS.
+#set(CMAKE_CXX_FLAGS                "-Wall -O0 -g --std=c++11 -D_GLIBCXX_DEBUG")
 #set(CMAKE_CXX_FLAGS                "-Wall -O0 -g --std=c++11")
-set(CMAKE_CXX_FLAGS                "-Wall -O3 -funroll-loops -msse3 --std=c++11 -g -march=native")
-#set(CMAKE_CXX_FLAGS                "-Wall -O3 -funroll-loops -msse3 -DNDEBUG --std=c++11 -g -march=native")
+#set(CMAKE_CXX_FLAGS                "-Wall -O3 -funroll-loops -msse3 --std=c++11 -g -march=native")
+set(CMAKE_CXX_FLAGS                "-Wall -O3 -funroll-loops -msse3 -DNDEBUG --std=c++11 -march=native")
 #set(CMAKE_CXX_FLAGS                "-Wall -O3 -DNDEBUG --std=c++11 -Wuninitialized -g")
 
 
@@ -65,6 +66,7 @@ target_link_libraries(test_samplesort rt) # for timer
 add_executable(test_file test_file.cpp)
 target_link_libraries(test_file ${MPI_LIBRARIES})
 
+add_executable(test_rmq test_rmq.cpp)
 
 add_subdirectory(ext/libdivsufsort)
 include_directories(${libdivsufsort_BINARY_DIR}/include)

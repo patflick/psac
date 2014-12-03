@@ -208,7 +208,6 @@ std::vector<index_t> alphabet_histogram(const std::string& local_str, MPI_Comm c
     std::vector<index_t> hist = get_histogram<index_t>(local_str.begin(), local_str.end(), 256);
 
     std::vector<index_t> out_hist(256);
-
     // global all reduce to get global histogram
     MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
     MPI_Allreduce(&hist[0], &out_hist[0], 256, mpi_dt, MPI_SUM, comm);
@@ -997,7 +996,7 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
 }
 
 template <typename index_t>
-bool gl_check_correct_SA(const std::vector<index_t> SA, const std::vector<index_t>& ISA, const std::string& str)
+bool gl_check_correct_SA(const std::vector<index_t>& SA, const std::vector<index_t>& ISA, const std::string& str)
 {
     std::size_t n = SA.size();
     bool success = true;
@@ -1076,6 +1075,69 @@ void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
     MPI_Alltoallv(&send_buffer[0], &send_counts[0], &send_displs[0], mpi_dt,
                   &msgs[0], &recv_counts[0], &recv_displs[0], mpi_dt, comm);
     // done, result is returned in vector of input messages
+}
+
+
+template <typename index_t>
+void bulk_rmq_msgs(const std::size_t n, const std::vector<index_t>& local_els, std::vector<std::pair<index_t, index_t> >& range_msgs, MPI_Comm comm)
+{
+    // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
+    //     a.) allgather per processor minimum lcp
+    //     b.) create messages to left-most and right-most processor (i, B2[i])
+    //     c.) on rank==B2[i]: get either left-flank min (i < B2[i])
+    //         or right-flank min (i > B2[i])
+    //         -> in bulk by ordering messages into two groups and sorting by B2[i]
+    //            then linear scan for min starting from left-most/right-most element
+    //     d.) answer with message (i, min(...))
+    //     e.) on rank==i: receive min answer from left-most and right-most
+    //         processor for each range
+    //          -> sort by i
+    //     f.) for each range: get RMQ of intermediary processors
+    //                         min(min_p_left, RMQ(p_left+1,p_right-1), min_p_right)
+
+    // get comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Datatype mpi_index_t = get_mpi_dt<index_t>();
+
+    // get per processor minimum
+    index_t local_min = std::min_element(local_els.begin(), local_els.end());
+    std::vector<index_t> proc_mins(p);
+    MPI_Allgather(&local_min, 1, mpi_index_t, &proc_mins[0], 1, mpi_index_t, comm);
+
+    // TODO: handle local ranges (local start, local stop, or both) with
+    // local RMQ
+    // TODO: i.e., need to implement real constant time RMQ
+
+    // send messages
+    msgs_all2all(range_msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.second));}, comm);
+
+    // partition messages into left and right
+    //std::partition(range_msgs.begin(), range_msgs.end(), [&](const std::pair<index_t, index_t>& x){return 
+}
+
+
+template <typename index_t>
+void resolve_next_lcp(std::size_t n, const std::vector<index_t>& local_SA, const std::vector<index_t>& local_B1, const std::vector<index_t>& local_B2, MPI_Comm comm, int dist)
+{
+    // 2.) find _new_ bucket boundaries (B1[i-1] == B1[i] && B2[i-1] != B2[i])
+    // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
+    //     a.) allgather per processor minimum lcp
+    //     b.) create messages to left-most and right-most processor (i, B2[i])
+    //     c.) on rank==B2[i]: get either left-flank min (i < B2[i])
+    //         or right-flank min (i > B2[i])
+    //         -> in bulk by ordering messages into two groups and sorting by B2[i]
+    //            then linear scan for min starting from left-most/right-most element
+    //     d.) answer with message (i, min(...))
+    //     e.) on rank==i: receive min answer from left-most and right-most
+    //         processor for each range
+    //          -> sort by i
+    //     f.) for each range: get RMQ of intermediary processors
+    //                         min(min_p_left, RMQ(p_left+1,p_right-1), min_p_right)
+    //
+    //     (assuming the bucket ids are indexes)
+    // 4.) LCP[i] = dist + min_lcp[i]
 }
 
 template <typename index_t>

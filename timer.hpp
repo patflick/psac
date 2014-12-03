@@ -38,11 +38,12 @@
                           fprintf(stderr, "-------- p = %d ---------\n", p);\
                           fflush(stderr);}
 
-
 #define TIMER_END_SECTION(str) if (rank == 0) {\
                           fprintf(stderr, "TIMER\tSECTION\t%s\t%f\n", str,\
                                   _t.get_ms() - _last_time);\
-                                  _last_time = _t.get_ms(); fflush(stderr);}
+                                  _last_time = _t.get_ms();\
+                                  if(false){printf("%f",_last_time);} /* no warnings */\
+                                  fflush(stderr);}
 // for loops within the upper timer
 #define TIMER_LOOP_START() timer _lt; double _llast_time = _lt.get_ms();
 #define TIMER_END_LOOP_SECTION(iter, str) if (rank == 0) {\
