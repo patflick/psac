@@ -41,7 +41,6 @@
  *
  * - LCP while M&M:
  *      o TODO: this doesn't yet make sense and/or work properly :-/
- *      o TODO: see ya tmrw dude :)
  *      o when combining two buckets into tuple, we add the other buckets (+2^k)
  *        current LCP value to the tuple, after sorting into SA order, we can
  *        determine the new LCP value by adding of still in same bucket
@@ -77,6 +76,7 @@
 #include "parallel_utils.hpp"
 #include "mpi_utils.hpp"
 #include "mpi_samplesort.hpp"
+#include "rmq.hpp"
 
 #define PSAC_TAG_EDGE_KMER 1
 #define PSAC_TAG_SHIFT 2
@@ -1079,7 +1079,9 @@ void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
 
 
 template <typename index_t>
-void bulk_rmq_msgs(const std::size_t n, const std::vector<index_t>& local_els, std::vector<std::pair<index_t, index_t> >& range_msgs, MPI_Comm comm)
+void bulk_rmq_msgs(const std::size_t n, const std::vector<index_t>& local_els,
+                   std::vector<std::tuple<index_t, index_t, index_t> >& ranges,
+                   MPI_Comm comm)
 {
     // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
     //     a.) allgather per processor minimum lcp
@@ -1101,20 +1103,47 @@ void bulk_rmq_msgs(const std::size_t n, const std::vector<index_t>& local_els, s
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_index_t = get_mpi_dt<index_t>();
 
+    // create RMQ for local elements
+    rmq::RMQ<typename std::vector<index_t>::iterator> local_rmq(local_els.begin(), local_els.end());
+
     // get per processor minimum
-    index_t local_min = std::min_element(local_els.begin(), local_els.end());
+    index_t local_min = *local_rmq.query(local_els.begin(), local_els.end());
+    assert(local_min == *std::min_element(local_els.begin(), local_els.end()));
     std::vector<index_t> proc_mins(p);
     MPI_Allgather(&local_min, 1, mpi_index_t, &proc_mins[0], 1, mpi_index_t, comm);
 
-    // TODO: handle local ranges (local start, local stop, or both) with
-    // local RMQ
-    // TODO: i.e., need to implement real constant time RMQ
+    // create range-minimum-query datastructure for the processor minimums
+    rmq::RMQ<typename std::vector<index_t>::iterator> proc_mins_rmq(proc_mins.begin(), proc_mins.end());
+
+    // partition messages into local ends and remote ends
+    auto remote_begin = std::partition(ranges.begin(), ranges.end(),
+                  [&](const std::tuple<index_t, index_t, index_t>& x){
+                        return block_partition_target_processor(n, p, std::get<1>(x))
+                            == block_partition_target_processor(n, p, std::get<2>(x));
+                  });
+
+    std::vector<std::tuple<index_t,index_t,index_t> > remote
+
+
+    // 
+    // TODO: 
+    //  Different message types (and thus two phases) for:
+    //  - remote ends (range ends go to different processors)
+    //      * send two messages with local return address and some form of `bit`
+    //        to differentiate between left and right border
+    //  TODOA
+
+
+    //  - local ends (both range ends go to same processors) (including local queries)
+    //      * send triplets (left, right, from)
+    //      * solve locally using local RMQ
+    //      * return to sender
+    
+
 
     // send messages
     msgs_all2all(range_msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.second));}, comm);
 
-    // partition messages into left and right
-    //std::partition(range_msgs.begin(), range_msgs.end(), [&](const std::pair<index_t, index_t>& x){return 
 }
 
 
