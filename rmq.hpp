@@ -15,6 +15,8 @@
 #include <limits>
 #include <algorithm>
 #include <iostream>
+//#include <cstdint>
+#include <stdint.h>
 #include <assert.h>
 
 namespace rmq {
@@ -59,11 +61,10 @@ private:
 
     // saves minimum as block index for combination of superblocks relative to
     // global start index
-    std::vector<std::vector<index_t>> superblock_mins;
+    std::vector<std::vector<index_t> > superblock_mins;
     // saves minimum for combination of blocks relative to superblock start
     // index
-    std::vector<std::vector<std::uint16_t>> block_mins;
-
+    std::vector<std::vector<uint16_t> > block_mins;
 
     bool check_superblock_correctness()
     {
@@ -127,13 +128,13 @@ public:
         n_blocks = (n-1) / block_size + 1;
         n_blocks_per_superblock = superblock_size / block_size;
 
-        assert(superblock_size-1 <= std::numeric_limits<std::uint16_t>::max());
+        assert(superblock_size-1 <= std::numeric_limits<uint16_t>::max());
 
 
         // start by finding index of mins per block
         // for each superblock
         superblock_mins.push_back(std::vector<index_t>(n_superblocks));
-        block_mins.push_back(std::vector<std::uint16_t>(n_blocks));
+        block_mins.push_back(std::vector<uint16_t>(n_blocks));
         Iterator it = begin;
         while (it != end)
         {
@@ -154,7 +155,7 @@ public:
                 // save minimum for block min, relative to superblock start
                 index_t block_min_idx = static_cast<index_t>(std::distance(it, block_min_pos));
                 assert(block_min_idx < superblock_size);
-                block_mins[0][std::distance(begin, block_it) / block_size] = static_cast<std::uint16_t>(block_min_idx);
+                block_mins[0][std::distance(begin, block_it) / block_size] = static_cast<uint16_t>(block_min_idx);
                 block_it = block_end_it;
             }
             superblock_mins[0][std::distance(begin, it) / superblock_size] = static_cast<index_t>(std::distance(begin, min_pos));
@@ -410,8 +411,6 @@ public:
 
         }
 
-        // catch error
-        assert(min_pos - _begin != 9995762);
         // return the minimum found
         return min_pos;
     }

@@ -308,7 +308,8 @@ unsigned int initial_bucketing(const std::size_t n, const std::basic_string<char
     }
 
     if (rank == 0)
-        std::cerr << "Detecting sigma=" << sigma << " => l=" << l << ", k=" << k << std::endl;
+        std::cerr << "Detecting sigma=" << sigma << " => l=" << l << ", k=" << k
+                  << std::endl;
 
     // get k-mer mask
     index_t kmer_mask = ((static_cast<index_t>(1) << (l*k)) - static_cast<index_t>(1));
@@ -1079,7 +1080,7 @@ void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
 
 
 template <typename index_t>
-void bulk_rmq_msgs(const std::size_t n, const std::vector<index_t>& local_els,
+void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
                    std::vector<std::tuple<index_t, index_t, index_t> >& ranges,
                    MPI_Comm comm)
 {
@@ -1103,47 +1104,127 @@ void bulk_rmq_msgs(const std::size_t n, const std::vector<index_t>& local_els,
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_index_t = get_mpi_dt<index_t>();
 
+    // get size parameters
+    std::size_t local_size = local_els.size();
+    std::size_t prefix_size = block_partition_excl_prefix_size(n, p, rank);
+
     // create RMQ for local elements
     rmq::RMQ<typename std::vector<index_t>::iterator> local_rmq(local_els.begin(), local_els.end());
 
-    // get per processor minimum
-    index_t local_min = *local_rmq.query(local_els.begin(), local_els.end());
+    // get per processor minimum and it's position
+    auto local_min_it = local_rmq.query(local_els.begin(), local_els.end());
+    index_t min_pos = (local_min_it - local_els.begin()) + prefix_size;
+    index_t local_min = *local_min_it;
     assert(local_min == *std::min_element(local_els.begin(), local_els.end()));
     std::vector<index_t> proc_mins(p);
+    std::vector<index_t> proc_min_pos(p);
     MPI_Allgather(&local_min, 1, mpi_index_t, &proc_mins[0], 1, mpi_index_t, comm);
+    MPI_Allgather(&min_pos, 1, mpi_index_t, &proc_min_pos[0], 1, mpi_index_t, comm);
 
     // create range-minimum-query datastructure for the processor minimums
     rmq::RMQ<typename std::vector<index_t>::iterator> proc_mins_rmq(proc_mins.begin(), proc_mins.end());
 
-    // partition messages into local ends and remote ends
-    auto remote_begin = std::partition(ranges.begin(), ranges.end(),
-                  [&](const std::tuple<index_t, index_t, index_t>& x){
-                        return block_partition_target_processor(n, p, std::get<1>(x))
-                            == block_partition_target_processor(n, p, std::get<2>(x));
-                  });
+    // 1.) duplicate vector of triplets
+    // 2.) (asserting that t[1] < t[2]) send to target processor for t[1]
+    // 3.) on t[1]: return min and min index of right flank
+    // 4.) send duplicated to t[2]
+    // 5.) on t[2]: return min and min index of left flank
+    // 6.) if (target-p(t[1]) == target-p(t[2])):
+    //      a) target-p(t[1]) participates in twice (2x too much, could later be
+    //         algorithmically optimized away)
+    //         and returns min only from range (t[1],t[2])
+    // 7.) on i: sort both by i, then pairwise iterate through and get target-p
+    //     for both min indeces. if there are p's in between: use proc_min_rmq
+    //     to get value and index of min p, then get global min index of that
+    //     processor (needs to be gotten as well during the allgather)
+    //  TODO: maybe template value type as different type than index_type
+    //        (right now has to be identical, which suffices for LCP)
 
-    std::vector<std::tuple<index_t,index_t,index_t> > remote
+    std::vector<std::tuple<index_t, index_t, index_t> > ranges_right(ranges);
 
+    // first communication
+    msgs_all2all(
+        ranges,
+        [&](const std::vector<std::tuple<index_t, index_t, index_t>>& x) {
+            return block_partition_target_processor(n, p, std::get<1>(x));
+        }, comm);
+    // find mins from start to right border locally
+    for (auto it = ranges.begin(); it != ranges.end(); ++it)
+    {
+        assert(std::get<1>(*it) < std::get<2>(*it));
+        auto range_begin = local_els.begin() + (std::get<1>(*it) - prefix_size);
+        auto range_end = local_els.end();
+        if (std::get<2>(*it) < prefix_size + local_size)
+        {
+            range_end = local_els.begin() + (std::get<2>(*it) - prefix_size);
+        }
+        auto range_min = local_rmq.query(range_begin, range_end);
+        std::get<1>(*it) = (range_min - local_els.begin()) + prefix_size;
+        std::get<2>(*it) = *range_min;
+    }
+    // send results back to originator
+    msgs_all2all(
+        ranges,
+        [&](const std::vector<std::tuple<index_t, index_t, index_t>>& x) {
+            return block_partition_target_processor(n, p, std::get<0>(x));
+        }, comm);
 
-    // 
-    // TODO: 
-    //  Different message types (and thus two phases) for:
-    //  - remote ends (range ends go to different processors)
-    //      * send two messages with local return address and some form of `bit`
-    //        to differentiate between left and right border
-    //  TODOA
+    // second communication
+    msgs_all2all(
+        ranges_right,
+        [&](const std::vector<std::tuple<index_t, index_t, index_t>>& x) {
+            return block_partition_target_processor(n, p, std::get<2>(x));
+        }, comm);
+    // find mins from start to right border locally
+    for (auto it = ranges_right.begin(); it != ranges_right.end(); ++it)
+    {
+        assert(std::get<1>(*it) < std::get<2>(*it));
+        auto range_end = local_els.begin() + (std::get<2>(*it) - prefix_size);
+        auto range_begin = local_els.begin();
+        if (std::get<1>(*it) >= prefix_size)
+        {
+            range_begin = local_els.begin() + (std::get<1>(*it) - prefix_size);
+        }
+        auto range_min = local_rmq.query(range_begin, range_end);
+        std::get<1>(*it) = (range_min - local_els.begin()) + prefix_size;
+        std::get<2>(*it) = *range_min;
+    }
+    // send results back to originator
+    msgs_all2all(
+        ranges_right,
+        [&](const std::vector<std::tuple<index_t, index_t, index_t>>& x) {
+            return block_partition_target_processor(n, p, std::get<0>(x));
+        }, comm);
 
-
-    //  - local ends (both range ends go to same processors) (including local queries)
-    //      * send triplets (left, right, from)
-    //      * solve locally using local RMQ
-    //      * return to sender
-    
-
-
-    // send messages
-    msgs_all2all(range_msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.second));}, comm);
-
+    // get total min and save into ranges
+    assert(ranges.size() == ranges_right.size());
+    for (std::size_t i=0; i < ranges.size(); ++i)
+    {
+        assert(std::get<0>(ranges[i]) == std::get<0>(ranges_right[i]));
+        int p_left =
+            block_partition_target_processor(n, p, std::get<1>(ranges[i]));
+        int p_right = block_partition_target_processor(
+            n, p, std::get<1>(ranges_right[i]));
+        if (std::get<2>(ranges[i]) > std::get<2>(ranges_right[i]))
+        {
+            ranges[i] = ranges_right[i];
+        }
+        // get minimum of both elements
+        if (p_left + 1 < p_right)
+        {
+            // get min from per process min RMQ
+            auto p_min_it =
+                proc_mins_rmq.query(proc_mins.begin() + p_left + 1,
+                                    proc_mins.begin() + (p_right - 1));
+            index_t p_min = *p_min_it;
+            // if smaller, save as overall minimum
+            if (p_min < std::get<2>(ranges[i]))
+            {
+                std::get<1>(ranges[i]) = proc_min_pos[p_min_it - proc_mins.begin()];
+                std::get<2>(ranges[i]) = p_min;
+            }
+        }
+    }
 }
 
 

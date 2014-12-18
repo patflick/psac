@@ -277,7 +277,7 @@ void print_node_distribution(MPI_Comm comm = MPI_COMM_WORLD)
 }
 
 template <typename _Iterator>
-void write_files(const std::string filename, _Iterator begin, _Iterator end, MPI_Comm comm = MPI_COMM_WORLD)
+void write_files(const std::string& filename, _Iterator begin, _Iterator end, MPI_Comm comm = MPI_COMM_WORLD)
 {
     // get MPI Communicator properties
     int rank, p;
