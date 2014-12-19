@@ -796,8 +796,6 @@ MPI_Datatype get_mpi_dt<TwoBSA<std::size_t>>()
 template<>
 MPI_Datatype get_mpi_dt<std::pair<std::size_t, std::size_t> >()
 {
-    // keep only one instance around
-    // NOTE: this memory will not be destructed.
     MPI_Datatype dt;
     MPI_Datatype element_t = get_mpi_dt<std::size_t>();
     MPI_Type_contiguous(2, element_t, &dt);
@@ -806,8 +804,6 @@ MPI_Datatype get_mpi_dt<std::pair<std::size_t, std::size_t> >()
 template<>
 MPI_Datatype get_mpi_dt<std::pair<unsigned int, unsigned int> >()
 {
-    // keep only one instance around
-    // NOTE: this memory will not be destructed.
     MPI_Datatype dt;
     MPI_Datatype element_t = get_mpi_dt<unsigned int>();
     MPI_Type_contiguous(2, element_t, &dt);
@@ -816,11 +812,34 @@ MPI_Datatype get_mpi_dt<std::pair<unsigned int, unsigned int> >()
 template<>
 MPI_Datatype get_mpi_dt<std::pair<int, int> >()
 {
-    // keep only one instance around
-    // NOTE: this memory will not be destructed.
     MPI_Datatype dt;
     MPI_Datatype element_t = get_mpi_dt<int>();
     MPI_Type_contiguous(2, element_t, &dt);
+    return dt;
+}
+// custom MPI data types for std::tuple (triple) instances
+template<>
+MPI_Datatype get_mpi_dt<std::tuple<std::size_t, std::size_t, std::size_t> >()
+{
+    MPI_Datatype dt;
+    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
+    MPI_Type_contiguous(3, element_t, &dt);
+    return dt;
+}
+template<>
+MPI_Datatype get_mpi_dt<std::tuple<unsigned int, unsigned int, unsigned int> >()
+{
+    MPI_Datatype dt;
+    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
+    MPI_Type_contiguous(3, element_t, &dt);
+    return dt;
+}
+template<>
+MPI_Datatype get_mpi_dt<std::tuple<int, int, int> >()
+{
+    MPI_Datatype dt;
+    MPI_Datatype element_t = get_mpi_dt<int>();
+    MPI_Type_contiguous(3, element_t, &dt);
     return dt;
 }
 
@@ -1078,12 +1097,10 @@ void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
     // done, result is returned in vector of input messages
 }
 
-
 template <typename index_t>
 void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
-                   std::vector<std::tuple<index_t, index_t, index_t> >& ranges,
-                   MPI_Comm comm)
-{
+              std::vector<std::tuple<index_t, index_t, index_t>>& ranges,
+              MPI_Comm comm) {
     // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
     //     a.) allgather per processor minimum lcp
     //     b.) create messages to left-most and right-most processor (i, B2[i])
@@ -1198,6 +1215,21 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
 
     // get total min and save into ranges
     assert(ranges.size() == ranges_right.size());
+
+    // sort both by target index
+    std::sort(ranges.begin(), ranges.end(),
+              [](const std::tuple<index_t, index_t, index_t>& x,
+                 const std::tuple<index_t, index_t, index_t>& y) {
+        return std::get<0>(x) < std::get<0>(y);
+    });
+    std::sort(ranges_right.begin(), ranges_right.end(),
+              [](const std::tuple<index_t, index_t, index_t>& x,
+                 const std::tuple<index_t, index_t, index_t>& y) {
+        return std::get<0>(x) < std::get<0>(y);
+    });
+
+    // iterate through both results (left and right)
+    // and get overall minimum
     for (std::size_t i=0; i < ranges.size(); ++i)
     {
         assert(std::get<0>(ranges[i]) == std::get<0>(ranges_right[i]));
@@ -1227,27 +1259,63 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     }
 }
 
+template <typename index_t>
+void initial_kmer_lcp(std::size_t n, int k, const std::vector<index_t>& local_B,
+                      std::vector < index_t& local_LCP, MPI_Comm comm) {
+    
+}
 
 template <typename index_t>
-void resolve_next_lcp(std::size_t n, const std::vector<index_t>& local_SA, const std::vector<index_t>& local_B1, const std::vector<index_t>& local_B2, MPI_Comm comm, int dist)
-{
+void resolve_next_lcp(std::size_t n, int dist,
+                      const std::vector<index_t>& local_B1,
+                      const std::vector<index_t>& local_B2,
+                      std::vector<index_t>& local_LCP,
+                      MPI_Comm comm) {
     // 2.) find _new_ bucket boundaries (B1[i-1] == B1[i] && B2[i-1] != B2[i])
     // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
-    //     a.) allgather per processor minimum lcp
-    //     b.) create messages to left-most and right-most processor (i, B2[i])
-    //     c.) on rank==B2[i]: get either left-flank min (i < B2[i])
-    //         or right-flank min (i > B2[i])
-    //         -> in bulk by ordering messages into two groups and sorting by B2[i]
-    //            then linear scan for min starting from left-most/right-most element
-    //     d.) answer with message (i, min(...))
-    //     e.) on rank==i: receive min answer from left-most and right-most
-    //         processor for each range
-    //          -> sort by i
-    //     f.) for each range: get RMQ of intermediary processors
-    //                         min(min_p_left, RMQ(p_left+1,p_right-1), min_p_right)
-    //
-    //     (assuming the bucket ids are indexes)
     // 4.) LCP[i] = dist + min_lcp[i]
+
+    // get comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+
+    // get size parameters
+    std::size_t local_size = local_B1.size();
+    assert(local_size == local_B2.size());
+    assert(local_size == local_LCP.size());
+    std::size_t prefix_size = block_partition_excl_prefix_size(n, p, rank);
+
+    // find _new_ bucket boundaries and create associated parallel distributed
+    // RMQ queries.
+    std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
+    for (std::size_t i = 1; i < local_size; ++i) {
+        // if this is the first element of a new bucket
+        if (local_B1[i - 1] == local_B1[i] && local_B2[i - 1] != local_B2[i]) {
+            index_t left_b  = std::min(local_B2[i-1], local_B2[i]);
+            index_t right_b = std::max(local_B2[i-1], local_B2[i]);
+            // we need the minumum LCP of all suffixes in buckets between
+            // these two buckets. Since the first element in the left bucket
+            // is the LCP of this bucket with its left bucket and we don't need
+            // this LCP value, start one to the right:
+            // (-1 each since buffer numbers are current index + 1)
+            index_t range_left = (left_b-1) + 1;
+            index_t range_right = (right_b-1) + 1; // +1 since exclusive index
+            minqueries.emplace_back(i, range_left, range_right);
+        }
+    }
+
+    // get parallel-distributed RMQ for all queries, results are in
+    // `minqueries`
+    // TODO: bulk updatable RMQs [such that we don't have to construct the
+    //       RMQ for the local_LCP in each iteration]
+    bulk_rmq(n, local_LCP, minqueries, comm);
+
+    // update the new LCP values:
+    for (auto min_lcp : minqueries)
+    {
+        local_LCP[std::get<0>(min_lcp) - prefix_size] = dist + std::get<2>(min_lcp);
+    }
 }
 
 template <typename index_t>
