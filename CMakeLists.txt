@@ -67,6 +67,7 @@ add_executable(test_file test_file.cpp)
 target_link_libraries(test_file ${MPI_LIBRARIES})
 
 add_executable(test_rmq test_rmq.cpp)
+add_executable(test_bitops test_bitops.cpp)
 
 add_subdirectory(ext/libdivsufsort)
 include_directories(${libdivsufsort_BINARY_DIR}/include)

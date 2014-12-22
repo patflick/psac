@@ -77,6 +77,7 @@
 #include "mpi_utils.hpp"
 #include "mpi_samplesort.hpp"
 #include "rmq.hpp"
+#include "bitops.hpp"
 
 #define PSAC_TAG_EDGE_KMER 1
 #define PSAC_TAG_SHIFT 2
@@ -246,18 +247,6 @@ unsigned int alphabet_unique_chars(const std::vector<index_t>& global_hist)
     return unique_count;
 }
 
-unsigned int ceillog2(unsigned int x)
-{
-    unsigned int log_floor = 0;
-    unsigned int n = x;
-    for (;n != 0; n >>= 1)
-    {
-        ++log_floor;
-    }
-    --log_floor;
-    // add one if not power of 2
-    return log_floor + (((x&(x-1)) != 0) ? 1 : 0);
-}
 
 unsigned int alphabet_bits_per_char(unsigned int sigma)
 {
@@ -280,7 +269,7 @@ unsigned int alphabet_chars_per_word(unsigned int bits_per_char)
 }
 
 template <typename index_t>
-unsigned int initial_bucketing(const std::size_t n, const std::basic_string<char>& local_str, std::vector<index_t>& local_B, MPI_Comm comm)
+std::pair<unsigned int, unsigned int> initial_bucketing(const std::size_t n, const std::basic_string<char>& local_str, std::vector<index_t>& local_B, MPI_Comm comm)
 {
     // get local size
     std::size_t local_size = local_str.size();
@@ -398,7 +387,7 @@ unsigned int initial_bucketing(const std::size_t n, const std::basic_string<char
 
     // return the number of characters which are part of each bucket number
     // (i.e., k-mer)
-    return k;
+    return std::make_pair(k, l);
 }
 
 
@@ -1126,7 +1115,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     std::size_t prefix_size = block_partition_excl_prefix_size(n, p, rank);
 
     // create RMQ for local elements
-    rmq::RMQ<typename std::vector<index_t>::iterator> local_rmq(local_els.begin(), local_els.end());
+    rmq::RMQ<typename std::vector<index_t>::const_iterator> local_rmq(local_els.begin(), local_els.end());
 
     // get per processor minimum and it's position
     auto local_min_it = local_rmq.query(local_els.begin(), local_els.end());
@@ -1162,8 +1151,8 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     // first communication
     msgs_all2all(
         ranges,
-        [&](const std::vector<std::tuple<index_t, index_t, index_t>>& x) {
-            return block_partition_target_processor(n, p, std::get<1>(x));
+        [&](const std::tuple<index_t, index_t, index_t>& x) {
+            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<1>(x)));
         }, comm);
     // find mins from start to right border locally
     for (auto it = ranges.begin(); it != ranges.end(); ++it)
@@ -1182,15 +1171,15 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     // send results back to originator
     msgs_all2all(
         ranges,
-        [&](const std::vector<std::tuple<index_t, index_t, index_t>>& x) {
-            return block_partition_target_processor(n, p, std::get<0>(x));
+        [&](const std::tuple<index_t, index_t, index_t>& x) {
+            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<0>(x)));
         }, comm);
 
     // second communication
     msgs_all2all(
         ranges_right,
-        [&](const std::vector<std::tuple<index_t, index_t, index_t>>& x) {
-            return block_partition_target_processor(n, p, std::get<2>(x));
+        [&](const std::tuple<index_t, index_t, index_t>& x) {
+            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<2>(x)));
         }, comm);
     // find mins from start to right border locally
     for (auto it = ranges_right.begin(); it != ranges_right.end(); ++it)
@@ -1209,8 +1198,8 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     // send results back to originator
     msgs_all2all(
         ranges_right,
-        [&](const std::vector<std::tuple<index_t, index_t, index_t>>& x) {
-            return block_partition_target_processor(n, p, std::get<0>(x));
+        [&](const std::tuple<index_t, index_t, index_t>& x) {
+            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<0>(x)));
         }, comm);
 
     // get total min and save into ranges
@@ -1233,10 +1222,10 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     for (std::size_t i=0; i < ranges.size(); ++i)
     {
         assert(std::get<0>(ranges[i]) == std::get<0>(ranges_right[i]));
-        int p_left =
-            block_partition_target_processor(n, p, std::get<1>(ranges[i]));
+        int p_left = block_partition_target_processor(
+            n, p, static_cast<std::size_t>(std::get<1>(ranges[i])));
         int p_right = block_partition_target_processor(
-            n, p, std::get<1>(ranges_right[i]));
+            n, p, static_cast<std::size_t>(std::get<1>(ranges_right[i])));
         if (std::get<2>(ranges[i]) > std::get<2>(ranges_right[i]))
         {
             ranges[i] = ranges_right[i];
@@ -1259,10 +1248,109 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     }
 }
 
+
+
+/**
+ * @brief   Returns the number identical characters of two strings in k-mer
+ *          compressed bit representation with `bits_per_char` bits per
+ *          character in the word of type `T`.
+ *
+ * @tparam T                The type of the values (an integer type).
+ * @param x                 The first value to compare.
+ * @param y                 The second value to compare.
+ * @param k                 The total number of characters stored in
+ *                          one word of type `T`.
+ * @param bits_per_char     The number of bits per character in the k-mer
+ *                          representation of `x` and `y`.
+ * @return  The longest common prefix, i.e., the number of sequential characters
+ *          equal in the two values `x` and `y`.
+ */
+template <typename T>
+unsigned int lcp_bitwise(T x, T y, unsigned int k, unsigned int bits_per_char)
+{
+    if (x == y)
+        return k;
+    // XOR the two values and then find the MSB that isn't zero (since
+    // the k-mer strings start (have first character) at MSB)
+    T z = x ^ y;
+    // get leading zeros (TODO: in bitops implement faster version for 32bit)
+    unsigned int lz = leading_zeros(z);
+
+    // get leading zeros in the k-mer representation
+    unsigned int kmer_leading_zeros = lz - (sizeof(T)*8 - k*bits_per_char);
+    unsigned int lcp = kmer_leading_zeros / bits_per_char;
+    return lcp;
+}
+
 template <typename index_t>
-void initial_kmer_lcp(std::size_t n, int k, const std::vector<index_t>& local_B,
-                      std::vector < index_t& local_LCP, MPI_Comm comm) {
-    
+void initial_kmer_lcp(std::size_t n, unsigned int k, unsigned int bits_per_char,
+                      const std::vector<index_t>& local_B1,
+                      const std::vector<index_t>& local_B2,
+                      std::vector <index_t>& local_LCP,
+                      MPI_Comm comm) {
+    // for each bucket boundary (using both the B1 and the B2 buckets):
+    //    get the LCP by getting position of first different bit and dividing by
+    //    `bits_per_char`
+
+    // get comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
+
+    // get size parameters
+    std::size_t local_size = local_B1.size();
+    assert(local_size == local_B2.size());
+
+    // intialize local_LCP to value `n`
+    if (local_LCP.size() != local_size)
+    {
+        // resize to size `local_size` and set all items to max of n
+        local_LCP.assign(local_size, n);
+    }
+
+    // find bucket boundaries (including across processors)
+
+    // 1) getting next element to left
+    index_t left_B[2];
+    MPI_Request recv_req;
+    if (rank > 0)
+    {
+        // receive from right
+        MPI_Irecv(&left_B, 2, mpi_dt, rank-11, PSAC_TAG_EDGE_B,
+                comm, &recv_req);
+    }
+    if (rank < p-1)
+    {
+        // send to right
+        index_t right_B[2];
+        right_B[0] = local_B1.back();
+        right_B[1] = local_B2.back();
+        MPI_Send(right_B, 2, mpi_dt, rank+1, PSAC_TAG_EDGE_B, comm);
+    }
+    if (rank > 0)
+        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+
+    if (rank == 0) {
+        local_LCP[0] = 0;
+    } else {
+        unsigned int lcp = lcp_bitwise(left_B[0], local_B1[0], k, bits_per_char);
+        if (lcp == k)
+            lcp += lcp_bitwise(left_B[1], local_B2[0], k, bits_per_char);
+        local_LCP[0] = lcp;
+    }
+
+    // find all bucket boundaries
+    for (std::size_t i = 1; i < local_size; ++i)
+    {
+        if (local_B1[i-1] != local_B1[i]
+            || (local_B1[i-1] == local_B1[i] && local_B2[i-1] != local_B2[i])) {
+            unsigned int lcp = lcp_bitwise(local_B1[i-1], local_B1[i], k, bits_per_char);
+            if (lcp == k)
+                lcp += lcp_bitwise(local_B2[i-1], local_B2[i], k, bits_per_char);
+            local_LCP[i] = lcp;
+        }
+    }
 }
 
 template <typename index_t>
@@ -1357,7 +1445,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
     /*
      * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
      */
-    // exchange border elements (left and right)
+    // get next element to right
     index_t right_B;
     MPI_Request recv_req;
     if (rank < p-1)
@@ -1727,10 +1815,11 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
     }
 }
 
-
-template <typename index_t>
-void sa_construction_impl(std::size_t n, const std::string& local_str, std::vector<index_t>& local_SA, std::vector<index_t>& local_B, MPI_Comm comm)
-{
+template <typename index_t, bool _CONSTRUCT_LCP=false>
+void sa_construction_impl(std::size_t n, const std::string& local_str,
+                          std::vector<index_t>& local_SA,
+                          std::vector<index_t>& local_B,
+                          std::vector<index_t>& local_LCP, MPI_Comm comm) {
     // get comm parameters
     int p, rank;
     MPI_Comm_size(comm, &p);
@@ -1747,7 +1836,9 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
     // `k` depends on the alphabet size and the word size of each suffix array
     // element. `k` is choosen to maximize the number of alphabet characters
     // that fit into one machine word
-    unsigned int k = initial_bucketing(n, local_str, local_B, comm);
+    unsigned int k;
+    unsigned int bits_per_char;
+    std::tie(k, bits_per_char) = initial_bucketing(n, local_str, local_B, comm);
     DEBUG_STAGE_VEC("after initial bucketing", local_B);
 #if 0
     std::cerr << "========  After initial bucketing  ========" << std::endl;
@@ -1804,6 +1895,21 @@ void sa_construction_impl(std::size_t n, const std::string& local_str, std::vect
         std::cerr << "SA: "; print_vec(local_SA);
 #endif
         SAC_TIMER_END_LOOP_SECTION(shift_by, "ISA-to-SA");
+
+        /****************
+         *  Update LCP  *
+         ****************/
+        // if this is the first iteration: create LCP, otherwise update
+        if (_CONSTRUCT_LCP)
+        {
+            if (shift_by == k) {
+                initial_kmer_lcp(n, k, bits_per_char, local_B, local_B2, local_LCP, comm);
+                SAC_TIMER_END_LOOP_SECTION(shift_by, "init-lcp");
+            } else {
+                resolve_next_lcp(n, shift_by, local_B, local_B2, local_LCP, comm);
+                SAC_TIMER_END_LOOP_SECTION(shift_by, "update-lcp");
+            }
+        }
 
         /*******************************
          *  Assign new bucket numbers  *
@@ -1891,6 +1997,9 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
     // assert the input is distributed as a block decomposition
     assert(local_size == block_partition_local_size(n, p, rank));
 
+    // TODO pass out LCP if needed
+    std::vector<std::size_t> local_LCP;
+
     // check if the input size fits in 32 bits (< 4 GiB input)
     if (sizeof(std::size_t) != sizeof(std::uint32_t))
     {
@@ -1898,26 +2007,28 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
         {
             // use 64 bits for the suffix array and the ISA
             // -> Suffix array construction needs 49x Bytes
-            sa_construction_impl<std::size_t>(n, local_str, local_SA, local_ISA, comm);
+            sa_construction_impl<std::size_t>(n, local_str, local_SA, local_ISA, local_LCP, comm);
         }
         else
         {
             // 32 bits is enough -> Suffix array construction needs 25x Bytes
             std::vector<std::uint32_t> local_SA32;
             std::vector<std::uint32_t> local_ISA32;
+            std::vector<std::uint32_t> local_LCP32;
             // call the suffix array construction implementation
-            sa_construction_impl<std::uint32_t>(n, local_str, local_SA32, local_ISA32, comm);
+            sa_construction_impl<std::uint32_t>(n, local_str, local_SA32, local_ISA32, local_LCP32, comm);
             // transform back into std::size_t
             local_SA.resize(local_size);
             std::copy(local_SA32.begin(), local_SA32.end(), local_SA.begin());
             local_ISA.resize(local_size);
             std::copy(local_ISA32.begin(), local_ISA32.end(), local_ISA.begin());
+            // TODO pass out local LCP (if needed)
         }
     }
     else
     {
         assert(n < std::numeric_limits<std::uint32_t>::max());
-        sa_construction_impl<std::size_t>(n, local_str, local_SA, local_ISA, comm);
+        sa_construction_impl<std::size_t>(n, local_str, local_SA, local_ISA, local_LCP, comm);
     }
 }
 
@@ -1941,9 +2052,10 @@ void sa_construction_gl(std::string& global_str, std::vector<index_t>& SA, std::
     // allocate local output
     std::vector<index_t> local_SA;
     std::vector<index_t> local_ISA;
+    std::vector<index_t> local_LCP; // TODO: will not be filled, change after change of interface
 
     // call sa implementation
-    sa_construction_impl<index_t>(n, local_str, local_SA, local_ISA, comm);
+    sa_construction_impl<index_t>(n, local_str, local_SA, local_ISA, local_LCP, comm);
 
     // gather output to processor 0
     SA = gather_vectors(local_SA, comm);
