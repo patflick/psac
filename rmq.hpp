@@ -190,7 +190,7 @@ public:
         // now the same thing for blocks (but index relative to their
         // superblock)
         level = 1;
-        for (index_t dist = 2; dist/2 < n_blocks_per_superblock; dist <<= 1)
+        for (index_t dist = 2; dist/2 < std::min(n_blocks,n_blocks_per_superblock); dist <<= 1)
         {
             if (n_blocks - n_superblocks*dist/2 == 0)
                 break;
@@ -224,7 +224,7 @@ public:
         // find superblocks fully contained within range
         index_t begin_idx = std::distance(_begin, range_begin);
         index_t end_idx = std::distance(_begin, range_end);
-        assert(end_idx < n);
+        assert(end_idx <= n);
 
         // round up to next superblock
         index_t left_sb  = (begin_idx - 1) / superblock_size + 1;

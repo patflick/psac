@@ -290,6 +290,9 @@ std::pair<unsigned int, unsigned int> initial_bucketing(const std::size_t n, con
     unsigned int l = alphabet_bits_per_char(sigma);
     // number of characters per word => the `k` in `k-mer`
     unsigned int k = alphabet_chars_per_word<index_t>(l);
+
+    // TODO: during current debugging:
+    k = 1;
     // if the input is too small for `k`, choose a smaller `k`
     if (k > min_local_size)
     {
@@ -1130,6 +1133,8 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     // create range-minimum-query datastructure for the processor minimums
     rmq::RMQ<typename std::vector<index_t>::iterator> proc_mins_rmq(proc_mins.begin(), proc_mins.end());
 
+    std::cerr << "Proc mins: "; print_vec(proc_mins);
+
     // 1.) duplicate vector of triplets
     // 2.) (asserting that t[1] < t[2]) send to target processor for t[1]
     // 3.) on t[1]: return min and min index of right flank
@@ -1179,7 +1184,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     msgs_all2all(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<2>(x)));
+            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<2>(x)-1));
         }, comm);
     // find mins from start to right border locally
     for (auto it = ranges_right.begin(); it != ranges_right.end(); ++it)
@@ -1222,27 +1227,33 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     for (std::size_t i=0; i < ranges.size(); ++i)
     {
         assert(std::get<0>(ranges[i]) == std::get<0>(ranges_right[i]));
-        int p_left = block_partition_target_processor(
-            n, p, static_cast<std::size_t>(std::get<1>(ranges[i])));
-        int p_right = block_partition_target_processor(
-            n, p, static_cast<std::size_t>(std::get<1>(ranges_right[i])));
         if (std::get<2>(ranges[i]) > std::get<2>(ranges_right[i]))
         {
             ranges[i] = ranges_right[i];
         }
-        // get minimum of both elements
-        if (p_left + 1 < p_right)
+
+        // if the answer is different
+        if (ranges[i] != ranges_right[i])
         {
-            // get min from per process min RMQ
-            auto p_min_it =
-                proc_mins_rmq.query(proc_mins.begin() + p_left + 1,
-                                    proc_mins.begin() + (p_right - 1));
-            index_t p_min = *p_min_it;
-            // if smaller, save as overall minimum
-            if (p_min < std::get<2>(ranges[i]))
+
+            int p_left = block_partition_target_processor(
+                n, p, static_cast<std::size_t>(std::get<1>(ranges[i])));
+            int p_right = block_partition_target_processor(
+                n, p, static_cast<std::size_t>(std::get<1>(ranges_right[i])-1));
+            // get minimum of both elements
+            if (p_left + 1 < p_right)
             {
-                std::get<1>(ranges[i]) = proc_min_pos[p_min_it - proc_mins.begin()];
-                std::get<2>(ranges[i]) = p_min;
+                // get min from per process min RMQ
+                auto p_min_it =
+                    proc_mins_rmq.query(proc_mins.begin() + p_left + 1,
+                                        proc_mins.begin() + p_right);
+                index_t p_min = *p_min_it;
+                // if smaller, save as overall minimum
+                if (p_min < std::get<2>(ranges[i]))
+                {
+                    std::get<1>(ranges[i]) = proc_min_pos[p_min_it - proc_mins.begin()];
+                    std::get<2>(ranges[i]) = p_min;
+                }
             }
         }
     }
@@ -1317,7 +1328,7 @@ void initial_kmer_lcp(std::size_t n, unsigned int k, unsigned int bits_per_char,
     if (rank > 0)
     {
         // receive from right
-        MPI_Irecv(&left_B, 2, mpi_dt, rank-11, PSAC_TAG_EDGE_B,
+        MPI_Irecv(&left_B, 2, mpi_dt, rank-1, PSAC_TAG_EDGE_B,
                 comm, &recv_req);
     }
     if (rank < p-1)
@@ -1331,16 +1342,20 @@ void initial_kmer_lcp(std::size_t n, unsigned int k, unsigned int bits_per_char,
     if (rank > 0)
         MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
 
+    // initialize first LCP
     if (rank == 0) {
         local_LCP[0] = 0;
     } else {
-        unsigned int lcp = lcp_bitwise(left_B[0], local_B1[0], k, bits_per_char);
-        if (lcp == k)
-            lcp += lcp_bitwise(left_B[1], local_B2[0], k, bits_per_char);
-        local_LCP[0] = lcp;
+        if (left_B[0] != local_B1[0]
+            || (left_B[0] == local_B1[0] && left_B[1] != local_B2[0])) {
+            unsigned int lcp = lcp_bitwise(left_B[0], local_B1[0], k, bits_per_char);
+            if (lcp == k)
+                lcp += lcp_bitwise(left_B[1], local_B2[0], k, bits_per_char);
+            local_LCP[0] = lcp;
+        }
     }
 
-    // find all bucket boundaries
+    // intialize the LCP for all other elements for bucket boundaries
     for (std::size_t i = 1; i < local_size; ++i)
     {
         if (local_B1[i-1] != local_B1[i]
@@ -1367,6 +1382,7 @@ void resolve_next_lcp(std::size_t n, int dist,
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
 
     // get size parameters
     std::size_t local_size = local_B1.size();
@@ -1374,9 +1390,46 @@ void resolve_next_lcp(std::size_t n, int dist,
     assert(local_size == local_LCP.size());
     std::size_t prefix_size = block_partition_excl_prefix_size(n, p, rank);
 
+
+
+    // get right-most element of left processor and check if it is a new
+    // bucket boundary
+    index_t left_B[2];
+    MPI_Request recv_req;
+    if (rank > 0) {
+        // receive from right
+        MPI_Irecv(&left_B, 2, mpi_dt, rank-1, PSAC_TAG_EDGE_B,
+                comm, &recv_req);
+    }
+    if (rank < p-1) {
+        // send to right
+        index_t right_B[2];
+        right_B[0] = local_B1.back();
+        right_B[1] = local_B2.back();
+        MPI_Send(right_B, 2, mpi_dt, rank+1, PSAC_TAG_EDGE_B, comm);
+    }
+    if (rank > 0)
+        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+
     // find _new_ bucket boundaries and create associated parallel distributed
     // RMQ queries.
     std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
+
+    // check if the first element is a new bucket boundary
+    if (left_B[0] == local_B1[0] && left_B[1] != local_B2[0]) {
+        index_t left_b  = std::min(left_B[1], local_B2[0]);
+        index_t right_b = std::max(left_B[1], local_B2[0]);
+        // we need the minumum LCP of all suffixes in buckets between
+        // these two buckets. Since the first element in the left bucket
+        // is the LCP of this bucket with its left bucket and we don't need
+        // this LCP value, start one to the right:
+        // (-1 each since buffer numbers are current index + 1)
+        index_t range_left = (left_b-1) + 1;
+        index_t range_right = (right_b-1) + 1; // +1 since exclusive index
+        minqueries.emplace_back(0 + prefix_size, range_left, range_right);
+    }
+
+    // check for new bucket boundaries in all other elements
     for (std::size_t i = 1; i < local_size; ++i) {
         // if this is the first element of a new bucket
         if (local_B1[i - 1] == local_B1[i] && local_B2[i - 1] != local_B2[i]) {
@@ -1389,15 +1442,37 @@ void resolve_next_lcp(std::size_t n, int dist,
             // (-1 each since buffer numbers are current index + 1)
             index_t range_left = (left_b-1) + 1;
             index_t range_right = (right_b-1) + 1; // +1 since exclusive index
-            minqueries.emplace_back(i, range_left, range_right);
+            minqueries.emplace_back(i + prefix_size, range_left, range_right);
         }
     }
+
+#ifndef NDEBUG
+    std::size_t _nqueries = minqueries.size();
+#endif
+
+#if 1
+    std::cerr << "rmq queries:" << std::endl;
+    for (auto q : minqueries)
+    {
+        std::cerr << "(" << std::get<0>(q) << "," << std::get<1>(q) << "," << std::get<2>(q) << ")" << std::endl;
+    }
+#endif
 
     // get parallel-distributed RMQ for all queries, results are in
     // `minqueries`
     // TODO: bulk updatable RMQs [such that we don't have to construct the
     //       RMQ for the local_LCP in each iteration]
     bulk_rmq(n, local_LCP, minqueries, comm);
+
+    assert(minqueries.size() == _nqueries);
+
+#if 1
+    std::cerr << "rmq answers:" << std::endl;
+    for (auto q : minqueries)
+    {
+        std::cerr << "(" << std::get<0>(q) << "," << std::get<1>(q) << "," << std::get<2>(q) << ")" << std::endl;
+    }
+#endif
 
     // update the new LCP values:
     for (auto min_lcp : minqueries)
@@ -1909,6 +1984,9 @@ void sa_construction_impl(std::size_t n, const std::string& local_str,
                 resolve_next_lcp(n, shift_by, local_B, local_B2, local_LCP, comm);
                 SAC_TIMER_END_LOOP_SECTION(shift_by, "update-lcp");
             }
+#if 1
+            std::cerr << "LC: "; print_vec(local_LCP);
+#endif
         }
 
         /*******************************
@@ -1933,8 +2011,8 @@ void sa_construction_impl(std::size_t n, const std::string& local_str,
          *************/
         // by bucketing to correct target processor using the `SA` array
         // // TODO by number of unresolved elements rather than buckets!!
-        //if(false)
-        if (unfinished_buckets < n/10)
+        if(false)
+        //if (unfinished_buckets < n/10)
         {
             // prepare for bucket chaising (needs SA, and bucket arrays in both
             // SA and ISA order)
@@ -1978,12 +2056,20 @@ void sa_construction_impl(std::size_t n, const std::string& local_str,
         sa_bucket_chaising_constr(n, local_SA, local_B_SA, local_B, comm, shift_by);
     }
 
-    // now local_SA is actual block decomposed SA and local_B is actual ISA
+    // now local_SA is actual block decomposed SA and local_B is actual ISA with an offset of one
+    for (std::size_t i = 0; i < local_B.size(); ++i)
+    {
+        // the buffer indeces are `1` based indeces, but the ISA should be
+        // `0` based indeces
+        local_B[i] -= 1;
+    }
 }
 
-
-void sa_construction(const std::string& local_str, std::vector<std::size_t>& local_SA, std::vector<std::size_t>& local_ISA, MPI_Comm comm = MPI_COMM_WORLD)
-{
+void sa_construction(const std::string& local_str,
+                     std::vector<std::size_t>& local_SA,
+                     std::vector<std::size_t>& local_ISA,
+                     std::vector<std::size_t>& local_LCP,
+                     MPI_Comm comm = MPI_COMM_WORLD) {
     // get comm parameters
     int p, rank;
     MPI_Comm_size(comm, &p);
@@ -1997,9 +2083,6 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
     // assert the input is distributed as a block decomposition
     assert(local_size == block_partition_local_size(n, p, rank));
 
-    // TODO pass out LCP if needed
-    std::vector<std::size_t> local_LCP;
-
     // check if the input size fits in 32 bits (< 4 GiB input)
     if (sizeof(std::size_t) != sizeof(std::uint32_t))
     {
@@ -2007,7 +2090,7 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
         {
             // use 64 bits for the suffix array and the ISA
             // -> Suffix array construction needs 49x Bytes
-            sa_construction_impl<std::size_t>(n, local_str, local_SA, local_ISA, local_LCP, comm);
+            sa_construction_impl<std::size_t, true>(n, local_str, local_SA, local_ISA, local_LCP, comm);
         }
         else
         {
@@ -2016,19 +2099,20 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
             std::vector<std::uint32_t> local_ISA32;
             std::vector<std::uint32_t> local_LCP32;
             // call the suffix array construction implementation
-            sa_construction_impl<std::uint32_t>(n, local_str, local_SA32, local_ISA32, local_LCP32, comm);
+            sa_construction_impl<std::uint32_t, true>(n, local_str, local_SA32, local_ISA32, local_LCP32, comm);
             // transform back into std::size_t
             local_SA.resize(local_size);
             std::copy(local_SA32.begin(), local_SA32.end(), local_SA.begin());
             local_ISA.resize(local_size);
             std::copy(local_ISA32.begin(), local_ISA32.end(), local_ISA.begin());
-            // TODO pass out local LCP (if needed)
+            local_LCP.resize(local_size);
+            std::copy(local_LCP32.begin(), local_LCP32.end(), local_LCP.begin());
         }
     }
     else
     {
         assert(n < std::numeric_limits<std::uint32_t>::max());
-        sa_construction_impl<std::size_t>(n, local_str, local_SA, local_ISA, local_LCP, comm);
+        sa_construction_impl<std::size_t, true>(n, local_str, local_SA, local_ISA, local_LCP, comm);
     }
 }
 
@@ -2036,11 +2120,6 @@ void sa_construction(const std::string& local_str, std::vector<std::size_t>& loc
 template<typename index_t>
 void sa_construction_gl(std::string& global_str, std::vector<index_t>& SA, std::vector<index_t>& ISA, MPI_Comm comm = MPI_COMM_WORLD)
 {
-    // get comm parameters
-    int p, rank;
-    MPI_Comm_size(comm, &p);
-    MPI_Comm_rank(comm, &rank);
-
     // distribute input
     std::string local_str = scatter_string_block_decomp(global_str, comm);
 

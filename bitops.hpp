@@ -70,12 +70,33 @@ inline unsigned int log2_64(uint64_t value)
     return tab64[((uint64_t)((value - (value >> 1))*0x07EDD5E59A4E28C2ull)) >> 58];
 }
 
-inline unsigned int leading_zeros(uint64_t x)
+inline unsigned int leading_zeros_64(uint64_t x)
 {
     if (x == 0)
         return 64;
     unsigned int log2 = log2_64(x);
     return 64 - log2 - 1;
+}
+
+inline unsigned int leading_zeros_32(uint32_t x)
+{
+    // TODO implement faster version for 32 bits
+    return leading_zeros_64(static_cast<uint64_t>(x)) - 32;
+}
+
+template<typename T>
+inline unsigned int leading_zeros(T x)
+{
+    if (sizeof(T)*8 == 64)
+        return leading_zeros_64(x);
+    else if (sizeof(T)*8 == 32)
+        return leading_zeros_32(x);
+    else
+    {
+        // TODO: implement other sizes
+        assert(false);
+        return -1;
+    }
 }
 
 unsigned int reference_trailing_zeros(uint64_t x)
