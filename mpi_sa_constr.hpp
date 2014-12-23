@@ -1133,8 +1133,6 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     // create range-minimum-query datastructure for the processor minimums
     rmq::RMQ<typename std::vector<index_t>::iterator> proc_mins_rmq(proc_mins.begin(), proc_mins.end());
 
-    std::cerr << "Proc mins: "; print_vec(proc_mins);
-
     // 1.) duplicate vector of triplets
     // 2.) (asserting that t[1] < t[2]) send to target processor for t[1]
     // 3.) on t[1]: return min and min index of right flank
@@ -1227,19 +1225,19 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     for (std::size_t i=0; i < ranges.size(); ++i)
     {
         assert(std::get<0>(ranges[i]) == std::get<0>(ranges_right[i]));
+        std::size_t left_min_idx = std::get<1>(ranges[i]);
+        std::size_t right_min_idx = std::get<1>(ranges_right[i]);
+        // get min of both ranges
         if (std::get<2>(ranges[i]) > std::get<2>(ranges_right[i]))
         {
             ranges[i] = ranges_right[i];
         }
 
         // if the answer is different
-        if (ranges[i] != ranges_right[i])
+        if (left_min_idx != right_min_idx)
         {
-
-            int p_left = block_partition_target_processor(
-                n, p, static_cast<std::size_t>(std::get<1>(ranges[i])));
-            int p_right = block_partition_target_processor(
-                n, p, static_cast<std::size_t>(std::get<1>(ranges_right[i])-1));
+            int p_left = block_partition_target_processor(n, p, left_min_idx);
+            int p_right = block_partition_target_processor(n, p, right_min_idx);
             // get minimum of both elements
             if (p_left + 1 < p_right)
             {
@@ -1450,7 +1448,7 @@ void resolve_next_lcp(std::size_t n, int dist,
     std::size_t _nqueries = minqueries.size();
 #endif
 
-#if 1
+#if 0
     std::cerr << "rmq queries:" << std::endl;
     for (auto q : minqueries)
     {
@@ -1466,7 +1464,7 @@ void resolve_next_lcp(std::size_t n, int dist,
 
     assert(minqueries.size() == _nqueries);
 
-#if 1
+#if 0
     std::cerr << "rmq answers:" << std::endl;
     for (auto q : minqueries)
     {
@@ -1984,7 +1982,7 @@ void sa_construction_impl(std::size_t n, const std::string& local_str,
                 resolve_next_lcp(n, shift_by, local_B, local_B2, local_LCP, comm);
                 SAC_TIMER_END_LOOP_SECTION(shift_by, "update-lcp");
             }
-#if 1
+#if 0
             std::cerr << "LC: "; print_vec(local_LCP);
 #endif
         }
