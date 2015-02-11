@@ -190,11 +190,15 @@ public:
         // now the same thing for blocks (but index relative to their
         // superblock)
         level = 1;
+        index_t last_sb_nblocks = n_blocks - (n_superblocks-1)*n_blocks_per_superblock;
         for (index_t dist = 2; dist/2 < std::min(n_blocks,n_blocks_per_superblock); dist <<= 1)
         {
             if (n_blocks - n_superblocks*dist/2 == 0)
                 break;
-            block_mins.push_back(std::vector<uint16_t>(n_blocks - n_superblocks*dist/2));
+            index_t last_sb_cur_nblocks = 0;
+            if (last_sb_nblocks > dist/2)
+                last_sb_cur_nblocks = last_sb_nblocks - dist/2;
+            block_mins.push_back(std::vector<uint16_t>((n_superblocks-1)*(n_blocks_per_superblock - dist/2) + last_sb_cur_nblocks));
             for (index_t sb = 0; sb < n_superblocks; ++sb)
             {
                 index_t pre_sb_offset = sb*(n_blocks_per_superblock - dist/4);
@@ -202,6 +206,7 @@ public:
                 index_t blocks_in_sb = std::min(n_blocks - sb*n_blocks_per_superblock, n_blocks_per_superblock);
                 for (index_t i = 0; i+dist/2 < blocks_in_sb; ++i)
                 {
+                    // TODO: right_idx might become negative for last superblock??
                     index_t right_idx = std::min(i + dist/2, blocks_in_sb-dist/4-1);
                     if (*(begin + block_mins[level-1][i        +pre_sb_offset] + sb*superblock_size)
                       < *(begin + block_mins[level-1][right_idx+pre_sb_offset] + sb*superblock_size))
@@ -264,9 +269,9 @@ public:
             index_t n_b = n_blocks_per_superblock - left_b;
             if (n_b > 0)
             {
-                unsigned int dist = floorlog2(static_cast<unsigned int>(n_b));
-                index_t sb_offset = (left_sb-1)*n_blocks_per_superblock - (left_sb-1)*((1<<dist)/2);
-                Iterator block_min_it = _begin + block_mins[dist][left_b + sb_offset] + (left_sb-1)*superblock_size;
+                unsigned int level = ceillog2(static_cast<unsigned int>(n_b));
+                index_t sb_offset = (left_sb-1)*(n_blocks_per_superblock - (1<<level)/2);
+                Iterator block_min_it = _begin + block_mins[level][left_b + sb_offset] + (left_sb-1)*superblock_size;
                 if (*block_min_it < *min_pos)
                     min_pos = block_min_it;
             }

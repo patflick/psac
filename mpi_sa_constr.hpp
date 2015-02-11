@@ -1081,7 +1081,7 @@ void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
 
     // resize messages to fit recv
     std::size_t recv_size = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
-    msgs.resize(recv_size);
+    msgs = std::vector<T>(recv_size);
 
     // all2all
     MPI_Alltoallv(&send_buffer[0], &send_counts[0], &send_displs[0], mpi_dt,
@@ -1414,7 +1414,7 @@ void resolve_next_lcp(std::size_t n, int dist,
     std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
 
     // check if the first element is a new bucket boundary
-    if (left_B[0] == local_B1[0] && left_B[1] != local_B2[0]) {
+    if (rank > 0 && left_B[0] == local_B1[0] && left_B[1] != local_B2[0]) {
         index_t left_b  = std::min(left_B[1], local_B2[0]);
         index_t right_b = std::max(left_B[1], local_B2[0]);
         // we need the minumum LCP of all suffixes in buckets between

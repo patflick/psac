@@ -56,7 +56,7 @@ void lcp_from_sa(const std::string& S, const std::vector<index_t>& SA, const std
             k = h-1;
         // comparing suffix starting from i=SA[ISA[i]] with the previous
         // suffix in SA order: SA[ISA[i]-1]
-        while (i+k < S.size() && SA[ISA[i]-1]+k < S.size() && S[i+k] == S[SA[ISA[i]-1]+k])
+        while (i+k < S.size() && ISA[i] > 0 && SA[ISA[i]-1]+k < S.size() && S[i+k] == S[SA[ISA[i]-1]+k])
             k++;
         LCP[ISA[i]] = k;
         h = k;

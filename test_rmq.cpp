@@ -88,22 +88,22 @@ void timing_comp(std::size_t size)
         //start_time = now;
 
         // use linear std::min_element
-        //auto min2 = std::min_element(els.begin()+range_start, els.begin() + range_end);
+        auto min2 = std::min_element(els.begin()+range_start, els.begin() + range_end);
 
         // stop time
         //now = std::chrono::high_resolution_clock::now();
         //duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
         //minel_queries += duration_ms;
 
-        //if (*min != *min2)
-        //{
-        //    std::cerr << "ERROR: different mins for range(" << range_start << "," << range_end << ")" << std::endl;
-        //    std::cerr << "rmq at " << min - els.begin() << " = " << *min << std::endl;
-        //    std::cerr << "mne at " << min2 - els.begin() << " = " << *min2 << std::endl;
-        //    exit(EXIT_FAILURE);
-        //}
-        //else
-        //    std::cerr << "." << std::endl;
+        if (*min != *min2)
+        {
+            std::cerr << "ERROR: different mins for range(" << range_start << "," << range_end << ")" << std::endl;
+            std::cerr << "rmq at " << min - els.begin() << " = " << *min << std::endl;
+            std::cerr << "mne at " << min2 - els.begin() << " = " << *min2 << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        else
+            std::cerr << "." << std::endl;
     }
 
     now = std::chrono::high_resolution_clock::now();
@@ -114,7 +114,7 @@ void timing_comp(std::size_t size)
 
 int main(int argc, char *argv[])
 {
-    timing_comp(1000000037);
+    //timing_comp(1000000037);
     /*
     for (int size = 1; size < 1000; ++size)
     {
@@ -123,6 +123,9 @@ int main(int argc, char *argv[])
         rmq.test_all();
     }
     */
+    //rmq_tester rmq(10000);
+    //rmq.test_all();
+    timing_comp(100000);
 
 
 
