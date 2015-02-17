@@ -35,7 +35,7 @@
 
 // own includes
 #include "parallel_utils.hpp"
-
+#include "partition.hpp"
 
 
 template <typename T>

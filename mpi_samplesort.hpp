@@ -26,7 +26,7 @@
 #include <parallel/merge.h>
 
 #include "mpi_utils.hpp"
-
+#include "partition.hpp"
 
 #include "timer.hpp"
 
@@ -69,6 +69,8 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     std::size_t local_size = std::distance(begin, end);
 
     // get prefix sum of size and total size
+    // TODO: implement some of these functions into an arbitrary decomposition
+    // class
     std::size_t prefix;
     std::size_t total_size;
     MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
@@ -79,11 +81,12 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
 
     // calculate where to send elements
     std::vector<int> send_counts(p, 0);
-    int first_p = block_partition_target_processor(total_size, p, prefix);
+    partition::block_decomposition<std::size_t> part(total_size, p, rank);
+    int first_p = part.target_processor(prefix);
     std::size_t left_to_send = local_size;
     for (; left_to_send > 0 && first_p < p; ++first_p)
     {
-        std::size_t nsend = std::min<std::size_t>(block_partition_prefix_size(total_size, p, first_p) - prefix, left_to_send);
+        std::size_t nsend = std::min<std::size_t>(part.prefix_size(first_p) - prefix, left_to_send);
         assert(nsend < std::numeric_limits<int>::max());
         send_counts[first_p] = nsend;
         left_to_send -= nsend;

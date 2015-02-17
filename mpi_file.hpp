@@ -19,7 +19,7 @@
 #include <sstream>
 #include <iostream>
 
-#include "parallel_utils.hpp"
+#include "partition.hpp"
 
 std::ifstream::pos_type get_filesize(const char* filename)
 {
@@ -67,14 +67,15 @@ std::string file_block_decompose(const char* filename, MPI_Comm comm = MPI_COMM_
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    partition::block_decomposition<std::size_t> part(file_size, p, rank);
 
     // restrict max local size (assuming that it is the same parameter on each
     // processor)
     if (max_local_size > 0 && file_size / p > max_local_size)
         file_size = p*max_local_size;
     // block decompose
-    std::size_t local_size = block_partition_local_size(file_size, p, rank);
-    std::size_t offset = block_partition_excl_prefix_size(file_size, p, rank);
+    std::size_t local_size = part.local_size();
+    std::size_t offset = part.excl_prefix_size();
 
     // open file
     std::ifstream t(filename);

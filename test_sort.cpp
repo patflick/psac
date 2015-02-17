@@ -4,6 +4,7 @@
 #include <iostream>
 #include "mpi_samplesort.hpp"
 #include "timer.hpp"
+#include "partition.hpp"
 
 typedef int element_t;
 
@@ -29,9 +30,10 @@ void time_samplesort(std::size_t input_size, MPI_Comm comm)
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
     timer t;
+    partition::block_decomposition<std::size_t> part(input_size, p, rank);
 
     // generate local input
-    std::size_t local_size = block_partition_local_size(input_size, p, rank);
+    std::size_t local_size = part.local_size();
     std::vector<element_t> local_els(local_size);
     RandInput rand_input(rank, 1000000);
     std::generate(local_els.begin(), local_els.end(), rand_input);

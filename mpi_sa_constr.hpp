@@ -278,8 +278,9 @@ std::pair<unsigned int, unsigned int> initial_bucketing(const std::size_t n, con
     int rank, p;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &p);
+    partition::block_decomposition<index_t> part(n, p, rank);
 
-    std::size_t min_local_size = block_partition_local_size(n, p, p-1);
+    std::size_t min_local_size = part.local_size(p-1);
 
     // get global alphabet histogram
     std::vector<index_t> alphabet_hist = alphabet_histogram<index_t>(local_str, comm);
@@ -415,6 +416,7 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    partition::block_decomposition<index_t> part(n, p, rank);
 
     /*
      * send right-most element to one processor to the right
@@ -442,7 +444,7 @@ std::size_t rebucket(std::size_t n, std::vector<index_t>& local_B1, std::vector<
     }
 
     // get my global starting index
-    std::size_t prefix = block_partition_excl_prefix_size(n, p, rank);
+    std::size_t prefix = part.excl_prefix_size();
 
     /*
      * assign local zero or one, depending on whether the bucket is the same
@@ -556,6 +558,8 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
+    partition::block_decomposition_buffered<index_t> part(n, p, rank);
+
 
     SAC_TIMER_START();
     // 1.) local bucketing for each processor
@@ -564,7 +568,7 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     std::vector<int> send_counts(p, 0);
     for (index_t sa : local_SA)
     {
-        int target_p = block_partition_target_processor(n, p, static_cast<std::size_t>(sa));
+        int target_p = part.target_processor(sa);
         assert(0 <= target_p && target_p < p);
         ++send_counts[target_p];
     }
@@ -575,7 +579,7 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     // The target processor is given by the value in the SA.
     for (std::size_t i = 0; i < local_SA.size(); ++i)
     {
-        int target_p = block_partition_target_processor(n, p, static_cast<std::size_t>(local_SA[i]));
+        int target_p = part.target_processor(local_SA[i]);
         assert(target_p < p && target_p >= 0);
         std::size_t out_idx = send_displs[target_p]++;
         assert(out_idx < local_SA.size());
@@ -603,14 +607,14 @@ void reorder_sa_to_isa(std::size_t n, std::vector<index_t>& local_SA, std::vecto
     // TODO [ENH]: more cache efficient by sorting rather than random assignment
     for (std::size_t i = 0; i < local_SA.size(); ++i)
     {
-        index_t out_idx = local_SA[i] - block_partition_excl_prefix_size(n, p, rank);
+        index_t out_idx = local_SA[i] - part.excl_prefix_size();
         assert(0 <= out_idx && out_idx < local_SA.size());
         send_B[out_idx] = local_B[i];
     }
     std::copy(send_B.begin(), send_B.end(), local_B.begin());
 
     // reassign the SA
-    std::size_t global_offset = block_partition_excl_prefix_size(n, p, rank);
+    std::size_t global_offset = part.excl_prefix_size();
     for (std::size_t i = 0; i < local_SA.size(); ++i)
     {
         local_SA[i] = global_offset + i;
@@ -628,10 +632,12 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
+    partition::block_decomposition<index_t> part(n, p, rank);
+
 
     // get # elements to the left
-    std::size_t prev_size = block_partition_excl_prefix_size(n, p, rank);
-    std::size_t local_size = block_partition_local_size(n, p, rank);
+    std::size_t prev_size = part.excl_prefix_size();
+    std::size_t local_size = part.local_size();
     assert(local_size == local_B1.size());
 
     // init B2
@@ -646,9 +652,9 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
     if (prev_size + dist < n)
     {
         std::size_t right_first_gl_idx = prev_size + dist;
-        int p1 = block_partition_target_processor(n, p, right_first_gl_idx);
+        int p1 = part.target_processor(right_first_gl_idx);
 
-        std::size_t p1_gl_end = block_partition_prefix_size(n, p, p1);
+        std::size_t p1_gl_end = part.prefix_size(p1);
         std::size_t p1_recv_cnt = p1_gl_end - right_first_gl_idx;
 
         if (p1 != rank)
@@ -685,10 +691,10 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
         if (prev_size >= dist)
         {
             std::size_t first_gl_idx = prev_size - dist;
-            p1 = block_partition_target_processor(n, p, first_gl_idx);
+            p1 = part.target_processor(first_gl_idx);
         }
         std::size_t last_gl_idx = prev_size + local_size - 1 - dist;
-        int p2 = block_partition_target_processor(n, p, last_gl_idx);
+        int p2 = part.target_processor(last_gl_idx);
 
         std::size_t local_split;
         if (p1 != p2)
@@ -696,7 +702,7 @@ void shift_buckets(std::size_t n, std::size_t dist, std::vector<index_t>& local_
             // local start index of area for second processor
             if (p1 >= 0)
             {
-                local_split = block_partition_prefix_size(n, p, p1) + dist - prev_size;
+                local_split = part.prefix_size(p1) + dist - prev_size;
                 // send to first processor
                 assert(p1 != rank);
                 MPI_Send(&local_B1[0], local_split,
@@ -878,7 +884,8 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
         MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
     }
 
-    // get my global starting index
+    // get my global starting index (TODO: this is not necessary if i know n
+    // and p and assume perfect block decompositon)
     std::size_t prefix;
     MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
     MPI_Exscan(&local_size, &prefix, 1, mpi_size_t, MPI_SUM, comm);
@@ -960,6 +967,7 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    partition::block_decomposition<index_t> part(n, p, rank);
 
     SAC_TIMER_START();
 
@@ -967,7 +975,7 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     std::vector<TwoBSA<index_t> > tuple_vec(local_size);
 
     // get global index offset
-    std::size_t str_offset = block_partition_excl_prefix_size(n, p, rank);
+    std::size_t str_offset = part.excl_prefix_size();
 
     // fill tuple vector
     for (std::size_t i = 0; i < local_size; ++i)
@@ -1112,10 +1120,11 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_index_t = get_mpi_dt<index_t>();
+    partition::block_decomposition_buffered<index_t> part(n, p, rank);
 
     // get size parameters
     std::size_t local_size = local_els.size();
-    std::size_t prefix_size = block_partition_excl_prefix_size(n, p, rank);
+    std::size_t prefix_size = part.excl_prefix_size();
 
     // create RMQ for local elements
     rmq::RMQ<typename std::vector<index_t>::const_iterator> local_rmq(local_els.begin(), local_els.end());
@@ -1155,7 +1164,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     msgs_all2all(
         ranges,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<1>(x)));
+            return part.target_processor(std::get<1>(x));
         }, comm);
     // find mins from start to right border locally
     for (auto it = ranges.begin(); it != ranges.end(); ++it)
@@ -1175,14 +1184,14 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     msgs_all2all(
         ranges,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<0>(x)));
+            return part.target_processor(std::get<0>(x));
         }, comm);
 
     // second communication
     msgs_all2all(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<2>(x)-1));
+            return part.target_processor(std::get<2>(x)-1);
         }, comm);
     // find mins from start to right border locally
     for (auto it = ranges_right.begin(); it != ranges_right.end(); ++it)
@@ -1202,7 +1211,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     msgs_all2all(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return block_partition_target_processor(n, p, static_cast<std::size_t>(std::get<0>(x)));
+            return part.target_processor(std::get<0>(x));
         }, comm);
 
     // get total min and save into ranges
@@ -1236,8 +1245,8 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
         // if the answer is different
         if (left_min_idx != right_min_idx)
         {
-            int p_left = block_partition_target_processor(n, p, left_min_idx);
-            int p_right = block_partition_target_processor(n, p, right_min_idx);
+            int p_left = part.target_processor(left_min_idx);
+            int p_right = part.target_processor(right_min_idx);
             // get minimum of both elements
             if (p_left + 1 < p_right)
             {
@@ -1381,13 +1390,13 @@ void resolve_next_lcp(std::size_t n, int dist,
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
+    partition::block_decomposition<index_t> part(n, p, rank);
 
     // get size parameters
     std::size_t local_size = local_B1.size();
     assert(local_size == local_B2.size());
     assert(local_size == local_LCP.size());
-    std::size_t prefix_size = block_partition_excl_prefix_size(n, p, rank);
-
+    std::size_t prefix_size = part.excl_prefix_size();
 
 
     // get right-most element of left processor and check if it is a new
@@ -1514,6 +1523,8 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
     MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
+    partition::block_decomposition_buffered<index_t> part(n, p, rank);
+
 
     /*
      * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
@@ -1536,7 +1547,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
 
     // get global offset
-    const std::size_t prefix = block_partition_excl_prefix_size(n, p, rank);
+    const std::size_t prefix = part.excl_prefix_size();
 
     // get active elements
     std::vector<index_t> active_elements;
@@ -1600,7 +1611,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             break;
 
         // message exchange to processor which contains first index
-        msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.first));}, comm);
+        msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.first);}, comm);
 
         // for each message, add the bucket no. into the `first` field
         for (auto it = msgs.begin(); it != msgs.end(); ++it)
@@ -1613,7 +1624,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
          * 2.)
          */
         // send messages back to originator
-        msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.second));}, comm);
+        msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.second);}, comm);
 
         // append the previous out-of-bounds messages (since they all have B2 = 0)
         if (out_of_bounds_msgs.size() > 0)
@@ -1776,7 +1787,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         {
             std::vector<TwoBSA<index_t> > border_bucket = left_bucket;
             // the leftmost processor of a group will be used as split
-            int left_p = block_partition_target_processor(n, p, first_bucket_begin);
+            int left_p = part.target_processor(first_bucket_begin);
             bool participate = (overlap_type != 0 && my_schedule == phase);
             std::size_t bucket_offset = 0; // left bucket starts from beginning
             std::size_t rebucket_offset = first_bucket_begin;
@@ -1878,7 +1889,7 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
         }
 
         // message exchange to processor which contains first index
-        msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return block_partition_target_processor(n,p,static_cast<std::size_t>(x.first));}, comm);
+        msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.first);}, comm);
 
         // update local ISA with new bucket numbers
         for (auto it = msgs.begin(); it != msgs.end(); ++it)
@@ -2078,8 +2089,10 @@ void sa_construction(const std::string& local_str,
     std::size_t n = 0;
     MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
     MPI_Allreduce(&local_size, &n, 1, mpi_size_t, MPI_SUM, comm);
+    partition::block_decomposition<std::size_t> part(n, p, rank);
+
     // assert the input is distributed as a block decomposition
-    assert(local_size == block_partition_local_size(n, p, rank));
+    assert(local_size == part.local_size());
 
     // check if the input size fits in 32 bits (< 4 GiB input)
     if (sizeof(std::size_t) != sizeof(std::uint32_t))
