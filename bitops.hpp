@@ -41,7 +41,6 @@ inline unsigned int trailing_zeros(uint64_t x) {
     return index64[((x & -x) * debruijn64) >> 58];
 }
 
-
 /**
  * Fast integer log base 2 for 64 bit integers.
  * @param x         Input value.

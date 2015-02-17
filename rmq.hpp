@@ -19,11 +19,15 @@
 #include <stdint.h>
 #include <assert.h>
 
+#include "bitops.hpp"
+
 namespace rmq {
 
-// TODO: implement more efficiently using intrinsics
-unsigned int floorlog2(unsigned int n)
+// TODO: move these into the bitops header
+template <typename IntType>
+inline unsigned int floorlog2(IntType n)
 {
+    /*
     assert(n != 0);
     unsigned int log_floor = 0;
     for (;n != 0; n >>= 1)
@@ -32,9 +36,13 @@ unsigned int floorlog2(unsigned int n)
     }
     --log_floor;
     return log_floor;
+    */
+    //return log2_64(n);
+    return ((unsigned) (8*sizeof (unsigned long long) - __builtin_clzll((n)) - 1));
 }
 
-unsigned int ceillog2(unsigned int n)
+template <typename IntType>
+inline unsigned int ceillog2(IntType n)
 {
     unsigned int log_floor = floorlog2(n);
     // add one if not power of 2
@@ -44,6 +52,16 @@ unsigned int ceillog2(unsigned int n)
 template<typename Iterator, typename index_t = std::size_t>
 class RMQ
 {
+private:
+    // superblock size is log^(2+epsilon)(n)
+    // we choose it as bitsize*2:
+    //  - 64 bits -> 4096
+    //  - 32 bits -> 1024
+    //  - both bound by 2^16 -> uint16_t
+    //  block size: one cache line
+    const static int DEFAULT_BLOCK_SIZE = 64/sizeof(index_t);
+    // cache line of blocks per superblock
+    const static int DEFAULT_SUPERBLOCK_SIZE = 64/sizeof(uint16_t) * 64/sizeof(index_t);
 private:
     index_t n;
 
@@ -106,13 +124,8 @@ private:
 
 public:
     RMQ(Iterator begin, Iterator end,
-        // superblock size is log^(2+epsilon)(n)
-        // we choose it as bitsize*2:
-        //  - 64 bits -> 4096
-        //  - 32 bits -> 1024
-        //  - both bound by 2^16 -> uint16_t
-        index_t superblock_size = (sizeof(index_t) * 8)*(sizeof(index_t) * 8),
-        index_t block_size = sizeof(index_t) * 8)
+        index_t superblock_size = DEFAULT_SUPERBLOCK_SIZE,
+        index_t block_size = DEFAULT_BLOCK_SIZE)
         : _begin(begin), _end(end), superblock_size(superblock_size), block_size(block_size)
     {
         // get size
@@ -247,8 +260,7 @@ public:
             // get largest power of two that doesn't exceed the number of
             // superblocks from (left,right)
             index_t n_sb = right_sb - left_sb;
-            // TODO: implement for 64 bit
-            unsigned int dist = floorlog2(static_cast<unsigned int>(n_sb));
+            unsigned int dist = floorlog2(n_sb);
 
             assert(dist < superblock_mins.size() && left_sb < superblock_mins[dist].size());
             min_pos = _begin + superblock_mins[dist][left_sb];
@@ -269,7 +281,7 @@ public:
             index_t n_b = n_blocks_per_superblock - left_b;
             if (n_b > 0)
             {
-                unsigned int level = ceillog2(static_cast<unsigned int>(n_b));
+                unsigned int level = ceillog2(n_b);
                 index_t sb_offset = (left_sb-1)*(n_blocks_per_superblock - (1<<level)/2);
                 Iterator block_min_it = _begin + block_mins[level][left_b + sb_offset] + (left_sb-1)*superblock_size;
                 if (*block_min_it < *min_pos)
@@ -296,7 +308,7 @@ public:
             index_t n_b = right_b - left_b;
             if (n_b > 0)
             {
-                unsigned int dist = floorlog2(static_cast<unsigned int>(n_b));
+                unsigned int dist = floorlog2(n_b);
                 index_t sb_offset = right_sb*((1<<dist)/2);
                 Iterator block_min_it = _begin + block_mins[dist][left_b - sb_offset] + (right_sb)*superblock_size;
                 if (*block_min_it < *min_pos)
@@ -336,7 +348,7 @@ public:
                     // left part
                     if (left_b < mid_b)
                     {
-                        unsigned int left_dist = ceillog2(static_cast<unsigned int>(mid_b - left_b));
+                        unsigned int left_dist = ceillog2(mid_b - left_b);
                         index_t sb_offset = 0;
                         index_t sb_size_offset = 0;
                         if (left_sb > 1)
@@ -352,7 +364,7 @@ public:
                     if (mid_b < right_b)
                     {
                         // right part
-                        unsigned int right_dist = floorlog2(static_cast<unsigned int>(right_b - mid_b));
+                        unsigned int right_dist = floorlog2(right_b - mid_b);
                         index_t sb_offset = (1<<right_dist)/2;
                         index_t sb_size_offset = superblock_size;
                         if (left_sb > 1)
@@ -370,7 +382,7 @@ public:
                 }
                 else
                 {
-                    unsigned int dist = floorlog2(static_cast<unsigned int>(right_b - left_b));
+                    unsigned int dist = floorlog2(right_b - left_b);
                     index_t sb_offset = 0;
                     index_t sb_size_offset = 0;
                     if (left_sb > 1)
