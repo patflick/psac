@@ -1014,46 +1014,6 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
     SAC_TIMER_END_SECTION("isa2sa_untupleize");
 }
 
-template <typename index_t>
-bool gl_check_correct_SA(const std::vector<index_t>& SA, const std::vector<index_t>& ISA, const std::string& str)
-{
-    std::size_t n = SA.size();
-    bool success = true;
-
-    for (std::size_t i = 0; i < n; ++i)
-    {
-        // check valid range
-        if (SA[i] >= n || SA[i] < 0)
-        {
-            std::cerr << "[ERROR] SA[" << i << "] = " << SA[i] << " out of range 0 <= sa < " << n << std::endl;
-            success = false;
-        }
-
-        // check SA conditions
-        if (i >= 1 && SA[i-1] < n-1)
-        {
-            if (!(str[SA[i]] >= str[SA[i-1]]))
-            {
-                std::cerr << "[ERROR] wrong SA order: str[SA[i]] >= str[SA[i-1]]" << std::endl;
-                success = false;
-            }
-
-            // if strings are equal, the ISA of these positions have to be
-            // ordered
-            if (str[SA[i]] == str[SA[i-1]])
-            {
-                if (!(ISA[SA[i-1]+1] < ISA[SA[i]+1]))
-                {
-                    std::cerr << "[ERROR] invalid SA order: ISA[SA[" << i-1 << "]+1] < ISA[SA[" << i << "]+1]" << std::endl;
-                    std::cerr << "[ERROR] where SA[i-1]=" << SA[i-1] << ", SA[i]=" << SA[i] << ", ISA[SA[i-1]+1]=" << ISA[SA[i-1]+1] << ", ISA[SA[i]+1]=" << ISA[SA[i]+1] << std::endl;
-                    success = false;
-                }
-            }
-        }
-    }
-
-    return success;
-}
 
 template<typename T, typename _TargetP>
 void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)

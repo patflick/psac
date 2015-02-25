@@ -472,8 +472,10 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     return std::make_pair(k, l);
 }
 
-// in: 2^m, B1
-// out: B2
+
+/*********************************************************************
+ *               Shifting buckets (i -> i + 2^l) => B2               *
+ *********************************************************************/
 void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2)
 {
     // get # elements to the left
@@ -582,6 +584,9 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2)
 }
 
 
+/*********************************************************************
+ *                     ISA -> SA (sort buckets)                      *
+ *********************************************************************/
 void isa_2b_to_sa(std::vector<index_t>& local_B2)
 {
     assert(local_B2.size() == local_size);
@@ -631,6 +636,10 @@ void isa_2b_to_sa(std::vector<index_t>& local_B2)
     SAC_TIMER_END_SECTION("isa2sa_untupleize");
 }
 
+
+/*********************************************************************
+ *              Rebucket tuples into new bucket numbers              *
+ *********************************************************************/
 // assumed sorted order (globally) by tuple (B1[i], B2[i])
 // this reassigns new, unique bucket numbers in {1,...,n} globally
 std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished)
@@ -777,7 +786,9 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished)
     return result;
 }
 
-
+/*********************************************************************
+ *                       SA->ISA (~bucketsort)                       *
+ *********************************************************************/
 void reorder_sa_to_isa(std::vector<index_t>& SA)
 {
     assert(SA.size() == local_B.size());
@@ -845,6 +856,7 @@ void reorder_sa_to_isa(std::vector<index_t>& SA)
     SAC_TIMER_END_SECTION("sa2isa_rearrange");
 }
 
+// SA->ISA defaulting with the local_SA array
 void reorder_sa_to_isa()
 {
     reorder_sa_to_isa(local_SA);
