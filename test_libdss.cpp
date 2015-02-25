@@ -4,7 +4,7 @@
 #include <string>
 
 #include "test_sac_libdss.hpp"
-#include "mpi_sa_test.hpp"
+//#include "mpi_sa_test.hpp"
 
 
 void my_mpi_errorhandler(MPI_Comm* comm, int* errorcode, ...)
@@ -53,7 +53,7 @@ int main(int argc, char *argv[])
     else
     {
         std::cerr << "Warning: no input file provided, testing with random DNA string." << std::endl;
-        str = rand_dna(10000000,0);
+//        str = rand_dna(10000000,0);
     }
     if (!test_compare_divsufsort_psac(str,comm))
     {

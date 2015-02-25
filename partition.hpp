@@ -25,6 +25,8 @@ template <typename index_t>
 class block_decomposition
 {
 public:
+    block_decomposition() : n(0), p(0), rank(0) {}
+
     /// Constructor (no default construction)
     block_decomposition(index_t n, int p, int rank)
         : n(n), p(p), rank(rank)
@@ -80,11 +82,11 @@ public:
 private:
     /* data */
     /// Number of elements
-    const index_t n;
+    index_t n;
     /// Number of processors
-    const int p;
+    int p;
     /// Processor rank
-    const int rank;
+    int rank;
 };
 
 
@@ -92,6 +94,8 @@ template <typename index_t>
 class block_decomposition_buffered
 {
 public:
+    block_decomposition_buffered() {}
+
     block_decomposition_buffered(index_t n, int p, int rank)
         : n(n), p(p), rank(rank), div(n / p), mod(n % p),
           loc_size(div + (static_cast<index_t>(rank) < mod ? 1 : 0)),
@@ -99,6 +103,13 @@ public:
           div1mod((div+1)*mod)
     {
     }
+
+    block_decomposition_buffered(const block_decomposition_buffered& other)
+        : n(other.n), p(other.p), rank(other.rank), div(other.div),
+        mod(other.mod), loc_size(other.loc_size), prefix(other.prefix),
+        div1mod(other.div1mod) {}
+
+    block_decomposition_buffered& operator=(const block_decomposition_buffered& other) = default;
 
     index_t local_size()
     {
@@ -150,21 +161,21 @@ public:
 private:
     /* data */
     /// Number of elements
-    const index_t n;
+    index_t n;
     /// Number of processors
-    const int p;
+    int p;
     /// Processor rank
-    const int rank;
+    int rank;
 
     // derived/buffered values (for faster computation of results)
-    const index_t div; // = n/p
-    const index_t mod; // = n%p
+    index_t div; // = n/p
+    index_t mod; // = n%p
     // local size (number of local elements)
-    const index_t loc_size;
+    index_t loc_size;
     // the exclusive prefix (number of elements on previous processors)
-    const index_t prefix;
+    index_t prefix;
     /// number of elements on processors with one more element
-    const index_t div1mod; // = (n/p + 1)*(n % p)
+    index_t div1mod; // = (n/p + 1)*(n % p)
 };
 
 } // namespace partition

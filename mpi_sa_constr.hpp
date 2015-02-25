@@ -201,7 +201,6 @@ std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0)
     return hist;
 }
 
-// TODO: global character histogram + required bits per character + compression
 template <typename index_t>
 std::vector<index_t> alphabet_histogram(const std::string& local_str, MPI_Comm comm)
 {
@@ -1133,7 +1132,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     auto local_min_it = local_rmq.query(local_els.begin(), local_els.end());
     index_t min_pos = (local_min_it - local_els.begin()) + prefix_size;
     index_t local_min = *local_min_it;
-    assert(local_min == *std::min_element(local_els.begin(), local_els.end()));
+    //assert(local_min == *std::min_element(local_els.begin(), local_els.end()));
     std::vector<index_t> proc_mins(p);
     std::vector<index_t> proc_min_pos(p);
     MPI_Allgather(&local_min, 1, mpi_index_t, &proc_mins[0], 1, mpi_index_t, comm);
@@ -1711,6 +1710,9 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                         local_B[out_idx] = cur_b;
                         out_idx++;
                     }
+                    /*
+                     * TODO: create queries for LCP resolval for each new bucket boundary
+                     */
                     // assert next bucket index is larger
                     assert(out_idx == local_size || local_B[out_idx] == prefix+out_idx+1);
                 }
@@ -1831,14 +1833,17 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
                 }
                 assert(bucket_offset+border_bucket.size() == local_size || (local_B[bucket_offset+border_bucket.size()] > local_B[bucket_offset+border_bucket.size()-1]));
                 assert(subrank != 0 || local_B[bucket_offset] == bucket_offset+prefix+1);
+
+                /*
+                 * TODO: create queries for LCP resolval for each new bucket boundary
+                 */
             }
             else
             {
-                // split communicator to don't care (since this processor doesn't
+                // split communicator to "don't care" (since this processor doesn't
                 // participate)
                 MPI_Comm_split(comm, MPI_UNDEFINED, 0, &subcomm);
             }
-
 
             MPI_Barrier(comm);
         }
@@ -1874,13 +1879,17 @@ void sa_bucket_chaising_constr(std::size_t n, std::vector<index_t>& local_SA, st
             }
         }
 
+        /* TODO: update LCP (either here or at the end of the loop) with
+         * generated queries from above
+         */
+
         /*
          * 4.)
          */
         // message new bucket numbers to new SA[i] for all previously unfinished
         // buckets
         // since the message array is still available with the indices of unfinished
-        // buckets -> reuse that information => no need to rescan the whole 
+        // buckets -> reuse that information => no need to rescan the whole
         // local array
         for (auto it = msgs.begin(); it != msgs.end(); ++it)
         {

@@ -18,9 +18,10 @@
 #include <string>
 
 #include "mpi_utils.hpp"
-#include "mpi_sa_constr.hpp"
+//#include "mpi_sa_constr.hpp"
 #include "mpi_file.hpp"
 #include "lcp.hpp"
+#include "suffix_array.hpp"
 
 #include "timer.hpp"
 
@@ -54,6 +55,47 @@ std::string rand_dna(std::size_t size, int seed)
         str[i] = rand_dna_char();
     }
     return str;
+}
+
+template <typename index_t>
+bool gl_check_correct_SA(const std::vector<index_t>& SA, const std::vector<index_t>& ISA, const std::string& str)
+{
+    std::size_t n = SA.size();
+    bool success = true;
+
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        // check valid range
+        if (SA[i] >= n || SA[i] < 0)
+        {
+            std::cerr << "[ERROR] SA[" << i << "] = " << SA[i] << " out of range 0 <= sa < " << n << std::endl;
+            success = false;
+        }
+
+        // check SA conditions
+        if (i >= 1 && SA[i-1] < n-1)
+        {
+            if (!(str[SA[i]] >= str[SA[i-1]]))
+            {
+                std::cerr << "[ERROR] wrong SA order: str[SA[i]] >= str[SA[i-1]]" << std::endl;
+                success = false;
+            }
+
+            // if strings are equal, the ISA of these positions have to be
+            // ordered
+            if (str[SA[i]] == str[SA[i-1]])
+            {
+                if (!(ISA[SA[i-1]+1] < ISA[SA[i]+1]))
+                {
+                    std::cerr << "[ERROR] invalid SA order: ISA[SA[" << i-1 << "]+1] < ISA[SA[" << i << "]+1]" << std::endl;
+                    std::cerr << "[ERROR] where SA[i-1]=" << SA[i-1] << ", SA[i]=" << SA[i] << ", ISA[SA[i-1]+1]=" << ISA[SA[i-1]+1] << ", ISA[SA[i]+1]=" << ISA[SA[i]+1] << std::endl;
+                    success = false;
+                }
+            }
+        }
+    }
+
+    return success;
 }
 
 template <typename index_t>
@@ -97,20 +139,24 @@ void sa_test_random_dna(MPI_Comm comm, std::size_t input_size, bool test_correct
     //std::string local_str = "missisippi";
     std::string local_str = rand_dna(input_size, rank);
 
+    /*
     std::vector<std::size_t> local_SA;
     std::vector<std::size_t> local_ISA;
     std::vector<std::size_t> local_LCP;
+    */
 
     // construct local SA for input string
-    sa_construction(local_str, local_SA, local_ISA, local_LCP, comm);
+//    sa_construction(local_str, local_SA, local_ISA, local_LCP, comm);
+    suffix_array<std::string::iterator, std::size_t> sa(local_str.begin(), local_str.end(), comm);
+    sa.construct();
 
     // final SA and ISA
     if (test_correct)
     {
         // gather SA and ISA to local
-        std::vector<std::size_t> global_SA = gather_vectors(local_SA, comm);
-        std::vector<std::size_t> global_ISA = gather_vectors(local_ISA, comm);
-        std::vector<std::size_t> global_LCP = gather_vectors(local_LCP, comm);
+        std::vector<std::size_t> global_SA = gather_vectors(sa.local_SA, comm);
+        std::vector<std::size_t> global_ISA = gather_vectors(sa.local_B, comm);
+        std::vector<std::size_t> global_LCP = gather_vectors(sa.local_LCP, comm);
         std::vector<char> global_str_vec = gather_range(local_str.begin(), local_str.end(), comm);
         std::string global_str(global_str_vec.begin(), global_str_vec.end());
         if (rank == 0)
@@ -124,8 +170,6 @@ void sa_test_random_dna(MPI_Comm comm, std::size_t input_size, bool test_correct
             std::cerr << "ISA: "; print_vec(global_ISA);
             std::cerr << "LCP: "; print_vec(global_LCP);
 #endif
-
-            // check if correct
             if (!gl_check_correct_SA(global_SA, global_ISA, global_str))
             {
                 std::cerr << "[ERROR] Test unsuccessful" << std::endl;
@@ -167,12 +211,16 @@ void sa_test_file(const char* filename, MPI_Comm comm, std::size_t max_local_siz
 
     SAC_TEST_TIMER_END_SECTION("load-input");
 
+    /*
     std::vector<std::size_t> local_SA;
     std::vector<std::size_t> local_ISA;
     std::vector<std::size_t> local_LCP;
+    */
 
     // construct local SA for input string
-    sa_construction(local_str, local_SA, local_ISA, local_LCP, comm);
+    //sa_construction(local_str, local_SA, local_ISA, local_LCP, comm);
+    suffix_array<std::string::iterator, std::size_t> sa(local_str.begin(), local_str.end(), comm);
+    sa.construct();
 
     SAC_TEST_TIMER_END_SECTION("sac");
 
@@ -180,8 +228,8 @@ void sa_test_file(const char* filename, MPI_Comm comm, std::size_t max_local_siz
     if (test_correct)
     {
         // gather SA and ISA to local
-        std::vector<std::size_t> global_SA = gather_vectors(local_SA, comm);
-        std::vector<std::size_t> global_ISA = gather_vectors(local_ISA, comm);
+        std::vector<std::size_t> global_SA = gather_vectors(sa.local_SA, comm);
+        std::vector<std::size_t> global_ISA = gather_vectors(sa.local_B, comm);
         std::vector<char> global_str_vec = gather_range(local_str.begin(), local_str.end(), comm);
         std::string global_str(global_str_vec.begin(), global_str_vec.end());
         if (rank == 0)
@@ -194,7 +242,6 @@ void sa_test_file(const char* filename, MPI_Comm comm, std::size_t max_local_siz
             std::cerr << "SA : "; print_vec(global_SA);
             std::cerr << "ISA: "; print_vec(global_ISA);
 #endif
-
             // check if correct
             if (!gl_check_correct_SA(global_SA, global_ISA, global_str))
             {
