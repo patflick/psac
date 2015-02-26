@@ -133,5 +133,39 @@ unsigned int ceillog2(unsigned int x)
     return log_floor + (((x&(x-1)) != 0) ? 1 : 0);
 }
 
+
+/**
+ * @brief   Returns the number identical characters of two strings in k-mer
+ *          compressed bit representation with `bits_per_char` bits per
+ *          character in the word of type `T`.
+ *
+ * @tparam T                The type of the values (an integer type).
+ * @param x                 The first value to compare.
+ * @param y                 The second value to compare.
+ * @param k                 The total number of characters stored in
+ *                          one word of type `T`.
+ * @param bits_per_char     The number of bits per character in the k-mer
+ *                          representation of `x` and `y`.
+ * @return  The longest common prefix, i.e., the number of sequential characters
+ *          equal in the two values `x` and `y`.
+ */
+template <typename T>
+unsigned int lcp_bitwise(T x, T y, unsigned int k, unsigned int bits_per_char)
+{
+    if (x == y)
+        return k;
+    // XOR the two values and then find the MSB that isn't zero (since
+    // the k-mer strings start (have first character) at MSB)
+    T z = x ^ y;
+    // get leading zeros (TODO: in bitops implement faster version for 32bit)
+    unsigned int lz = leading_zeros(z);
+
+    // get leading zeros in the k-mer representation
+    unsigned int kmer_leading_zeros = lz - (sizeof(T)*8 - k*bits_per_char);
+    unsigned int lcp = kmer_leading_zeros / bits_per_char;
+    return lcp;
+}
+
+
 #endif // BITOPS_HPP
 

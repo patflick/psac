@@ -76,8 +76,9 @@
 #include "parallel_utils.hpp"
 #include "mpi_utils.hpp"
 #include "mpi_samplesort.hpp"
-#include "rmq.hpp"
 #include "bitops.hpp"
+#include "par_rmq.hpp"
+#include "alphabet.hpp"
 
 #define PSAC_TAG_EDGE_KMER 1
 #define PSAC_TAG_SHIFT 2
@@ -171,101 +172,6 @@ void print_vec(const std::vector<T>& vec)
     std::cerr << std::endl;
 }
 
-template<typename Iterator, typename T = typename std::iterator_traits<Iterator>::value_type>
-T global_max_element(Iterator begin, Iterator end, MPI_Comm comm)
-{
-    // mpi datatype
-    MPI_Datatype mpi_dt = get_mpi_dt<T>();
-    // get local max
-    T max = *std::max_element(begin, end);
-
-    // get global max
-    T gl_max;
-    MPI_Allreduce(&max, &gl_max, 1, mpi_dt, MPI_MAX, comm);
-
-    return gl_max;
-}
-
-template<typename T, typename Iterator>
-std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0)
-{
-    if (size == 0)
-        size = static_cast<std::size_t>(*std::max_element(begin, end)) + 1;
-    std::vector<T> hist(size);
-
-    while (begin != end)
-    {
-        ++hist[static_cast<std::size_t>(*(begin++))];
-    }
-
-    return hist;
-}
-
-template <typename index_t>
-std::vector<index_t> alphabet_histogram(const std::string& local_str, MPI_Comm comm)
-{
-    // get local histogram of alphabet characters
-    std::vector<index_t> hist = get_histogram<index_t>(local_str.begin(), local_str.end(), 256);
-
-    std::vector<index_t> out_hist(256);
-    // global all reduce to get global histogram
-    MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
-    MPI_Allreduce(&hist[0], &out_hist[0], 256, mpi_dt, MPI_SUM, comm);
-
-    return out_hist;
-}
-
-template <typename index_t>
-std::vector<char> alphabet_mapping_tbl(const std::vector<index_t>& global_hist)
-{
-    std::vector<char> mapping(256, 0);
-
-    char next = static_cast<char>(1);
-    for (std::size_t c = 0; c < 256; ++c)
-    {
-        if (global_hist[c] != 0)
-        {
-            mapping[c] = next;
-            ++next;
-        }
-    }
-    return mapping;
-}
-
-template <typename index_t>
-unsigned int alphabet_unique_chars(const std::vector<index_t>& global_hist)
-{
-    unsigned int unique_count = 0;
-    for (std::size_t c = 0; c < 256; ++c)
-    {
-        if (global_hist[c] != 0)
-        {
-            ++unique_count;
-        }
-    }
-    return unique_count;
-}
-
-
-unsigned int alphabet_bits_per_char(unsigned int sigma)
-{
-    // since we have to account for the `0` character, we use ceil(log(unique_chars + 1))
-    return ceillog2(sigma+1);
-}
-
-template<typename word_t>
-unsigned int alphabet_chars_per_word(unsigned int bits_per_char)
-{
-    // using bit concatenation, NOT multiplication by base
-    // TODO: try multiplication by base
-
-    unsigned int bits_per_word = sizeof(word_t)*8;
-    // TODO: this is currently a "work-around": if the type is signed, we
-    //       can't use the msb, thus we need to subtract one
-    if (std::is_signed<word_t>::value)
-        --bits_per_word;
-    return bits_per_word/bits_per_char;
-}
 
 template <typename index_t>
 std::pair<unsigned int, unsigned int> initial_bucketing(const std::size_t n, const std::basic_string<char>& local_str, std::vector<index_t>& local_B, MPI_Comm comm)
@@ -282,7 +188,7 @@ std::pair<unsigned int, unsigned int> initial_bucketing(const std::size_t n, con
     std::size_t min_local_size = part.local_size(p-1);
 
     // get global alphabet histogram
-    std::vector<index_t> alphabet_hist = alphabet_histogram<index_t>(local_str, comm);
+    std::vector<index_t> alphabet_hist = alphabet_histogram<std::basic_string<char>::const_iterator, index_t>(local_str.begin(), local_str.end(), comm);
     // get mapping table and alphabet sizes
     std::vector<char> alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
     unsigned int sigma = alphabet_unique_chars(alphabet_hist);
@@ -814,31 +720,6 @@ MPI_Datatype get_mpi_dt<std::pair<int, int> >()
     MPI_Type_contiguous(2, element_t, &dt);
     return dt;
 }
-// custom MPI data types for std::tuple (triple) instances
-template<>
-MPI_Datatype get_mpi_dt<std::tuple<std::size_t, std::size_t, std::size_t> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::tuple<unsigned int, unsigned int, unsigned int> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::tuple<int, int, int> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<int>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
 
 // assumed sorted order (globally) by tuple (B1[i], B2[i])
 // this reassigns new, unique bucket numbers in {1,...,n} globally
@@ -1015,249 +896,6 @@ void isa_2b_to_sa(std::size_t n, std::vector<index_t>& B1, std::vector<index_t>&
 }
 
 
-template<typename T, typename _TargetP>
-void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
-{
-    // get comm parameters
-    int p, rank;
-    MPI_Comm_size(comm, &p);
-    MPI_Comm_rank(comm, &rank);
-    MPI_Datatype mpi_dt = get_mpi_dt<T>();
-    MPI_Type_commit(&mpi_dt);
-
-    // bucket input by their target processor
-    std::vector<int> send_counts(p, 0);
-    for (auto it = msgs.begin(); it != msgs.end(); ++it)
-    {
-        send_counts[target_p_fun(*it)]++;
-    }
-    std::vector<std::size_t> offset(send_counts.begin(), send_counts.end());
-    excl_prefix_sum(offset.begin(), offset.end());
-    std::vector<T> send_buffer;
-    if (msgs.size() > 0)
-        send_buffer.resize(msgs.size());
-    for (auto it = msgs.begin(); it != msgs.end(); ++it)
-    {
-        send_buffer[offset[target_p_fun(*it)]++] = *it;
-    }
-
-    // get all2all params
-    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
-    std::vector<int> send_displs = get_displacements(send_counts);
-    std::vector<int> recv_displs = get_displacements(recv_counts);
-
-    // resize messages to fit recv
-    std::size_t recv_size = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
-    msgs = std::vector<T>(recv_size);
-
-    // all2all
-    MPI_Alltoallv(&send_buffer[0], &send_counts[0], &send_displs[0], mpi_dt,
-                  &msgs[0], &recv_counts[0], &recv_displs[0], mpi_dt, comm);
-    // done, result is returned in vector of input messages
-}
-
-template <typename index_t>
-void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
-              std::vector<std::tuple<index_t, index_t, index_t>>& ranges,
-              MPI_Comm comm) {
-    // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
-    //     a.) allgather per processor minimum lcp
-    //     b.) create messages to left-most and right-most processor (i, B2[i])
-    //     c.) on rank==B2[i]: get either left-flank min (i < B2[i])
-    //         or right-flank min (i > B2[i])
-    //         -> in bulk by ordering messages into two groups and sorting by B2[i]
-    //            then linear scan for min starting from left-most/right-most element
-    //     d.) answer with message (i, min(...))
-    //     e.) on rank==i: receive min answer from left-most and right-most
-    //         processor for each range
-    //          -> sort by i
-    //     f.) for each range: get RMQ of intermediary processors
-    //                         min(min_p_left, RMQ(p_left+1,p_right-1), min_p_right)
-
-    // get comm parameters
-    int p, rank;
-    MPI_Comm_size(comm, &p);
-    MPI_Comm_rank(comm, &rank);
-    MPI_Datatype mpi_index_t = get_mpi_dt<index_t>();
-    partition::block_decomposition_buffered<index_t> part(n, p, rank);
-
-    // get size parameters
-    std::size_t local_size = local_els.size();
-    std::size_t prefix_size = part.excl_prefix_size();
-
-    // create RMQ for local elements
-    rmq::RMQ<typename std::vector<index_t>::const_iterator> local_rmq(local_els.begin(), local_els.end());
-
-    // get per processor minimum and it's position
-    auto local_min_it = local_rmq.query(local_els.begin(), local_els.end());
-    index_t min_pos = (local_min_it - local_els.begin()) + prefix_size;
-    index_t local_min = *local_min_it;
-    //assert(local_min == *std::min_element(local_els.begin(), local_els.end()));
-    std::vector<index_t> proc_mins(p);
-    std::vector<index_t> proc_min_pos(p);
-    MPI_Allgather(&local_min, 1, mpi_index_t, &proc_mins[0], 1, mpi_index_t, comm);
-    MPI_Allgather(&min_pos, 1, mpi_index_t, &proc_min_pos[0], 1, mpi_index_t, comm);
-
-    // create range-minimum-query datastructure for the processor minimums
-    rmq::RMQ<typename std::vector<index_t>::iterator> proc_mins_rmq(proc_mins.begin(), proc_mins.end());
-
-    // 1.) duplicate vector of triplets
-    // 2.) (asserting that t[1] < t[2]) send to target processor for t[1]
-    // 3.) on t[1]: return min and min index of right flank
-    // 4.) send duplicated to t[2]
-    // 5.) on t[2]: return min and min index of left flank
-    // 6.) if (target-p(t[1]) == target-p(t[2])):
-    //      a) target-p(t[1]) participates in twice (2x too much, could later be
-    //         algorithmically optimized away)
-    //         and returns min only from range (t[1],t[2])
-    // 7.) on i: sort both by i, then pairwise iterate through and get target-p
-    //     for both min indeces. if there are p's in between: use proc_min_rmq
-    //     to get value and index of min p, then get global min index of that
-    //     processor (needs to be gotten as well during the allgather)
-    //  TODO: maybe template value type as different type than index_type
-    //        (right now has to be identical, which suffices for LCP)
-
-    std::vector<std::tuple<index_t, index_t, index_t> > ranges_right(ranges);
-
-    // first communication
-    msgs_all2all(
-        ranges,
-        [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return part.target_processor(std::get<1>(x));
-        }, comm);
-    // find mins from start to right border locally
-    for (auto it = ranges.begin(); it != ranges.end(); ++it)
-    {
-        assert(std::get<1>(*it) < std::get<2>(*it));
-        auto range_begin = local_els.begin() + (std::get<1>(*it) - prefix_size);
-        auto range_end = local_els.end();
-        if (std::get<2>(*it) < prefix_size + local_size)
-        {
-            range_end = local_els.begin() + (std::get<2>(*it) - prefix_size);
-        }
-        auto range_min = local_rmq.query(range_begin, range_end);
-        std::get<1>(*it) = (range_min - local_els.begin()) + prefix_size;
-        std::get<2>(*it) = *range_min;
-    }
-    // send results back to originator
-    msgs_all2all(
-        ranges,
-        [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return part.target_processor(std::get<0>(x));
-        }, comm);
-
-    // second communication
-    msgs_all2all(
-        ranges_right,
-        [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return part.target_processor(std::get<2>(x)-1);
-        }, comm);
-    // find mins from start to right border locally
-    for (auto it = ranges_right.begin(); it != ranges_right.end(); ++it)
-    {
-        assert(std::get<1>(*it) < std::get<2>(*it));
-        auto range_end = local_els.begin() + (std::get<2>(*it) - prefix_size);
-        auto range_begin = local_els.begin();
-        if (std::get<1>(*it) >= prefix_size)
-        {
-            range_begin = local_els.begin() + (std::get<1>(*it) - prefix_size);
-        }
-        auto range_min = local_rmq.query(range_begin, range_end);
-        std::get<1>(*it) = (range_min - local_els.begin()) + prefix_size;
-        std::get<2>(*it) = *range_min;
-    }
-    // send results back to originator
-    msgs_all2all(
-        ranges_right,
-        [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return part.target_processor(std::get<0>(x));
-        }, comm);
-
-    // get total min and save into ranges
-    assert(ranges.size() == ranges_right.size());
-
-    // sort both by target index
-    std::sort(ranges.begin(), ranges.end(),
-              [](const std::tuple<index_t, index_t, index_t>& x,
-                 const std::tuple<index_t, index_t, index_t>& y) {
-        return std::get<0>(x) < std::get<0>(y);
-    });
-    std::sort(ranges_right.begin(), ranges_right.end(),
-              [](const std::tuple<index_t, index_t, index_t>& x,
-                 const std::tuple<index_t, index_t, index_t>& y) {
-        return std::get<0>(x) < std::get<0>(y);
-    });
-
-    // iterate through both results (left and right)
-    // and get overall minimum
-    for (std::size_t i=0; i < ranges.size(); ++i)
-    {
-        assert(std::get<0>(ranges[i]) == std::get<0>(ranges_right[i]));
-        std::size_t left_min_idx = std::get<1>(ranges[i]);
-        std::size_t right_min_idx = std::get<1>(ranges_right[i]);
-        // get min of both ranges
-        if (std::get<2>(ranges[i]) > std::get<2>(ranges_right[i]))
-        {
-            ranges[i] = ranges_right[i];
-        }
-
-        // if the answer is different
-        if (left_min_idx != right_min_idx)
-        {
-            int p_left = part.target_processor(left_min_idx);
-            int p_right = part.target_processor(right_min_idx);
-            // get minimum of both elements
-            if (p_left + 1 < p_right)
-            {
-                // get min from per process min RMQ
-                auto p_min_it =
-                    proc_mins_rmq.query(proc_mins.begin() + p_left + 1,
-                                        proc_mins.begin() + p_right);
-                index_t p_min = *p_min_it;
-                // if smaller, save as overall minimum
-                if (p_min < std::get<2>(ranges[i]))
-                {
-                    std::get<1>(ranges[i]) = proc_min_pos[p_min_it - proc_mins.begin()];
-                    std::get<2>(ranges[i]) = p_min;
-                }
-            }
-        }
-    }
-}
-
-
-
-/**
- * @brief   Returns the number identical characters of two strings in k-mer
- *          compressed bit representation with `bits_per_char` bits per
- *          character in the word of type `T`.
- *
- * @tparam T                The type of the values (an integer type).
- * @param x                 The first value to compare.
- * @param y                 The second value to compare.
- * @param k                 The total number of characters stored in
- *                          one word of type `T`.
- * @param bits_per_char     The number of bits per character in the k-mer
- *                          representation of `x` and `y`.
- * @return  The longest common prefix, i.e., the number of sequential characters
- *          equal in the two values `x` and `y`.
- */
-template <typename T>
-unsigned int lcp_bitwise(T x, T y, unsigned int k, unsigned int bits_per_char)
-{
-    if (x == y)
-        return k;
-    // XOR the two values and then find the MSB that isn't zero (since
-    // the k-mer strings start (have first character) at MSB)
-    T z = x ^ y;
-    // get leading zeros (TODO: in bitops implement faster version for 32bit)
-    unsigned int lz = leading_zeros(z);
-
-    // get leading zeros in the k-mer representation
-    unsigned int kmer_leading_zeros = lz - (sizeof(T)*8 - k*bits_per_char);
-    unsigned int lcp = kmer_leading_zeros / bits_per_char;
-    return lcp;
-}
 
 template <typename index_t>
 void initial_kmer_lcp(std::size_t n, unsigned int k, unsigned int bits_per_char,
@@ -1289,6 +927,7 @@ void initial_kmer_lcp(std::size_t n, unsigned int k, unsigned int bits_per_char,
     // find bucket boundaries (including across processors)
 
     // 1) getting next element to left
+    // TODO: use shift communication function
     index_t left_B[2];
     MPI_Request recv_req;
     if (rank > 0)

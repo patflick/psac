@@ -167,7 +167,7 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
         std::vector<int> recv_displs = get_displacements(local_sizes);
 
         // gather v the vector data to the root
-        MPI_Gatherv(&(*begin), local_size, mpi_dt,
+        MPI_Gatherv((void*)&(*begin), local_size, mpi_dt,
                     &result[0], &local_sizes[0], &recv_displs[0], mpi_dt,
                     0, comm);
     }
@@ -178,7 +178,7 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
         MPI_Gather(&local_size, 1, MPI_INT, NULL, 1, MPI_INT, 0, comm);
 
         // sent the actual data
-        MPI_Gatherv(&(*begin), local_size, mpi_dt,
+        MPI_Gatherv((void*)&(*begin), local_size, mpi_dt,
                     NULL, NULL, NULL, mpi_dt,
                     0, comm);
     }
@@ -199,7 +199,7 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
  *         (On the slave processors): An empty vector.
  */
 template<typename T>
-std::vector<T> gather_vectors(std::vector<T>& local_vec, MPI_Comm comm)
+std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm)
 {
     return gather_range(local_vec.begin(), local_vec.end(), comm);
 }
@@ -597,6 +597,51 @@ inline std::vector<int> all2allv_get_recv_counts(std::vector<int>& send_counts, 
     return recv_counts;
 }
 
+
+template<typename T, typename _TargetP>
+void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
+{
+    // get comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+    MPI_Datatype mpi_dt = get_mpi_dt<T>();
+    MPI_Type_commit(&mpi_dt);
+
+    // bucket input by their target processor
+    // TODO: in-place bucketing??
+    std::vector<int> send_counts(p, 0);
+    for (auto it = msgs.begin(); it != msgs.end(); ++it)
+    {
+        send_counts[target_p_fun(*it)]++;
+    }
+    std::vector<std::size_t> offset(send_counts.begin(), send_counts.end());
+    excl_prefix_sum(offset.begin(), offset.end());
+    std::vector<T> send_buffer;
+    if (msgs.size() > 0)
+        send_buffer.resize(msgs.size());
+    for (auto it = msgs.begin(); it != msgs.end(); ++it)
+    {
+        send_buffer[offset[target_p_fun(*it)]++] = *it;
+    }
+
+    // get all2all params
+    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    std::vector<int> send_displs = get_displacements(send_counts);
+    std::vector<int> recv_displs = get_displacements(recv_counts);
+
+    // resize messages to fit recv
+    std::size_t recv_size = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
+    msgs.clear();
+    msgs.shrink_to_fit();
+    msgs.resize(recv_size);
+    //msgs = std::vector<T>(recv_size);
+
+    // all2all
+    MPI_Alltoallv(&send_buffer[0], &send_counts[0], &send_displs[0], mpi_dt,
+                  &msgs[0], &recv_counts[0], &recv_displs[0], mpi_dt, comm);
+    // done, result is returned in vector of input messages
+}
 
 void wait_gdb_attach(int wait_rank, MPI_Comm comm)
 {

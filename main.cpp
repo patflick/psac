@@ -17,7 +17,6 @@ int main(int argc, char *argv[])
     // set up MPI
     MPI_Init(&argc, &argv);
 
-
     // get communicator size and my rank
     MPI_Comm comm = MPI_COMM_WORLD;
     int p, rank;
@@ -35,13 +34,14 @@ int main(int argc, char *argv[])
     // run the suffix array construction
     //sa_test_random_dna(comm, 20000000);
     //sa_test_random_dna(comm, 1379, true);
-    sa_test_random_dna(comm, 100000, true);
-    //if (argc < 2)
-    //{
-    //    std::cerr << "Usage ./test_sac <filename>" << std::endl;
-    //    exit(1);
-    //}
-    //sa_test_file(argv[1], comm);
+    //sa_test_random_dna(comm, 100000, true);
+    //sa_test_random_dna(comm, 100000, true);
+    if (argc < 2)
+    {
+        std::cerr << "Usage ./test_sac <filename>" << std::endl;
+        exit(1);
+    }
+    sa_test_file(argv[1], comm, 0);
 
     // finalize MPI
     MPI_Finalize();

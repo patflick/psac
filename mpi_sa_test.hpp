@@ -125,6 +125,60 @@ bool check_lcp(const std::string& str, const std::vector<index_t>& SA, const std
     return all_correct;
 }
 
+
+template <typename InputIterator, typename index_t, bool test_lcp>
+void gl_check_correct(const suffix_array<InputIterator, index_t, test_lcp>& sa, InputIterator str_begin, InputIterator str_end,  MPI_Comm comm)
+{
+    // gather all the data to rank 0
+    std::vector<index_t> global_SA = gather_vectors(sa.local_SA, comm);
+    std::vector<index_t> global_ISA = gather_vectors(sa.local_B, comm);
+    std::vector<index_t> global_LCP;
+    if (test_lcp)
+        global_LCP = gather_vectors(sa.local_LCP, comm);
+    // gather string
+    std::vector<char> global_str_vec = gather_range(str_begin, str_end, comm);
+    std::string global_str(global_str_vec.begin(), global_str_vec.end());
+
+    int rank;
+    MPI_Comm_rank(comm, &rank);
+
+    if (rank == 0)
+    {
+#if 0
+        std::cerr << "##################################################" << std::endl;
+        std::cerr << "#               Final SA and ISA                 #" << std::endl;
+        std::cerr << "##################################################" << std::endl;
+        std::cerr << "STR: " << global_str << std::endl;
+        std::cerr << "SA : "; print_vec(global_SA);
+        std::cerr << "ISA: "; print_vec(global_ISA);
+        std::cerr << "LCP: "; print_vec(global_LCP);
+#endif
+        if (!gl_check_correct_SA(global_SA, global_ISA, global_str))
+        {
+            std::cerr << "[ERROR] Test unsuccessful" << std::endl;
+            exit(1);
+        }
+        else
+        {
+            std::cerr << "[SUCCESS] Suffix Array is correct" << std::endl;
+        }
+
+        if (test_lcp)
+        {
+            if (!check_lcp(global_str, global_SA, global_ISA, global_LCP))
+            {
+                std::cerr << "[ERROR] Test unsuccessful" << std::endl;
+                exit(1);
+            }
+            else
+            {
+                std::cerr << "[SUCCESS] LCP Array is correct" << std::endl;
+            }
+        }
+    }
+}
+
+
 /**************************************
  *  test correctness of suffix array  *
  **************************************/
@@ -139,57 +193,15 @@ void sa_test_random_dna(MPI_Comm comm, std::size_t input_size, bool test_correct
     //std::string local_str = "missisippi";
     std::string local_str = rand_dna(input_size, rank);
 
-    /*
-    std::vector<std::size_t> local_SA;
-    std::vector<std::size_t> local_ISA;
-    std::vector<std::size_t> local_LCP;
-    */
-
     // construct local SA for input string
-//    sa_construction(local_str, local_SA, local_ISA, local_LCP, comm);
-    suffix_array<std::string::iterator, std::size_t> sa(local_str.begin(), local_str.end(), comm);
+    suffix_array<std::string::iterator, std::size_t, true> sa(local_str.begin(), local_str.end(), comm);
     sa.construct();
 
     // final SA and ISA
     if (test_correct)
     {
         // gather SA and ISA to local
-        std::vector<std::size_t> global_SA = gather_vectors(sa.local_SA, comm);
-        std::vector<std::size_t> global_ISA = gather_vectors(sa.local_B, comm);
-        std::vector<std::size_t> global_LCP = gather_vectors(sa.local_LCP, comm);
-        std::vector<char> global_str_vec = gather_range(local_str.begin(), local_str.end(), comm);
-        std::string global_str(global_str_vec.begin(), global_str_vec.end());
-        if (rank == 0)
-        {
-#if 0
-            std::cerr << "##################################################" << std::endl;
-            std::cerr << "#               Final SA and ISA                 #" << std::endl;
-            std::cerr << "##################################################" << std::endl;
-            std::cerr << "STR: " << global_str << std::endl;
-            std::cerr << "SA : "; print_vec(global_SA);
-            std::cerr << "ISA: "; print_vec(global_ISA);
-            std::cerr << "LCP: "; print_vec(global_LCP);
-#endif
-            if (!gl_check_correct_SA(global_SA, global_ISA, global_str))
-            {
-                std::cerr << "[ERROR] Test unsuccessful" << std::endl;
-                exit(1);
-            }
-            else
-            {
-                std::cerr << "[SUCCESS] Suffix Array is correct" << std::endl;
-            }
-
-            if (!check_lcp(global_str, global_SA, global_ISA, global_LCP))
-            {
-                std::cerr << "[ERROR] Test unsuccessful" << std::endl;
-                exit(1);
-            }
-            else
-            {
-                std::cerr << "[SUCCESS] LCP Array is correct" << std::endl;
-            }
-        }
+        gl_check_correct(sa, local_str.begin(), local_str.end(), comm);
     }
 }
 
@@ -211,48 +223,17 @@ void sa_test_file(const char* filename, MPI_Comm comm, std::size_t max_local_siz
 
     SAC_TEST_TIMER_END_SECTION("load-input");
 
-    /*
-    std::vector<std::size_t> local_SA;
-    std::vector<std::size_t> local_ISA;
-    std::vector<std::size_t> local_LCP;
-    */
-
     // construct local SA for input string
     //sa_construction(local_str, local_SA, local_ISA, local_LCP, comm);
-    suffix_array<std::string::iterator, std::size_t> sa(local_str.begin(), local_str.end(), comm);
+    suffix_array<std::string::iterator, std::size_t, false> sa(local_str.begin(), local_str.end(), comm);
     sa.construct();
 
     SAC_TEST_TIMER_END_SECTION("sac");
 
-    // final SA and ISA
     if (test_correct)
     {
-        // gather SA and ISA to local
-        std::vector<std::size_t> global_SA = gather_vectors(sa.local_SA, comm);
-        std::vector<std::size_t> global_ISA = gather_vectors(sa.local_B, comm);
-        std::vector<char> global_str_vec = gather_range(local_str.begin(), local_str.end(), comm);
-        std::string global_str(global_str_vec.begin(), global_str_vec.end());
-        if (rank == 0)
-        {
-#if 0
-            std::cerr << "##################################################" << std::endl;
-            std::cerr << "#               Final SA and ISA                 #" << std::endl;
-            std::cerr << "##################################################" << std::endl;
-            std::cerr << "STR: " << global_str << std::endl;
-            std::cerr << "SA : "; print_vec(global_SA);
-            std::cerr << "ISA: "; print_vec(global_ISA);
-#endif
-            // check if correct
-            if (!gl_check_correct_SA(global_SA, global_ISA, global_str))
-            {
-                std::cerr << "[ERROR] Test unsuccessful" << std::endl;
-                exit(1);
-            }
-            else
-            {
-                std::cerr << "[SUCCESS]" << std::endl;
-            }
-        }
+        // test the correctness of the SA and the LCP
+        gl_check_correct(sa, local_str.begin(), local_str.end(), comm);
     }
 }
 #endif // MPI_SA_TEST_HPP
