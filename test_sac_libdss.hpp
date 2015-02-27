@@ -13,7 +13,8 @@
 #include <mpi.h>
 
 #include <divsufsort.h>
-#include "mpi_sa_constr.hpp"
+//#include "mpi_sa_constr.hpp"
+#include "suffix_array.hpp"
 #include "timer.hpp"
 
 // TODO: put this elsewhere
@@ -46,20 +47,27 @@ bool divsufsort_sa_check(const std::string& str, const std::vector<saidx_t>& SA)
 bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
 {
     // run PSAC (same index type)
-    std::vector<saidx_t> psac_SA;
-    std::vector<saidx_t> psac_ISA;
+    //std::vector<saidx_t> psac_SA;
+    //std::vector<saidx_t> psac_ISA;
+    // distribute input
+    std::string local_str = scatter_string_block_decomp(str, comm);
     timer t;
     double start = t.get_ms();
-    sa_construction_gl<saidx_t>(str, psac_SA, psac_ISA, comm);
+    //sa_construction_gl<saidx_t>(str, psac_SA, psac_ISA, comm);
+    suffix_array<std::string::iterator, saidx_t, false> sa(local_str.begin(), local_str.end(), comm);
+    sa.construct(true);
+    //sa.construct_fast();
     double end = t.get_ms() - start;
-    std::cerr << "PSAC Time: " << end << " ms" << std::endl;
 
     // get rank
     int rank;
     MPI_Comm_rank(comm, &rank);
 
+    std::vector<saidx_t> glSA = gather_vectors(sa.local_SA, comm);
+
     if (rank == 0)
     {
+        std::cerr << "PSAC Time: " << end << " ms" << std::endl;
         // run libdivsufsort
         std::vector<saidx_t> dss_SA;
         double start = t.get_ms();
@@ -72,7 +80,7 @@ bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
         //std::cerr << "DSS: "; print_range(dss_SA.begin(), dss_SA.end());
         //std::cerr << "PSAC:"; print_range(psac_SA.begin(), psac_SA.end());
 
-        if(!divsufsort_sa_check(str, psac_SA))
+        if(!divsufsort_sa_check(str, glSA))
         {
             std::cerr << "ERROR: wrong suffix array from PSAC" << std::endl;
             return false;

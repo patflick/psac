@@ -198,7 +198,7 @@ std::pair<unsigned int, unsigned int> initial_bucketing(const std::size_t n, con
     unsigned int k = alphabet_chars_per_word<index_t>(l);
 
     // TODO: during current debugging:
-    k = 1;
+    //k = 1;
     // if the input is too small for `k`, choose a smaller `k`
     if (k > min_local_size)
     {
@@ -1628,8 +1628,8 @@ void sa_construction_impl(std::size_t n, const std::string& local_str,
          *************/
         // by bucketing to correct target processor using the `SA` array
         // // TODO by number of unresolved elements rather than buckets!!
-        if(false)
-        //if (unfinished_buckets < n/10)
+        //if(false)
+        if (unfinished_buckets < n/10)
         {
             // prepare for bucket chaising (needs SA, and bucket arrays in both
             // SA and ISA order)

@@ -48,7 +48,7 @@ public:
 
     ~rangebuf()
     {
-        delete this->buf_;
+        delete [] this->buf_;
     }
 protected:
     size_t size_;
