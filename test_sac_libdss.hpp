@@ -17,16 +17,6 @@
 #include "suffix_array.hpp"
 #include "timer.hpp"
 
-// TODO: put this elsewhere
-/*
-template<typename _Iterator>
-void print_range(_Iterator begin, _Iterator end)
-{
-    while (begin != end)
-        std::cerr << *(begin++) << " ";
-    std::cerr << std::endl;
-}
-*/
 
 // C++ interface for libdivsufsort
 void divsufsort_sa_construction(const std::string& str, std::vector<saidx_t>& SA)

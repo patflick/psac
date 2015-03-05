@@ -49,3 +49,4 @@ install_manifest.txt
 .*.kate-swp
 .swp.*
 
+.kdev_include_paths
