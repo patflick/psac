@@ -4,7 +4,7 @@
 #include <string>
 
 #include "test_sac_libdss.hpp"
-//#include "mpi_sa_test.hpp"
+#include "mpi_sa_test.hpp"
 
 
 void my_mpi_errorhandler(MPI_Comm* comm, int* errorcode, ...)
@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
     // set custom error handler (for debugging with working stack-trace on gdb)
     MPI_Errhandler errhandler;
     MPI_Errhandler_create(&my_mpi_errorhandler, &errhandler);
-    MPI_Errhandler_set(comm, errhandler);
+    //MPI_Errhandler_set(comm, errhandler);
 
     // test PSAC against libdivsufsort
     //std::string str = "mississippi";
@@ -43,6 +43,7 @@ int main(int argc, char *argv[])
     }
     */
     std::string str;
+    //if (false)
     if (argc >= 2)
     {
         std::ifstream t(argv[1]);
@@ -53,7 +54,9 @@ int main(int argc, char *argv[])
     else
     {
         std::cerr << "Warning: no input file provided, testing with random DNA string." << std::endl;
-//        str = rand_dna(10000000,0);
+    //    long n = atol(argv[1]);
+        long n = 100;
+        str = rand_dna(n,0);
     }
     if (!test_compare_divsufsort_psac(str,comm))
     {

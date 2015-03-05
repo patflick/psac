@@ -395,7 +395,7 @@ sample_block_decomp(_Iterator begin, _Iterator end, _Compare comp, int s, MPI_Co
 
 
 template<typename _Iterator, typename _Compare, bool _Stable = false>
-void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MPI_COMM_WORLD, bool _AssumeBlockDecomp = true)
+void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_dt, MPI_Comm comm = MPI_COMM_WORLD, bool _AssumeBlockDecomp = true)
 {
     // get value type of underlying data
     typedef typename std::iterator_traits<_Iterator>::value_type value_type;
@@ -424,9 +424,6 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     std::cerr << "IN="; print_range(begin, end);
     */
 
-    // get MPI datatype
-    MPI_Datatype mpi_dt = get_mpi_dt<value_type>();
-    MPI_Type_commit(&mpi_dt);
 
     // number of samples
     int s = p-1;
@@ -583,6 +580,18 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     SS_TIMER_END_SECTION("fix_partition");
 }
 
+template<typename _Iterator, typename _Compare, bool _Stable = false>
+void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MPI_COMM_WORLD, bool _AssumeBlockDecomp = true)
+{
+    // get value type of underlying data
+    typedef typename std::iterator_traits<_Iterator>::value_type value_type;
+
+    // get MPI datatype
+    MPI_Datatype mpi_dt = get_mpi_dt<value_type>();
+    MPI_Type_commit(&mpi_dt);
+
+    samplesort(begin, end, comp, mpi_dt, comm, _AssumeBlockDecomp);
+}
 
 #endif // MPI_SAMPLESORT_HPP
 

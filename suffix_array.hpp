@@ -10,6 +10,8 @@
 #include "mpi_samplesort.hpp"
 #include "par_rmq.hpp"
 
+#include "prettyprint.hpp"
+
 // TODO: move these macros to somewhere else
 /*********************************************************************
  *                 macros for debugging with distributed vectors     *
@@ -111,6 +113,7 @@ MPI_Datatype get_mpi_dt<TwoBSA<unsigned int>>()
     MPI_Type_contiguous(3, element_t, &dt);
     return dt;
 }
+
 template<>
 MPI_Datatype get_mpi_dt<TwoBSA<int>>()
 {
@@ -146,6 +149,30 @@ MPI_Datatype get_mpi_dt<mypair<std::size_t> >()
     MPI_Datatype dt;
     MPI_Datatype element_t = get_mpi_dt<std::size_t>();
     MPI_Type_contiguous(2, element_t, &dt);
+    return dt;
+}
+template<>
+MPI_Datatype get_mpi_dt<std::array<unsigned int, 3> >()
+{
+    MPI_Datatype dt;
+    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
+    MPI_Type_contiguous(3, element_t, &dt);
+    return dt;
+}
+template<>
+MPI_Datatype get_mpi_dt<std::array<std::size_t, 3> >()
+{
+    MPI_Datatype dt;
+    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
+    MPI_Type_contiguous(3, element_t, &dt);
+    return dt;
+}
+template<>
+MPI_Datatype get_mpi_dt<std::array<int, 3> >()
+{
+    MPI_Datatype dt;
+    MPI_Datatype element_t = get_mpi_dt<int>();
+    MPI_Type_contiguous(3, element_t, &dt);
     return dt;
 }
 template<>
@@ -408,6 +435,189 @@ void construct(bool fast_resolval = true) {
     SAC_TIMER_END_SECTION("fix-isa");
 }
 
+template <std::size_t L = 2>
+void construct_arr(bool fast_resolval = true) {
+    SAC_TIMER_START();
+
+    /***********************
+     *  Initial bucketing  *
+     ***********************/
+
+    // create initial k-mers and use these as the initial bucket numbers
+    // for each character position
+    // `k` depends on the alphabet size and the word size of each suffix array
+    // element. `k` is choosen to maximize the number of alphabet characters
+    // that fit into one machine word
+    unsigned int k;
+    unsigned int bits_per_char;
+    std::tie(k, bits_per_char) = initial_bucketing();
+    DEBUG_STAGE_VEC("after initial bucketing", local_B);
+#if 0
+    std::cerr << "========  After initial bucketing  ========" << std::endl;
+    std::cerr << "On processor rank = " << rank << std::endl;
+    std::cerr << "B : "; print_vec(local_B);
+#endif
+
+    SAC_TIMER_END_SECTION("initial-bucketing");
+
+    // init local_SA
+    if (local_SA.size() != local_B.size())
+    {
+        local_SA.resize(local_B.size());
+    }
+
+    std::vector<index_t> local_B_SA;
+    std::size_t unfinished_buckets = 1<<k;
+    std::size_t shift_by;
+
+    /*******************************
+     *  Prefix Doubling main loop  *
+     *******************************/
+    for (shift_by = k; shift_by < n; shift_by <<= 1)
+    {
+        SAC_TIMER_LOOP_START();
+
+        /*****************
+         *  fill tuples  *
+         *****************/
+        std::vector<std::array<index_t, L+1> > tuples(local_size);
+        std::size_t offset = part.excl_prefix_size();
+        for (std::size_t i = 0; i < local_size; ++i)
+        {
+            tuples[i][0] = i + offset;
+            tuples[i][1] = local_B[i];
+        }
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "arr-tupelize");
+
+        /**************************************************
+         *  Pairing buckets by shifting `shift_by` = 2^k  *
+         **************************************************/
+        // shift the B1 buckets by 2^k to the left => equals B2
+        shift_buckets<L>(shift_by, tuples);
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets");
+
+//        std::cout << tuples << std::endl;
+
+        /*************
+         *  ISA->SA  *
+         *************/
+        // by using sample sort on tuples (B1,B2)
+        sort_array_tuples<L>(tuples);
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "ISA-to-SA");
+
+//        std::cout << "After sort:" << std::endl;
+//        std::cout << tuples << std::endl;
+
+        /****************
+         *  Update LCP  *
+         ****************/
+        // if this is the first iteration: create LCP, otherwise update
+        // TODO: not yet implemented for LCP
+        /*
+        if (_CONSTRUCT_LCP)
+        {
+            if (shift_by == k) {
+                initial_kmer_lcp(k, bits_per_char, local_B2);
+                SAC_TIMER_END_LOOP_SECTION(shift_by, "init-lcp");
+            } else {
+                resolve_next_lcp(shift_by, local_B2);
+                SAC_TIMER_END_LOOP_SECTION(shift_by, "update-lcp");
+            }
+            DEBUG_STAGE_VEC("LCP update", local_LCP);
+        }
+        */
+
+        /*******************************
+         *  Assign new bucket numbers  *
+         *******************************/
+        unfinished_buckets = rebucket_arr<L>(tuples, true);
+        if (rank == 0)
+            std::cerr << "iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << std::endl;
+        DEBUG_STAGE_VEC("after rebucket", local_B);
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "rebucket");
+
+//        std::cout << "After rebucket:" << std::endl;
+//        std::cout << tuples << std::endl;
+//        std::cout << local_B << std::endl;
+//
+        /**************************************
+         *  Reset local_SA array from tuples  *
+         **************************************/
+        for (std::size_t i = 0; i < local_size; ++i)
+        {
+            local_SA[i] = tuples[i][0];
+            //local_B[i] = tuples[i][1];
+        }
+
+        // deallocate all memory
+        tuples.clear();
+        tuples.shrink_to_fit();
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "arr-untupelize");
+
+
+        /*************
+         *  SA->ISA  *
+         *************/
+        // by bucketing to correct target processor using the `SA` array
+        // // TODO by number of unresolved elements rather than buckets!!
+        if (true)
+        //if (fast_resolval && unfinished_buckets < n/10)
+        {
+            // prepare for bucket chaising (needs SA, and bucket arrays in both
+            // SA and ISA order)
+            std::vector<index_t> cpy_SA(local_SA);
+            local_B_SA = local_B; // copy
+            reorder_sa_to_isa(cpy_SA);
+
+//            std::cout << "after reorder ISA" << std::endl;
+//            std::cout << local_B << std::endl;
+//            std::cout << local_B_SA << std::endl;
+//            std::cout << cpy_SA << std::endl;
+
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
+            break;
+        }
+        else if ((shift_by << 1) >= n || unfinished_buckets == 0)
+        {
+            // if last iteration, use copy of local_SA for reorder and keep
+            // original SA
+            std::vector<index_t> cpy_SA(local_SA);
+            reorder_sa_to_isa(cpy_SA);
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
+        }
+        else
+        {
+            reorder_sa_to_isa();
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
+        }
+        DEBUG_STAGE_VEC2("after reorder SA->ISA", local_B, local_SA);
+
+        // end iteratior
+        SAC_TIMER_END_SECTION("sac-iteration");
+
+        // check for termination condition
+//        if (unfinished_buckets == 0)
+//            break;
+    }
+
+//>    if (unfinished_buckets > 0)
+    if (true)
+    {
+        if (rank == 0)
+            std::cerr << "Starting Bucket chasing algorithm" << std::endl;
+        construct_msgs(local_B_SA, local_B, shift_by);
+    }
+    SAC_TIMER_END_SECTION("construct-msgs");
+
+    // now local_SA is actual block decomposed SA and local_B is actual ISA with an offset of one
+    for (std::size_t i = 0; i < local_B.size(); ++i)
+    {
+        // the buffer indeces are `1` based indeces, but the ISA should be
+        // `0` based indeces
+        local_B[i] -= 1;
+    }
+    SAC_TIMER_END_SECTION("fix-isa");
+}
 
 void construct_fast() {
     SAC_TIMER_START();
@@ -494,7 +704,7 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     unsigned int k = alphabet_chars_per_word<index_t>(l);
 
     // TODO: during current debugging:
-    //k = 1;
+//    k = 2;
     // if the input is too small for `k`, choose a smaller `k`
     if (k > min_local_size)
     {
@@ -704,6 +914,138 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2)
     MPI_Waitall(n_irecvs, recv_reqs, MPI_STATUS_IGNORE);
 }
 
+// shifting with arrays (custom data types)
+template <std::size_t L = 2>
+void shift_buckets(std::size_t k, std::vector<std::array<index_t, 1+L> >& tuples)
+{
+    // get # elements to the left
+    std::size_t prev_size = part.excl_prefix_size();
+//    assert(local_size == local_B.size());
+
+    for (std::size_t dist = k; dist < L*k; dist += k)
+    {
+        // start receiving into second bucket and then continue with greater
+        int bi = 2;
+
+        MPI_Request recv_reqs[2];
+        int n_irecvs = 0;
+        MPI_Datatype dts[4];
+        int n_dts = 0;
+        // receive elements from the right
+        if (prev_size + dist < n)
+        {
+            std::size_t right_first_gl_idx = prev_size + dist;
+            int p1 = part.target_processor(right_first_gl_idx);
+
+            std::size_t p1_gl_end = part.prefix_size(p1);
+            std::size_t p1_recv_cnt = p1_gl_end - right_first_gl_idx;
+
+            if (p1 != rank)
+            {
+                // only receive if the source is not myself (i.e., `rank`)
+                // [otherwise results are directly written instead of MPI_Sended]
+                assert(p1_recv_cnt < std::numeric_limits<int>::max());
+                int recv_cnt = p1_recv_cnt;
+                MPI_Type_vector(recv_cnt,1,L+1,mpi_index_t,&dts[n_dts]);
+                MPI_Type_commit(&dts[n_dts]);
+                MPI_Irecv(&tuples[0][bi],1, dts[n_dts], p1,
+                          PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
+                n_dts++;
+            }
+
+            if (p1_recv_cnt < local_size && p1 != p-1)
+            {
+                // also receive from one more processor
+                int p2 = p1+1;
+                // since p2 has at least local_size - 1 elements and at least
+                // one element came from p1, we can assume that the receive count
+                // is our local size minus the already received elements
+                std::size_t p2_recv_cnt = local_size - p1_recv_cnt;
+
+                assert(p2_recv_cnt < std::numeric_limits<int>::max());
+                int recv_cnt = p2_recv_cnt;
+                // send to `p1` (which is necessarily different from `rank`)
+                MPI_Type_vector(recv_cnt,1,L+1,mpi_index_t,&dts[n_dts]);
+                MPI_Type_commit(&dts[n_dts]);
+                MPI_Irecv(&tuples[p1_recv_cnt][bi],1, dts[n_dts], p2,
+                          PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
+                n_dts++;
+            }
+        }
+
+        // send elements to the left (split to at most 2 target processors)
+        if (prev_size + local_size - 1 >= dist)
+        {
+            int p1 = -1;
+            if (prev_size >= dist)
+            {
+                std::size_t first_gl_idx = prev_size - dist;
+                p1 = part.target_processor(first_gl_idx);
+            }
+            std::size_t last_gl_idx = prev_size + local_size - 1 - dist;
+            int p2 = part.target_processor(last_gl_idx);
+
+            std::size_t local_split;
+            if (p1 != p2)
+            {
+                // local start index of area for second processor
+                if (p1 >= 0)
+                {
+                    local_split = part.prefix_size(p1) + dist - prev_size;
+                    // send to first processor
+                    assert(p1 != rank);
+                    MPI_Type_vector(local_split,1,L+1,mpi_index_t,&dts[n_dts]);
+                    MPI_Type_commit(&dts[n_dts]);
+                    MPI_Send(&tuples[0][1], 1,
+                             dts[n_dts], p1, PSAC_TAG_SHIFT, comm);
+                    n_dts++;
+                }
+                else
+                {
+                    // p1 doesn't exist, then there is no prefix to add
+                    local_split = dist - prev_size;
+                }
+            }
+            else
+            {
+                // only one target processor
+                local_split = 0;
+            }
+
+            if (p2 != rank)
+            {
+                MPI_Type_vector(local_size - local_split,1,L+1,mpi_index_t,&dts[n_dts]);
+                MPI_Type_commit(&dts[n_dts]);
+                MPI_Send(&tuples[local_split][1], 1,
+                         dts[n_dts], p2, PSAC_TAG_SHIFT, comm);
+                n_dts++;
+            }
+            else
+            {
+                // in this case the split should be exactly at `dist`
+                assert(local_split == dist);
+                // locally reassign
+                for (std::size_t i = local_split; i < local_size; ++i)
+                {
+                    tuples[i-local_split][bi] = tuples[i][1];
+                }
+            }
+        }
+
+        // wait for successful receive:
+        MPI_Waitall(n_irecvs, recv_reqs, MPI_STATUS_IGNORE);
+
+        // clean up data types from this round
+        for (int i = 0; i < n_dts; ++i)
+        {
+            MPI_Type_free(&dts[i]);
+        }
+
+        // next target bucket
+        bi++;
+    }
+}
+
 
 /*********************************************************************
  *                     ISA -> SA (sort buckets)                      *
@@ -755,6 +1097,39 @@ void isa_2b_to_sa(std::vector<index_t>& local_B2)
         local_SA[i] = tuple_vec[i].SA;
     }
     SAC_TIMER_END_SECTION("isa2sa_untupleize");
+}
+
+template <std::size_t L>
+struct ArrayCmp
+{
+    bool operator()(const std::array<index_t, L+1>& x,
+                    const std::array<index_t, L+1>& y)
+    {
+        for (unsigned int i = 1; i < L+1; ++i)
+        {
+            if (x[i] != y[i])
+                return x[i] < y[i];
+        }
+        return false;
+    }
+};
+
+template <std::size_t L>
+// TODO make sure the tuples[0] are fille diwth the global offset SA
+void sort_array_tuples(std::vector<std::array<index_t, L+1> >& tuples)
+{
+    assert(tuples.size() == local_size);
+    SAC_TIMER_START();
+
+    MPI_Datatype arr_dt;
+    MPI_Type_contiguous(L+1, mpi_index_t, &arr_dt);
+    MPI_Type_commit(&arr_dt);
+
+    ArrayCmp<L> cmp;
+    // parallel, distributed sample-sorting of tuples (B1, B2, SA)
+    samplesort(tuples.begin(), tuples.end(), cmp, arr_dt);
+
+    SAC_TIMER_END_SECTION("isa2sa_samplesort");
 }
 
 void kmer_sorting()
@@ -1013,6 +1388,155 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished)
                       mpi_index_t, MPI_SUM, comm);
         result = total_unfinished;
     }
+
+    /*
+     * Global prefix MAX:
+     *  - such that for every item we have it's bucket number, where the
+     *    bucket number is equal to the first index in the bucket
+     *    this way buckets who are finished, will never receive a new
+     *    number.
+     */
+    // 1.) find the max in the local sequence. since the max is the last index
+    //     of a bucket, this should be somewhere at the end -> start scanning
+    //     from the end
+    auto rev_it = local_B.rbegin();
+    std::size_t local_max = 0;
+    while (rev_it != local_B.rend() && (local_max = *rev_it) == 0)
+        ++rev_it;
+
+    // 2.) distributed scan with max() to get starting max for each sequence
+    std::size_t pre_max;
+    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    MPI_Exscan(&local_max, &pre_max, 1, mpi_size_t, MPI_MAX, comm);
+    if (rank == 0)
+        pre_max = 0;
+
+    // 3.) linear scan and assign bucket numbers
+    for (std::size_t i = 0; i < local_B.size(); ++i)
+    {
+        if (local_B[i] == 0)
+            local_B[i] = pre_max;
+        else
+            pre_max = local_B[i];
+        assert(local_B[i] <= i+prefix+1);
+        // first element of bucket has id of it's own global index:
+        assert(i == 0 || (local_B[i-1] ==  local_B[i] || local_B[i] == i+prefix+1));
+    }
+
+    return result;
+}
+// assumed sorted order (globally) by tuple (B1[i], B2[i])
+// this reassigns new, unique bucket numbers in {1,...,n} globally
+template <std::size_t L>
+std::size_t rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool count_unfinished)
+{
+    /*
+     * NOTE: buckets are indexed by the global index of the first element in
+     *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
+     *       reserved for out-of-bounds)
+     */
+
+    // init result
+    std::size_t result = 0;
+
+    /*
+     * send right-most element to one processor to the right
+     * so that that processor can determine whether the same bucket continues
+     * or a new bucket starts with it's first element
+     */
+    // TODO: replace with shift operation
+    MPI_Request recv_req;
+    index_t prevRight[L];
+    if (rank > 0) // if not last processor
+    {
+        MPI_Irecv(prevRight, L, mpi_index_t, rank-1, PSAC_TAG_EDGE_KMER,
+                  comm, &recv_req);
+    }
+    if (rank < p-1) // if not first processor
+    {
+        // send my most right element to the right
+        index_t myRight[L];
+        std::copy(&tuples.back()[1], &tuples.back()[1]+L, myRight);
+        MPI_Send(myRight, L, mpi_index_t, rank+1, PSAC_TAG_EDGE_KMER, comm);
+    }
+    if (rank > 0)
+    {
+        // wait for the async receive to finish
+        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+    }
+
+    // get my global starting index
+    std::size_t prefix = part.excl_prefix_size();
+
+    /*
+     * assign local zero or one, depending on whether the bucket is the same
+     * as the previous one
+     */
+    bool firstDiff = false;
+    if (rank == 0)
+    {
+        firstDiff = true;
+    }
+    else if (!std::equal(prevRight, prevRight+L, &tuples[0][1]))
+    {
+        firstDiff = true;
+    }
+
+    // set local_B1 to `1` if previous entry is different:
+    // i.e., mark start of buckets
+    bool nextDiff = firstDiff;
+    for (std::size_t i = 0; i+1 < local_B.size(); ++i)
+    {
+        bool setOne = nextDiff;
+        nextDiff = !std::equal(&tuples[i][1], &tuples[i][1]+L, &tuples[i+1][1]);
+        local_B[i] = setOne ? prefix+i+1 : 0;
+    }
+
+    local_B.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
+
+// TODO: implement the unfinished counting for arrays
+#if 0
+    // count unfinished buckets
+    if (count_unfinished)
+    {
+        // mark 1->0 transitions with 1, if i am the zero and previous is 1
+        // (i.e. identical)
+        // (i.e. `i` is the second equal element in a bucket)
+        // which means counting unfinished buckets, then allreduce
+        index_t local_unfinished_buckets;
+        index_t prev_right;
+        // TODO: replace by a common shift communcation function!
+        if (rank > 0) // if not last processor
+        {
+            MPI_Irecv(&prev_right, 1, mpi_index_t, rank-1, PSAC_TAG_EDGE_KMER,
+                      comm, &recv_req);
+        }
+        if (rank < p-1) // if not first processor
+        {
+            // send my most right element to the right
+            MPI_Send(&local_B.back(), 1, mpi_index_t, rank+1, PSAC_TAG_EDGE_KMER, comm);
+        }
+        if (rank > 0)
+        {
+            // wait for the async receive to finish
+            MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+        }
+        if (rank == 0)
+            local_unfinished_buckets = 0;
+        else
+            local_unfinished_buckets = (prev_right > 0 && local_B[0] == 0) ? 1 : 0;
+        for (std::size_t i = 1; i < local_B.size(); ++i)
+        {
+            if(local_B[i-1] > 0 && local_B[i] == 0)
+                ++local_unfinished_buckets;
+        }
+
+        index_t total_unfinished;
+        MPI_Allreduce(&local_unfinished_buckets, &total_unfinished, 1,
+                      mpi_index_t, MPI_SUM, comm);
+        result = total_unfinished;
+    }
+#endif
 
     /*
      * Global prefix MAX:
@@ -1374,7 +1898,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 
     bool right_bucket_crosses_proc = (rank < p-1 && local_B.back() == right_B);
 
-    for (std::size_t shift_by = dist<<1; shift_by < n; shift_by <<= 1)
+    for (index_t shift_by = dist<<1; shift_by < n; shift_by <<= 1)
     {
         /*
          * 1.) on i: send tuple (`to:` Sa[i]+2^k, `from:` i)
