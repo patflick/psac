@@ -2,6 +2,8 @@
 #include <iostream>
 #include <tuple>
 
+#include "prettyprint.hpp"
+
 
 #include "mpi_types.hpp"
 
@@ -18,26 +20,49 @@ int main(int argc, char *argv[])
 
 
     //typedef std::tuple<double, int, char> t;
-    typedef std::tuple<int, int, int, int, int> t;
+    typedef std::tuple<char, int, int, char, double, int, char, int, char> t;
 
 
+    struct X
+    {
+        int x;
+        char y;
+        int x2;
+        char z;
+    };
 
-    // FIXME: somehow it is not working for the first two values 
     if (rank == 0)
     {
-        mpi::datatype<t> mpi_type;
+        mxx::datatype<t> mpi_type;
         MPI_Datatype mpi_dt = mpi_type.type();
-        t x = std::make_tuple(0, 1, -2, 3, -4);
-        MPI_Bcast(&x, 1, mpi_dt, 0, comm);
+        t x[2];
+        x[0]  = std::make_tuple('x',0,  -2, 'y', -3.333, -42, 'P', 1337, '+');
+        x[1]  = std::make_tuple('h',13, -13, 'i', -3.141, -41, 'Q', 1444, '-');
+        MPI_Bcast(x, 2, mpi_dt, 0, comm);
+        std::cout << "addresses: " << (void*) &std::get<0>(x[0]) << ", "
+                                   << (void*) &std::get<1>(x[0]) << ", "
+                                   << (void*) &std::get<2>(x[0]) << ", "
+                                   << (void*) &std::get<3>(x[0]) << ", "
+                                   << (void*) &std::get<4>(x[0]) << ", "
+                                   << (void*) &std::get<5>(x[0]) << ", "
+                                   << (void*) &std::get<6>(x[0]) << ", "
+                                   << (void*) &std::get<7>(x[0]) << ", "
+                                   << (void*) &std::get<8>(x[0]) << std::endl;
+        X x2;
+        std::cout << "addresses: " << (void*) &x2.x << ", "
+                                   << (void*) &x2.y << ", "
+                                   << (void*) &x2.x2 << ", "
+                                   << (void*) &x2.z << std::endl;
     }
     else
     {
-        mpi::datatype<t> mpi_type;
+        mxx::datatype<t> mpi_type;
         MPI_Datatype mpi_dt = mpi_type.type();
-        t x;
-        MPI_Bcast(&x, 1, mpi_dt, 0, comm);
+        t x[2];
+        MPI_Bcast(x, 2, mpi_dt, 0, comm);
         std::cout << "On processor with rank = " << rank << std::endl;
-        std::cout << "Received tuple (" << std::get<0>(x) << " " << std::get<1>(x) << " " << std::get<2>(x) << ")" << std::endl;
+        std::cout << "Received tuple " << x[0] << std::endl;
+        std::cout << "Received tuple " << x[1] << std::endl;
     }
 
     // finalize MPI

@@ -19,7 +19,7 @@
 #include <numeric>
 
 
-namespace mpi
+namespace mxx
 {
 
 /*
@@ -112,6 +112,13 @@ public:
 
         // create type
         MPI_Datatype types[2] = {_base_type1.type(), _base_type2.type()};
+        // in case elements are represented the opposite way around in
+        // the pair (gcc does so), then swap them
+        if (displs[0] > displs[1])
+        {
+            std::swap(displs[0], displs[1]);
+            std::swap(types[0], types[1]);
+        }
         MPI_Type_create_struct(2, blocklen, displs, types, &_type);
         MPI_Type_commit(&_type);
     }
@@ -128,74 +135,40 @@ private:
 };
 
 
-template <std::size_t I, std::size_t N> struct fill_displacements;
-
-template <class ...Types>
-struct tuple_displacements
-{
-  typedef std::tuple<Types...> tuple_t;
-  static constexpr std::size_t size = std::tuple_size<tuple_t>::value;
-  public:
-  std::array<MPI_Aint, size> displs;
-  tuple_t tuple;
-
-  void fill() {
-    fill_displacements<size, size>::fill(*this);
-  }
-
-
-};
-
+// fill in MPI types
 template <std::size_t N, std::size_t I>
-struct fill_displacements
+struct tuple_members
 {
     template<class ...Types>
-    static void fill(std::array<MPI_Aint, N>& displs, std::tuple<Types...>& tuple)
+    static void get(std::map<MPI_Aint, MPI_Datatype>& members, std::tuple<datatype<Types>...>& datatypes)
     {
+        // init tuple to get measurement offsets
+        std::tuple<Types...> tuple;
+
+        // get member displacement
         MPI_Aint t_adr, elem_adr;
         MPI_Get_address(&tuple, &t_adr);
         MPI_Get_address(&std::get<N-I>(tuple), &elem_adr);
         // byte offset from beginning of tuple
-        displs[N-I] = elem_adr - t_adr;
-
-        // TODO remove output
-        std::cout << "displs " << N-I << " " << displs[N-I] << std::endl;
-        // recursively (during compile time) call same function
-        fill_displacements<N,I-1>::fill(displs, tuple);
-    }
-};
-
-// Base case of meta-recursion
-template <std::size_t N>
-struct fill_displacements<N, 0>
-{
-    template<class ...Types>
-    static void fill(std::array<MPI_Aint, N>&, std::tuple<Types...>&){
-    }
-};
-
-// fill in MPI types
-template <std::size_t N, std::size_t I>
-struct fill_mpi_types
-{
-    template<class ...Types>
-    static void fill(std::tuple<Types...>& datatypes,
-                     std::array<MPI_Datatype, N>& mpi_datatypes)
-    {
+        MPI_Aint displ = elem_adr - t_adr;
+        std::cout << "displs " << N-I << " " << displ << std::endl;
         // fill in type
-        mpi_datatypes[N-I] = std::get<N-I>(datatypes).type();
-        // recursively (during compile time) call same function
-        fill_mpi_types<N,I-1>::fill(datatypes, mpi_datatypes);
+        MPI_Datatype mpi_dt = std::get<N-I>(datatypes).type();
 
+        // add to map
+        members[displ] = mpi_dt;
+
+        // recursively (during compile time) call same function
+        tuple_members<N,I-1>::get(members, datatypes);
     }
 };
 
 // Base case of meta-recursion
 template <std::size_t N>
-struct fill_mpi_types<N, 0>
+struct tuple_members<N, 0>
 {
     template<class ...Types>
-    static void fill(std::tuple<Types...>&, std::array<MPI_Datatype, N>&) {
+    static void get(std::map<MPI_Aint, MPI_Datatype>&, std::tuple<datatype<Types>...>&) {
     }
 };
 
@@ -210,21 +183,46 @@ private:
   static constexpr std::size_t size = std::tuple_size<tuple_t>::value;
 public:
     datatype() : _base_types() {
+        // fill in the block lengths to 1 each
         int blocklen[size];
-        // fill in the data for the tuple using meta-recursion
-        std::array<MPI_Aint, size> displs;
-        tuple_t t;
-        fill_displacements<size, size>::fill(displs, t);
-        std::array<MPI_Datatype, size> types;
-        fill_mpi_types<size,size>::fill(_base_types, types);
         for (std::size_t i = 0; i < size; ++i)
         {
             blocklen[i] = 1;
         }
 
+        // get the member displacement and type info for the tuple using
+        // meta-recursion
+        std::map<MPI_Aint, MPI_Datatype> members;
+        tuple_members<size,size>::get(members, _base_types);
+
+
+        // fill displacements and types according to in-memory order in tuple
+        // NOTE: the in-memory order is not necessarily the same as the order
+        // of types as accessed by std::get
+        // For gcc the order is actually reversed!
+        // Hence, we use a std::map to collect the order information prior
+        // to creating the displacement and type arrays
+        std::array<MPI_Aint, size> displs;
+        std::array<MPI_Datatype, size> mpitypes;
+        std::size_t i = 0;
+        for (std::map<MPI_Aint, MPI_Datatype>::iterator it = members.begin();
+             it != members.end(); ++it) {
+            displs[i] = it->first;
+            mpitypes[i] = it->second;
+            ++i;
+        }
+
         // create type
-        MPI_Type_create_struct(size, blocklen, &displs[0], &types[0], &_type);
+        MPI_Type_create_struct(size, blocklen, &displs[0], &mpitypes[0], &_type);
         MPI_Type_commit(&_type);
+
+        // check extend with sizeof()
+        // TODO: check arrays of elements to make sure that upper and lowerbound
+        //       are set correctly (use MPI_Type_create_resized)
+        MPI_Aint lb, extent;
+        MPI_Type_get_extent(_type, &lb, &extent);
+        if (extent != sizeof(tuple_t))
+            throw std::runtime_error("MPI_Datatype extend does not match the sizeof the tuple");
     }
 
     const MPI_Datatype& type() const {
