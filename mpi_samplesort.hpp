@@ -39,15 +39,6 @@
 #define SS_TIMER_END_SECTION(str)
 #endif
 
-// TODO put this function elsewhere [io utils!?]
-template<typename _Iterator>
-void print_range(_Iterator begin, _Iterator end)
-{
-    while (begin != end)
-        std::cerr << *(begin++) << " ";
-    std::cerr << std::endl;
-}
-
 /**
  * @brief Fixes an unequal distribution into a block decomposition
  */
@@ -62,8 +53,9 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
-    // get MPI Datatype for the underlying type
-    MPI_Datatype mpi_dt = get_mpi_dt<value_type>();
+    // get MPI type
+    mxx::datatype<value_type> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // get local size
     std::size_t local_size = std::distance(begin, end);
@@ -73,7 +65,10 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     // class
     std::size_t prefix;
     std::size_t total_size;
-    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    // get MPI type
+    mxx::datatype<std::size_t> size_dt;
+    MPI_Datatype mpi_size_t = size_dt.type();
+
     MPI_Allreduce(&local_size, &total_size, 1, mpi_size_t, MPI_SUM, comm);
     MPI_Exscan(&local_size, &prefix, 1, mpi_size_t, MPI_SUM, comm);
     if (rank == 0)
@@ -119,8 +114,9 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
-    // get MPI Datatype for the underlying type
-    MPI_Datatype mpi_dt = get_mpi_dt<value_type>();
+    // get MPI type
+    mxx::datatype<value_type> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // get local size
     std::size_t local_size = std::distance(begin, end);
@@ -128,7 +124,10 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     // get prefix sum of size and total size
     std::size_t prefix;
     std::size_t total_size;
-    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    // get MPI type
+    mxx::datatype<std::size_t> size_dt;
+    MPI_Datatype mpi_size_t = size_dt.type();
+
     MPI_Allreduce(&local_size, &total_size, 1, mpi_size_t, MPI_SUM, comm);
     MPI_Exscan(&local_size, &prefix, 1, mpi_size_t, MPI_SUM, comm);
     if (rank == 0)
@@ -200,8 +199,9 @@ bool is_sorted(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MP
     if (p == 1)
         return std::is_sorted(begin, end, comp);
 
-    // get MPI datatype
-    MPI_Datatype mpi_dt = get_mpi_dt<value_type>();
+    // get MPI type
+    mxx::datatype<value_type> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // check that it is locally sorted
     int sorted = std::is_sorted(begin, end, comp);
@@ -255,7 +255,10 @@ sample_arbit_decomp(_Iterator begin, _Iterator end, _Compare comp, int s, MPI_Co
 
     // get total size n
     std::size_t total_size;
-    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    // get MPI type
+    mxx::datatype<std::size_t> size_dt;
+    MPI_Datatype mpi_size_t = size_dt.type();
+
     MPI_Allreduce(&local_size, &total_size, 1, mpi_size_t, MPI_SUM, comm);
 
     //  pick a total of s*p samples, thus locally pick ceil((local_size/n)*s*p)
@@ -564,11 +567,6 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
 
     SS_TIMER_END_SECTION("local_merge");
 
-    /*
-    std::cerr << "on rank = " << rank << std::endl;
-    std::cerr << "RV="; print_range(recv_elements.begin(), recv_elements.end());
-    */
-
     // A. equalizing distribution into original size (e.g.,block decomposition)
     //    by elements to neighbors
     //    and save elements into the original iterator positions
@@ -586,10 +584,11 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     // get value type of underlying data
     typedef typename std::iterator_traits<_Iterator>::value_type value_type;
 
-    // get MPI datatype
-    MPI_Datatype mpi_dt = get_mpi_dt<value_type>();
-    MPI_Type_commit(&mpi_dt);
+    // get MPI type
+    mxx::datatype<value_type> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
+    // sort
     samplesort(begin, end, comp, mpi_dt, comm, _AssumeBlockDecomp);
 }
 

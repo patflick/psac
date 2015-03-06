@@ -18,31 +18,6 @@
 #include "mpi_utils.hpp"
 #include "rmq.hpp"
 
-// custom MPI data types for std::tuple (triple) instances
-template<>
-MPI_Datatype get_mpi_dt<std::tuple<std::size_t, std::size_t, std::size_t> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::tuple<unsigned int, unsigned int, unsigned int> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::tuple<int, int, int> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<int>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
 
 template <typename index_t>
 void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
@@ -66,7 +41,9 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
-    MPI_Datatype mpi_index_t = get_mpi_dt<index_t>();
+    // get MPI type
+    mxx::datatype<index_t> dt;
+    MPI_Datatype mpi_index_t = dt.type();
     partition::block_decomposition_buffered<index_t> part(n, p, rank);
 
     // get size parameters

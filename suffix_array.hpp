@@ -101,8 +101,15 @@ struct TwoBSA
     }
 };
 
+// specialize MPI datatype (mxx)
+namespace mxx {
+template <typename T>
+class datatype<TwoBSA<T> > : public datatype_contiguous<T, 3> {};
+}
+
 // template specialization for MPI_Datatype for the two buckets and SA structure
 // Needed for the samplesort implementation
+/*
 template<>
 MPI_Datatype get_mpi_dt<TwoBSA<unsigned int>>()
 {
@@ -134,6 +141,7 @@ MPI_Datatype get_mpi_dt<TwoBSA<std::size_t>>()
     MPI_Type_contiguous(3, element_t, &dt);
     return dt;
 }
+*/
 
 // pair of two same element
 template <typename T>
@@ -143,6 +151,13 @@ struct mypair
     T second;
 };
 
+// partial template specialization for mypair
+namespace mxx {
+template <typename T>
+class datatype<mypair<T> > : public datatype_contiguous<T, 2> {};
+}
+
+/*
 template<>
 MPI_Datatype get_mpi_dt<mypair<std::size_t> >()
 {
@@ -191,7 +206,6 @@ MPI_Datatype get_mpi_dt<mypair<int> >()
     MPI_Type_contiguous(2, element_t, &dt);
     return dt;
 }
-/*
 // custom MPI data types for std::pair messages
 template<>
 MPI_Datatype get_mpi_dt<std::pair<std::size_t, std::size_t> >()
@@ -236,8 +250,10 @@ public:
         // the local size of the input
         local_size = std::distance(begin, end);
 
+        // get MPI type
+        mxx::datatype<std::size_t> size_dt;
+        MPI_Datatype mpi_size_t = size_dt.type();
         // get local and global size by reduction
-        MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
         MPI_Allreduce(&local_size, &n, 1, mpi_size_t, MPI_SUM, comm);
         part = partition::block_decomposition_buffered<index_t>(n, p, rank);
 
@@ -245,8 +261,9 @@ public:
         if (part.local_size() != local_size)
             throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
 
-        // get mpi data type TODO: replace with new call once refactored
-        mpi_index_t = get_mpi_dt<index_t>();
+        // get MPI type
+        mxx::datatype<index_t> index_dt;
+        mpi_index_t = index_dt.type();
     }
     virtual ~suffix_array() {}
 private:
@@ -1262,7 +1279,9 @@ void rebucket_kmer()
 
     // 2.) distributed scan with max() to get starting max for each sequence
     std::size_t pre_max;
-    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    // get MPI type
+    mxx::datatype<std::size_t> size_dt;
+    MPI_Datatype mpi_size_t = size_dt.type();
     MPI_Exscan(&local_max, &pre_max, 1, mpi_size_t, MPI_MAX, comm);
     if (rank == 0)
         pre_max = 0;
@@ -1406,7 +1425,9 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished)
 
     // 2.) distributed scan with max() to get starting max for each sequence
     std::size_t pre_max;
-    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    // get MPI type
+    mxx::datatype<std::size_t> size_dt;
+    MPI_Datatype mpi_size_t = size_dt.type();
     MPI_Exscan(&local_max, &pre_max, 1, mpi_size_t, MPI_MAX, comm);
     if (rank == 0)
         pre_max = 0;
@@ -1555,7 +1576,9 @@ std::size_t rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool co
 
     // 2.) distributed scan with max() to get starting max for each sequence
     std::size_t pre_max;
-    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    // get MPI type
+    mxx::datatype<std::size_t> size_dt;
+    MPI_Datatype mpi_size_t = size_dt.type();
     MPI_Exscan(&local_max, &pre_max, 1, mpi_size_t, MPI_MAX, comm);
     if (rank == 0)
         pre_max = 0;
@@ -1622,7 +1645,9 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
     // get my global starting index (TODO: this is not necessary if i know n
     // and p and assume perfect block decompositon)
     std::size_t prefix;
-    MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+    // get MPI type
+    mxx::datatype<std::size_t> size_dt;
+    MPI_Datatype mpi_size_t = size_dt.type();
     MPI_Exscan(&local_size, &prefix, 1, mpi_size_t, MPI_SUM, comm);
     if (rank == 0)
         prefix = 0;
@@ -1930,7 +1955,9 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         // check if all resolved
         std::size_t gl_unresolved;
         std::size_t gl_unfinished;
-        MPI_Datatype mpi_size_t = get_mpi_dt<std::size_t>();
+        // get MPI type
+        mxx::datatype<std::size_t> size_dt;
+        MPI_Datatype mpi_size_t = size_dt.type();
         MPI_Allreduce(&unresolved_els, &gl_unresolved, 1, mpi_size_t, MPI_SUM, comm);
         MPI_Allreduce(&unfinished_b, &gl_unfinished, 1, mpi_size_t, MPI_SUM, comm);
         if (rank == 0)

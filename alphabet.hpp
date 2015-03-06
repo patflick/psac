@@ -34,8 +34,11 @@ std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, 
     std::vector<index_t> hist = get_histogram<index_t>(begin, end, 256);
 
     std::vector<index_t> out_hist(256);
-    // global all reduce to get global histogram
-    MPI_Datatype mpi_dt = get_mpi_dt<index_t>();
+    // get MPI type
+    mxx::datatype<index_t> dt;
+    MPI_Datatype mpi_dt = dt.type();
+
+
     MPI_Allreduce(&hist[0], &out_hist[0], 256, mpi_dt, MPI_SUM, comm);
 
     return out_hist;

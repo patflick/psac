@@ -8,8 +8,8 @@
  * TODO add Licence
  */
 
-#ifndef HPC_MPI_TYPES
-#define HPC_MPI_TYPES
+#ifndef MXX_DATATYPES_HPP
+#define MXX_DATATYPES_HPP
 
 // MPI include
 #include <mpi.h>
@@ -81,7 +81,7 @@ public:
         MPI_Type_contiguous(size, _base_type.type(), &_type);
         MPI_Type_commit(&_type);
     }
-    MPI_Datatype& type() const {
+    MPI_Datatype& type() {
         return _type;
     }
     virtual ~datatype() {
@@ -241,8 +241,35 @@ private:
     datatypes_tuple_t _base_types;
 };
 
-} // namespace mpi
+
+/*
+ * "templates" (non-C++) for different kinds of data structures.
+ * Inherit from these to specialize for your own type easily.
+ */
+
+/**
+ * @brief   A contiguous datatype of the same base type
+ */
+template <typename T, std::size_t size>
+class datatype_contiguous {
+public:
+    datatype_contiguous() : _base_type() {
+        MPI_Type_contiguous(size, _base_type.type(), &_type);
+        MPI_Type_commit(&_type);
+    }
+    virtual MPI_Datatype& type() {
+        return _type;
+    }
+    virtual ~datatype_contiguous() {
+        MPI_Type_free(&_type);
+    }
+private:
+    MPI_Datatype _type;
+    datatype<T> _base_type;
+};
+
+} // namespace mxx
 
 
 
-#endif // HPC_MPI_TYPES
+#endif // MXX_DATATYPES_HPP

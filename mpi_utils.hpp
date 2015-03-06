@@ -37,6 +37,9 @@
 #include "parallel_utils.hpp"
 #include "partition.hpp"
 
+// MXX (WIP)
+#include "mxx/datatypes.hpp"
+
 
 template <typename Iterator>
 std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(Iterator begin, Iterator end, MPI_Comm comm)
@@ -55,8 +58,10 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
     // init result
     std::vector<T> result;
 
-    MPI_Datatype mpi_dt = get_mpi_dt<T>();
-    MPI_Type_commit(&mpi_dt);
+    // get type
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
+
 
     // master process: receive results
     if (rank == 0)
@@ -234,8 +239,9 @@ scatter_stream_block_decomp(Iterator input, uint32_t n, MPI_Comm comm)
     // the local vector size (MPI restricts message sizes to `int`)
     int local_size;
 
-    // get the MPI data type
-    MPI_Datatype mpi_dt = get_mpi_dt<val_t>();
+    // get type
+    mxx::datatype<val_t> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // init result
     std::vector<val_t> local_elements;
@@ -286,8 +292,9 @@ std::vector<T> scatter_stream_block_decomp_slave(MPI_Comm comm)
     // the local vector size (MPI restricts message sizes to `int`)
     int local_size;
 
-    // get the MPI data type
-    MPI_Datatype mpi_dt = get_mpi_dt<T>();
+    // get type
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // init result
     std::vector<T> local_elements;
@@ -329,8 +336,9 @@ std::vector<T> scatter_vector_block_decomp(std::vector<T>& global_vec, MPI_Comm 
     // the local vector size (MPI restricts message sizes to `int`)
     int local_size;
 
-    // get the MPI data type
-    MPI_Datatype mpi_dt = get_mpi_dt<T>();
+    // get type
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // init result
     std::vector<T> local_elements;
@@ -387,7 +395,9 @@ std::basic_string<CharT> scatter_string_block_decomp(std::basic_string<CharT>& g
     int local_size;
 
     // get the MPI data type
-    MPI_Datatype mpi_dt = get_mpi_dt<typename std::basic_string<CharT>::value_type>();
+    typedef typename std::basic_string<CharT>::value_type val_t;
+    mxx::datatype<val_t> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // init result
     std::basic_string<CharT> local_str;
@@ -434,7 +444,9 @@ std::basic_string<CharT> scatter_string_block_decomp(std::basic_string<CharT>& g
 template<typename T>
 void striped_excl_prefix_sum(std::vector<T>& x, MPI_Comm comm)
 {
-    MPI_Datatype mpi_dt = get_mpi_dt<T>();
+    // get MPI type
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // get sum of all buckets and the prefix sum of that
     std::vector<T> all_sum(x.size());
@@ -468,9 +480,10 @@ void striped_excl_prefix_sum(std::vector<T>& x, MPI_Comm comm)
 template<typename Iterator>
 void global_prefix_sum(Iterator begin, Iterator end, MPI_Comm comm)
 {
-  // get types
+  // get MPI type
   typedef typename std::iterator_traits<Iterator>::value_type T;
-  MPI_Datatype mpi_dt = get_mpi_dt<T>();
+  mxx::datatype<T> dt;
+  MPI_Datatype mpi_dt = dt.type();
 
   // local sum
   T sum = std::accumulate(begin, end, static_cast<T>(0));
@@ -512,8 +525,10 @@ void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
-    MPI_Datatype mpi_dt = get_mpi_dt<T>();
-    MPI_Type_commit(&mpi_dt);
+
+    // get MPI type
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
 
     // bucket input by their target processor
     // TODO: in-place bucketing??
