@@ -262,8 +262,7 @@ public:
             throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
 
         // get MPI type
-        mxx::datatype<index_t> index_dt;
-        mpi_index_t = index_dt.type();
+        mpi_index_t = index_mpi_dt.type();
     }
     virtual ~suffix_array() {}
 private:
@@ -281,7 +280,9 @@ private:
     /// The local processors rank among the processors in the MPI communicator
     int rank;
     /// The MPI datatype for the templated type `index_t`.
+    mxx::datatype<index_t> index_mpi_dt;
     MPI_Datatype mpi_index_t;
+
 
     /// Iterators over the local input string
     InputIterator input_begin;
