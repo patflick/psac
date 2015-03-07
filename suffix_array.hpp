@@ -3,12 +3,16 @@
 
 #include <mpi.h>
 #include <vector>
+#include <cstring> // memcmp
 
 #include "timer.hpp"
 #include "partition.hpp"
 #include "alphabet.hpp"
 #include "mpi_samplesort.hpp"
 #include "par_rmq.hpp"
+
+#include "mxx/datatypes.hpp"
+#include "mxx/shift.hpp"
 
 #include "prettyprint.hpp"
 
@@ -107,41 +111,6 @@ template <typename T>
 class datatype<TwoBSA<T> > : public datatype_contiguous<T, 3> {};
 }
 
-// template specialization for MPI_Datatype for the two buckets and SA structure
-// Needed for the samplesort implementation
-/*
-template<>
-MPI_Datatype get_mpi_dt<TwoBSA<unsigned int>>()
-{
-    // keep only one instance around
-    // NOTE: this memory will not be destructed.
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-
-template<>
-MPI_Datatype get_mpi_dt<TwoBSA<int>>()
-{
-    // keep only one instance around
-    // NOTE: this memory will not be destructed.
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<int>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<TwoBSA<std::size_t>>()
-{
-    // keep only one instance around
-    // NOTE: this memory will not be destructed.
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-*/
 
 // pair of two same element
 template <typename T>
@@ -157,82 +126,6 @@ template <typename T>
 class datatype<mypair<T> > : public datatype_contiguous<T, 2> {};
 }
 
-/*
-template<>
-MPI_Datatype get_mpi_dt<mypair<std::size_t> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
-    MPI_Type_contiguous(2, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::array<unsigned int, 3> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::array<std::size_t, 3> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::array<int, 3> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<int>();
-    MPI_Type_contiguous(3, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<mypair<unsigned int> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
-    MPI_Type_contiguous(2, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<mypair<int> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<int>();
-    MPI_Type_contiguous(2, element_t, &dt);
-    return dt;
-}
-// custom MPI data types for std::pair messages
-template<>
-MPI_Datatype get_mpi_dt<std::pair<std::size_t, std::size_t> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<std::size_t>();
-    MPI_Type_contiguous(2, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::pair<unsigned int, unsigned int> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<unsigned int>();
-    MPI_Type_contiguous(2, element_t, &dt);
-    return dt;
-}
-template<>
-MPI_Datatype get_mpi_dt<std::pair<int, int> >()
-{
-    MPI_Datatype dt;
-    MPI_Datatype element_t = get_mpi_dt<int>();
-    MPI_Type_contiguous(2, element_t, &dt);
-    return dt;
-}
-
-*/
 
 // distributed suffix array
 template <typename InputIterator, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
@@ -439,7 +332,7 @@ void construct(bool fast_resolval = true) {
     {
         if (rank == 0)
             std::cerr << "Starting Bucket chasing algorithm" << std::endl;
-        construct_msgs(local_B_SA, local_B, shift_by);
+        construct_msgs(local_B_SA, local_B, 2*shift_by);
     }
     SAC_TIMER_END_SECTION("construct-msgs");
 
@@ -491,7 +384,7 @@ void construct_arr(bool fast_resolval = true) {
     /*******************************
      *  Prefix Doubling main loop  *
      *******************************/
-    for (shift_by = k; shift_by < n; shift_by <<= 1)
+    for (shift_by = k; shift_by < n; shift_by*=L)
     {
         SAC_TIMER_LOOP_START();
 
@@ -557,7 +450,7 @@ void construct_arr(bool fast_resolval = true) {
 //        std::cout << "After rebucket:" << std::endl;
 //        std::cout << tuples << std::endl;
 //        std::cout << local_B << std::endl;
-//
+
         /**************************************
          *  Reset local_SA array from tuples  *
          **************************************/
@@ -595,7 +488,7 @@ void construct_arr(bool fast_resolval = true) {
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
             break;
         }
-        else if ((shift_by << 1) >= n || unfinished_buckets == 0)
+        else if ((shift_by *= L) >= n || unfinished_buckets == 0)
         {
             // if last iteration, use copy of local_SA for reorder and keep
             // original SA
@@ -623,7 +516,7 @@ void construct_arr(bool fast_resolval = true) {
     {
         if (rank == 0)
             std::cerr << "Starting Bucket chasing algorithm" << std::endl;
-        construct_msgs(local_B_SA, local_B, shift_by);
+        construct_msgs(local_B_SA, local_B, L*shift_by);
     }
     SAC_TIMER_END_SECTION("construct-msgs");
 
@@ -686,7 +579,7 @@ void construct_fast() {
 
     if (rank == 0)
         std::cerr << "Starting Bucket chasing algorithm" << std::endl;
-    construct_msgs(local_B_SA, local_B, k/2);
+    construct_msgs(local_B_SA, local_B, k);
     SAC_TIMER_END_SECTION("construct-msgs");
 
     // now local_SA is actual block decomposed SA and local_B is actual ISA with an offset of one
@@ -722,7 +615,7 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     unsigned int k = alphabet_chars_per_word<index_t>(l);
 
     // TODO: during current debugging:
-//    k = 2;
+    //k = 2;
     // if the input is too small for `k`, choose a smaller `k`
     if (k > min_local_size)
     {
@@ -751,23 +644,9 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
         ++str_it;
     }
 
-
-    // send this to left processor, start async receive from right processor
-    // for last in seq
-    // start receiving for end
-    // TODO: replace by some utility linear shift communcation function!!
+    // send first kmer to left processor
     index_t last_kmer = 0;
-    MPI_Request recv_req;
-    if (rank < p-1) // if not last processor
-    {
-        MPI_Irecv(&last_kmer, 1, mpi_index_t, rank+1, PSAC_TAG_EDGE_KMER,
-                  comm, &recv_req);
-    }
-    if (rank > 0) // if not first processor
-    {
-        MPI_Send(&kmer, 1, mpi_index_t, rank-1, PSAC_TAG_EDGE_KMER, comm);
-    }
-
+    mxx::request req = mxx::i_left_shift(kmer, last_kmer, comm);
 
     // init output
     if (local_B.size() != local_size)
@@ -792,15 +671,13 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     if (rank < p-1) // if not last processor
     {
         // wait for the async receive to finish
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+        //MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+        req.wait();
     }
     else
     {
         // in this case the last k-mers contains shifting `$` signs
         // we assume this to be the `\0` value
-        // TODO: how can we solve this efficiently when using on 4 character
-        // DNA strings? (using a 5 character alphabet might be unnessesary
-        // overhead)
     }
 
 
@@ -933,18 +810,16 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2)
 }
 
 // shifting with arrays (custom data types)
-template <std::size_t L = 2>
+template <std::size_t L>
 void shift_buckets(std::size_t k, std::vector<std::array<index_t, 1+L> >& tuples)
 {
     // get # elements to the left
     std::size_t prev_size = part.excl_prefix_size();
-//    assert(local_size == local_B.size());
 
+    // start receiving into second bucket and then continue with greater
+    int bi = 2;
     for (std::size_t dist = k; dist < L*k; dist += k)
     {
-        // start receiving into second bucket and then continue with greater
-        int bi = 2;
-
         MPI_Request recv_reqs[2];
         int n_irecvs = 0;
         MPI_Datatype dts[4];
@@ -1117,35 +992,26 @@ void isa_2b_to_sa(std::vector<index_t>& local_B2)
     SAC_TIMER_END_SECTION("isa2sa_untupleize");
 }
 
+
 template <std::size_t L>
-struct ArrayCmp
+void sort_array_tuples(std::vector<std::array<index_t, L+1> >& tuples)
 {
-    bool operator()(const std::array<index_t, L+1>& x,
-                    const std::array<index_t, L+1>& y)
-    {
+    assert(tuples.size() == local_size);
+    SAC_TIMER_START();
+
+    // parallel, distributed sample-sorting of tuples (B1, B2, SA)
+    //samplesort(tuples.begin(), tuples.end(), cmp);
+    samplesort(tuples.begin(), tuples.end(),
+    [] (const std::array<index_t, L+1>& x,
+        const std::array<index_t, L+1>& y) {
         for (unsigned int i = 1; i < L+1; ++i)
         {
             if (x[i] != y[i])
                 return x[i] < y[i];
         }
         return false;
-    }
-};
+    });
 
-template <std::size_t L>
-// TODO make sure the tuples[0] are fille diwth the global offset SA
-void sort_array_tuples(std::vector<std::array<index_t, L+1> >& tuples)
-{
-    assert(tuples.size() == local_size);
-    SAC_TIMER_START();
-
-    MPI_Datatype arr_dt;
-    MPI_Type_contiguous(L+1, mpi_index_t, &arr_dt);
-    MPI_Type_commit(&arr_dt);
-
-    ArrayCmp<L> cmp;
-    // parallel, distributed sample-sorting of tuples (B1, B2, SA)
-    samplesort(tuples.begin(), tuples.end(), cmp, arr_dt);
 
     SAC_TIMER_END_SECTION("isa2sa_samplesort");
 }
@@ -1198,7 +1064,7 @@ void kmer_sorting()
 /*********************************************************************
  *              Rebucket tuples into new bucket numbers              *
  *********************************************************************/
-// assumed sorted order (globally) by tuple (B1[i], B2[i])
+// assumed sorted order (globally) by local_B
 // this reassigns new, unique bucket numbers in {1,...,n} globally
 void rebucket_kmer()
 {
@@ -1214,25 +1080,7 @@ void rebucket_kmer()
      * so that that processor can determine whether the same bucket continues
      * or a new bucket starts with it's first element
      */
-    // TODO: replace with shift operation
-    MPI_Request recv_req;
-    index_t prevRight;
-    if (rank > 0) // if not last processor
-    {
-        MPI_Irecv(&prevRight, 1, mpi_index_t, rank-1, PSAC_TAG_EDGE_KMER,
-                  comm, &recv_req);
-    }
-    if (rank < p-1) // if not first processor
-    {
-        // send my most right element to the right
-        index_t myRight = local_B.back();
-        MPI_Send(&myRight, 1, mpi_index_t, rank+1, PSAC_TAG_EDGE_KMER, comm);
-    }
-    if (rank > 0)
-    {
-        // wait for the async receive to finish
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-    }
+    index_t prevRight = mxx::right_shift(local_B.back(), comm);
 
     // get my global starting index
     std::size_t prefix = part.excl_prefix_size();
@@ -1319,25 +1167,8 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished)
      * so that that processor can determine whether the same bucket continues
      * or a new bucket starts with it's first element
      */
-    // TODO: replace with shift operation
-    MPI_Request recv_req;
-    index_t prevRight[2];
-    if (rank > 0) // if not last processor
-    {
-        MPI_Irecv(prevRight, 2, mpi_index_t, rank-1, PSAC_TAG_EDGE_KMER,
-                  comm, &recv_req);
-    }
-    if (rank < p-1) // if not first processor
-    {
-        // send my most right element to the right
-        index_t myRight[2] = {local_B.back(), local_B2.back()};
-        MPI_Send(myRight, 2, mpi_index_t, rank+1, PSAC_TAG_EDGE_KMER, comm);
-    }
-    if (rank > 0)
-    {
-        // wait for the async receive to finish
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-    }
+    std::pair<index_t, index_t> last_element = std::make_pair(local_B.back(), local_B2.back());
+    std::pair<index_t, index_t> prevRight = mxx::right_shift(last_element, comm);
 
     // get my global starting index
     std::size_t prefix = part.excl_prefix_size();
@@ -1351,7 +1182,7 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished)
     {
         firstDiff = true;
     }
-    else if (prevRight[0] != local_B[0] || prevRight[1] != local_B2[0])
+    else if (prevRight.first != local_B[0] || prevRight.second != local_B2[0])
     {
         firstDiff = true;
     }
@@ -1375,27 +1206,9 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished)
         // (i.e. identical)
         // (i.e. `i` is the second equal element in a bucket)
         // which means counting unfinished buckets, then allreduce
-        index_t local_unfinished_buckets;
-        index_t prev_right;
-        // TODO: replace by a common shift communcation function!
-        if (rank > 0) // if not last processor
-        {
-            MPI_Irecv(&prev_right, 1, mpi_index_t, rank-1, PSAC_TAG_EDGE_KMER,
-                      comm, &recv_req);
-        }
-        if (rank < p-1) // if not first processor
-        {
-            // send my most right element to the right
-            MPI_Send(&local_B.back(), 1, mpi_index_t, rank+1, PSAC_TAG_EDGE_KMER, comm);
-        }
-        if (rank > 0)
-        {
-            // wait for the async receive to finish
-            MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-        }
-        if (rank == 0)
-            local_unfinished_buckets = 0;
-        else
+        index_t prev_right = mxx::right_shift(local_B.back(), comm);
+        index_t local_unfinished_buckets = 0;
+        if (rank != 0)
             local_unfinished_buckets = (prev_right > 0 && local_B[0] == 0) ? 1 : 0;
         for (std::size_t i = 1; i < local_B.size(); ++i)
         {
@@ -1461,34 +1274,8 @@ std::size_t rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool co
     // init result
     std::size_t result = 0;
 
-    /*
-     * send right-most element to one processor to the right
-     * so that that processor can determine whether the same bucket continues
-     * or a new bucket starts with it's first element
-     */
-    // TODO: replace with shift operation
-    MPI_Request recv_req;
-    index_t prevRight[L];
-    if (rank > 0) // if not last processor
-    {
-        MPI_Irecv(prevRight, L, mpi_index_t, rank-1, PSAC_TAG_EDGE_KMER,
-                  comm, &recv_req);
-    }
-    if (rank < p-1) // if not first processor
-    {
-        // send my most right element to the right
-        index_t myRight[L];
-        std::copy(&tuples.back()[1], &tuples.back()[1]+L, myRight);
-        MPI_Send(myRight, L, mpi_index_t, rank+1, PSAC_TAG_EDGE_KMER, comm);
-    }
-    if (rank > 0)
-    {
-        // wait for the async receive to finish
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-    }
-
-    // get my global starting index
-    std::size_t prefix = part.excl_prefix_size();
+    // send right-most element to one processor to the right
+    std::array<index_t, L+1> prevRight = mxx::right_shift(tuples.back(), comm);
 
     /*
      * assign local zero or one, depending on whether the bucket is the same
@@ -1499,10 +1286,13 @@ std::size_t rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool co
     {
         firstDiff = true;
     }
-    else if (!std::equal(prevRight, prevRight+L, &tuples[0][1]))
+    else if (!std::equal(&prevRight[1], &prevRight[1]+L, &tuples[0][1]))
     {
         firstDiff = true;
     }
+
+    // get my global starting index
+    std::size_t prefix = part.excl_prefix_size();
 
     // set local_B1 to `1` if previous entry is different:
     // i.e., mark start of buckets
@@ -1623,25 +1413,7 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
      * so that that processor can determine whether the same bucket continues
      * or a new bucket starts with it's first element
      */
-    MPI_Request recv_req;
-    // TODO: shift communcation
-    index_t prevRight[2];
-    if (rank > 0) // if not last processor
-    {
-        MPI_Irecv(prevRight, 2, mpi_index_t, rank-1, PSAC_TAG_EDGE_KMER,
-                  comm, &recv_req);
-    }
-    if (rank < p-1) // if not first processor
-    {
-        // send my most right element to the right
-        index_t myRight[2] = {tuples.back().B1, tuples.back().B2};
-        MPI_Send(myRight, 2, mpi_index_t, rank+1, PSAC_TAG_EDGE_KMER, comm);
-    }
-    if (rank > 0)
-    {
-        // wait for the async receive to finish
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-    }
+    TwoBSA<index_t> prevRight = mxx::right_shift(tuples.back(), comm);
 
     // get my global starting index (TODO: this is not necessary if i know n
     // and p and assume perfect block decompositon)
@@ -1663,13 +1435,13 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
     {
         firstDiff = true;
     }
-    else if (prevRight[0] != tuples[0].B1 || prevRight[1] != tuples[0].B2)
+    else if (prevRight.B1 != tuples[0].B1 || prevRight.B2 != tuples[0].B2)
     {
         firstDiff = true;
         if (_CONSTRUCT_LCP)
         {
-            index_t left_b  = std::min(prevRight[1], tuples[0].B2);
-            index_t right_b = std::max(prevRight[1], tuples[0].B2);
+            index_t left_b  = std::min(prevRight.B2, tuples[0].B2);
+            index_t right_b = std::max(prevRight.B2, tuples[0].B2);
             // we need the minumum LCP of all suffixes in buckets between
             // these two buckets. Since the first element in the left bucket
             // is the LCP of this bucket with its left bucket and we don't need
@@ -1882,23 +1654,8 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
     /*
      * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
      */
-    // get next element to right
-    // TODO: shift communication
-    index_t right_B;
-    MPI_Request recv_req;
-    if (rank < p-1)
-    {
-        // receive from right
-        MPI_Irecv(&right_B, 1, mpi_index_t, rank+1, PSAC_TAG_EDGE_B,
-                comm, &recv_req);
-    }
-    if (rank > 0)
-    {
-        // send to left
-        MPI_Send(&local_B[0], 1, mpi_index_t, rank-1, PSAC_TAG_EDGE_B, comm);
-    }
-    if (rank < p-1)
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+    // get next element from right
+    index_t right_B = mxx::left_shift(local_B[0], comm);
 
     // get global offset
     const std::size_t prefix = part.excl_prefix_size();
@@ -1924,7 +1681,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 
     bool right_bucket_crosses_proc = (rank < p-1 && local_B.back() == right_B);
 
-    for (index_t shift_by = dist<<1; shift_by < n; shift_by <<= 1)
+    for (index_t shift_by = dist; shift_by < n; shift_by <<= 1)
     {
         /*
          * 1.) on i: send tuple (`to:` Sa[i]+2^k, `from:` i)
@@ -2093,9 +1850,6 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
                         local_B[out_idx] = cur_b;
                         out_idx++;
                     }
-                    /*
-                     * TODO: create queries for LCP resolval for each new bucket boundary
-                     */
                     // assert next bucket index is larger
                     assert(out_idx == local_size || local_B[out_idx] == prefix+out_idx+1);
                 }
@@ -2233,16 +1987,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 
 
         // get new bucket number to the right
-        // TODO shift communication
-        if (rank < p-1)
-            // receive from right
-            MPI_Irecv(&right_B, 1, mpi_index_t, rank+1, PSAC_TAG_EDGE_B,
-                    comm, &recv_req);
-        if (rank > 0)
-            // send to left
-            MPI_Send(&local_B[0], 1, mpi_index_t, rank-1, PSAC_TAG_EDGE_B, comm);
-        if (rank < p-1)
-            MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+        right_B = mxx::left_shift(local_B[0], comm);
         // check if right bucket still goes over boundary
         right_bucket_crosses_proc = (rank < p-1 && local_B.back() == right_B);
 
@@ -2320,27 +2065,8 @@ void initial_kmer_lcp(unsigned int k, unsigned int bits_per_char) {
     // resize to size `local_size` and set all items to max of n
     local_LCP.assign(local_size, n);
 
-    // find bucket boundaries (including across processors)
-
     // 1) getting next element to left
-    // TODO: use shift communication function
-    index_t left_B;
-    MPI_Request recv_req;
-    if (rank > 0)
-    {
-        // receive from right
-        MPI_Irecv(&left_B, 1, mpi_index_t, rank-1, PSAC_TAG_EDGE_B,
-                comm, &recv_req);
-    }
-    if (rank < p-1)
-    {
-        // send to right
-        index_t right_B;
-        right_B = local_B.back();
-        MPI_Send(&right_B, 1, mpi_index_t, rank+1, PSAC_TAG_EDGE_B, comm);
-    }
-    if (rank > 0)
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+    index_t left_B = mxx::right_shift(local_B.back(), comm);
 
     // initialize first LCP
     if (rank == 0) {
@@ -2373,35 +2099,18 @@ void initial_kmer_lcp(unsigned int k, unsigned int bits_per_char,
     // find bucket boundaries (including across processors)
 
     // 1) getting next element to left
-    // TODO: use shift communication function
-    index_t left_B[2];
-    MPI_Request recv_req;
-    if (rank > 0)
-    {
-        // receive from right
-        MPI_Irecv(&left_B, 2, mpi_index_t, rank-1, PSAC_TAG_EDGE_B,
-                comm, &recv_req);
-    }
-    if (rank < p-1)
-    {
-        // send to right
-        index_t right_B[2];
-        right_B[0] = local_B.back();
-        right_B[1] = local_B2.back();
-        MPI_Send(right_B, 2, mpi_index_t, rank+1, PSAC_TAG_EDGE_B, comm);
-    }
-    if (rank > 0)
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+    std::pair<index_t, index_t> right_B(local_B.back(), local_B2.back());
+    std::pair<index_t, index_t> left_B = mxx::right_shift(right_B, comm);
 
     // initialize first LCP
     if (rank == 0) {
         local_LCP[0] = 0;
     } else {
-        if (left_B[0] != local_B[0]
-            || (left_B[0] == local_B[0] && left_B[1] != local_B2[0])) {
-            unsigned int lcp = lcp_bitwise(left_B[0], local_B[0], k, bits_per_char);
+        if (left_B.first != local_B[0]
+            || (left_B.first == local_B[0] && left_B.second != local_B2[0])) {
+            unsigned int lcp = lcp_bitwise(left_B.first, local_B[0], k, bits_per_char);
             if (lcp == k)
-                lcp += lcp_bitwise(left_B[1], local_B2[0], k, bits_per_char);
+                lcp += lcp_bitwise(left_B.second, local_B2[0], k, bits_per_char);
             local_LCP[0] = lcp;
         }
     }
@@ -2428,32 +2137,17 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
 
     // get right-most element of left processor and check if it is a new
     // bucket boundary
-    // TODO: use shift communication
-    index_t left_B[2];
-    MPI_Request recv_req;
-    if (rank > 0) {
-        // receive from right
-        MPI_Irecv(&left_B, 2, mpi_index_t, rank-1, PSAC_TAG_EDGE_B,
-                comm, &recv_req);
-    }
-    if (rank < p-1) {
-        // send to right
-        index_t right_B[2];
-        right_B[0] = local_B.back();
-        right_B[1] = local_B2.back();
-        MPI_Send(right_B, 2, mpi_index_t, rank+1, PSAC_TAG_EDGE_B, comm);
-    }
-    if (rank > 0)
-        MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+    std::pair<index_t, index_t> right_B(local_B.back(), local_B2.back());
+    std::pair<index_t, index_t> left_B = mxx::right_shift(right_B, comm);
 
     // find _new_ bucket boundaries and create associated parallel distributed
     // RMQ queries.
     std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
 
     // check if the first element is a new bucket boundary
-    if (rank > 0 && left_B[0] == local_B[0] && left_B[1] != local_B2[0]) {
-        index_t left_b  = std::min(left_B[1], local_B2[0]);
-        index_t right_b = std::max(left_B[1], local_B2[0]);
+    if (rank > 0 && left_B.first == local_B[0] && left_B.second != local_B2[0]) {
+        index_t left_b  = std::min(left_B.second, local_B2[0]);
+        index_t right_b = std::max(left_B.second, local_B2[0]);
         // we need the minumum LCP of all suffixes in buckets between
         // these two buckets. Since the first element in the left bucket
         // is the LCP of this bucket with its left bucket and we don't need
@@ -2484,7 +2178,6 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
 #ifndef NDEBUG
     std::size_t _nqueries = minqueries.size();
 #endif
-
 
     // get parallel-distributed RMQ for all queries, results are in
     // `minqueries`

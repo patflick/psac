@@ -33,7 +33,7 @@ int main(int argc, char *argv[])
 
     // run the suffix array construction
     //sa_test_random_dna(comm, 20000000);
-    sa_test_random_dna(comm, 10, true);
+    sa_test_random_dna(comm, 10000, true);
     //sa_test_random_dna(comm, 10000, true);
     //sa_test_random_dna(comm, 100000, true);
     //if (argc < 2)

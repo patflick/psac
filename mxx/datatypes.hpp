@@ -1,5 +1,5 @@
 /**
- * @file    mpi_types.hpp
+ * @file    datatypes.hpp
  * @author  Patrick Flick <patrick.flick@gmail.com>
  * @brief   MPI Datatypes for C++ types.
  *
@@ -16,6 +16,8 @@
 
 // C++ includes
 #include <vector>
+#include <array>
+#include <tuple>
 #include <numeric>
 
 
@@ -35,7 +37,7 @@ namespace mxx
 template <typename T>
 class datatype {};
 
-#define DATATYPE_CLASS_MPI_BUILTIN(ctype, mpi_type)                         \
+#define MXX_DATATYPE_MPI_BUILTIN(ctype, mpi_type)                           \
 template <> class datatype<ctype> {                                         \
 public:                                                                     \
     datatype() {}                                                           \
@@ -44,35 +46,35 @@ public:                                                                     \
 };
 
 // char
-DATATYPE_CLASS_MPI_BUILTIN(char, MPI_CHAR);
-DATATYPE_CLASS_MPI_BUILTIN(unsigned char, MPI_UNSIGNED_CHAR);
-DATATYPE_CLASS_MPI_BUILTIN(signed char, MPI_SIGNED_CHAR);
+MXX_DATATYPE_MPI_BUILTIN(char, MPI_CHAR);
+MXX_DATATYPE_MPI_BUILTIN(unsigned char, MPI_UNSIGNED_CHAR);
+MXX_DATATYPE_MPI_BUILTIN(signed char, MPI_SIGNED_CHAR);
 
 // short
-DATATYPE_CLASS_MPI_BUILTIN(unsigned short, MPI_UNSIGNED_SHORT);
-DATATYPE_CLASS_MPI_BUILTIN(signed short, MPI_SHORT);
+MXX_DATATYPE_MPI_BUILTIN(unsigned short, MPI_UNSIGNED_SHORT);
+MXX_DATATYPE_MPI_BUILTIN(short, MPI_SHORT);
 
 // int
-DATATYPE_CLASS_MPI_BUILTIN(unsigned int, MPI_UNSIGNED);
-DATATYPE_CLASS_MPI_BUILTIN(int, MPI_INT);
+MXX_DATATYPE_MPI_BUILTIN(unsigned int, MPI_UNSIGNED);
+MXX_DATATYPE_MPI_BUILTIN(int, MPI_INT);
 
 // long
-DATATYPE_CLASS_MPI_BUILTIN(unsigned long, MPI_UNSIGNED_LONG);
-DATATYPE_CLASS_MPI_BUILTIN(long, MPI_LONG);
+MXX_DATATYPE_MPI_BUILTIN(unsigned long, MPI_UNSIGNED_LONG);
+MXX_DATATYPE_MPI_BUILTIN(long, MPI_LONG);
 
 // long long
-DATATYPE_CLASS_MPI_BUILTIN(unsigned long long, MPI_UNSIGNED_LONG_LONG);
-DATATYPE_CLASS_MPI_BUILTIN(long long, MPI_LONG_LONG);
+MXX_DATATYPE_MPI_BUILTIN(unsigned long long, MPI_UNSIGNED_LONG_LONG);
+MXX_DATATYPE_MPI_BUILTIN(long long, MPI_LONG_LONG);
 
 // floats
-DATATYPE_CLASS_MPI_BUILTIN(float, MPI_FLOAT);
-DATATYPE_CLASS_MPI_BUILTIN(double, MPI_DOUBLE);
-DATATYPE_CLASS_MPI_BUILTIN(long double, MPI_LONG_DOUBLE);
+MXX_DATATYPE_MPI_BUILTIN(float, MPI_FLOAT);
+MXX_DATATYPE_MPI_BUILTIN(double, MPI_DOUBLE);
+MXX_DATATYPE_MPI_BUILTIN(long double, MPI_LONG_DOUBLE);
 
-#undef DATATYPE_CLASS_MPI_BUILTIN
+#undef MXX_DATATYPE_MPI_BUILTIN
 
 /**
- * @brief       MPI datatype mapping for std::array
+ * @brief   MPI datatype mapping for std::array
  */
 template <typename T, std::size_t size>
 class datatype<std::array<T, size> > {
@@ -80,6 +82,9 @@ public:
     datatype() : _base_type() {
         MPI_Type_contiguous(size, _base_type.type(), &_type);
         MPI_Type_commit(&_type);
+    }
+    const MPI_Datatype& type() const {
+        return _type;
     }
     MPI_Datatype& type() {
         return _type;
@@ -105,8 +110,8 @@ public:
         std::pair<T1, T2> p;
         MPI_Aint p_adr, t1_adr, t2_adr;
         MPI_Get_address(&p, &p_adr);
-        MPI_Get_address(&p.first(), &t1_adr);
-        MPI_Get_address(&p.second(), &t2_adr);
+        MPI_Get_address(&p.first, &t1_adr);
+        MPI_Get_address(&p.second, &t2_adr);
         displs[0] = t1_adr - p_adr;
         displs[1] = t2_adr - p_adr;
 
@@ -122,7 +127,10 @@ public:
         MPI_Type_create_struct(2, blocklen, displs, types, &_type);
         MPI_Type_commit(&_type);
     }
-    MPI_Datatype& type() const {
+    const MPI_Datatype& type() const {
+        return _type;
+    }
+    MPI_Datatype& type() {
         return _type;
     }
     virtual ~datatype() {
@@ -151,7 +159,6 @@ struct tuple_members
         MPI_Get_address(&std::get<N-I>(tuple), &elem_adr);
         // byte offset from beginning of tuple
         MPI_Aint displ = elem_adr - t_adr;
-        std::cout << "displs " << N-I << " " << displ << std::endl;
         // fill in type
         MPI_Datatype mpi_dt = std::get<N-I>(datatypes).type();
 
@@ -222,6 +229,7 @@ public:
         MPI_Aint lb, extent;
         MPI_Type_get_extent(_type, &lb, &extent);
         if (extent != sizeof(tuple_t))
+          // TODO: own error/assert handeling (MPI-Safe)
             throw std::runtime_error("MPI_Datatype extend does not match the sizeof the tuple");
     }
 
@@ -229,7 +237,7 @@ public:
         return _type;
     }
 
-    MPI_Datatype type() {
+    MPI_Datatype& type() {
         return _type;
     }
 

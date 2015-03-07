@@ -194,8 +194,8 @@ void sa_test_random_dna(MPI_Comm comm, std::size_t input_size, bool test_correct
     std::string local_str = rand_dna(input_size, rank);
 
     // construct local SA for input string
-    suffix_array<std::string::iterator, std::size_t, false> sa(local_str.begin(), local_str.end(), comm);
-    sa.construct_arr<2>();
+    suffix_array<std::string::iterator, std::size_t, true> sa(local_str.begin(), local_str.end(), comm);
+    sa.construct();
 
     // final SA and ISA
     if (test_correct)
