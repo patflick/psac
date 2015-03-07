@@ -45,8 +45,8 @@ bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
     double start = t.get_ms();
     //sa_construction_gl<saidx_t>(str, psac_SA, psac_ISA, comm);
     suffix_array<std::string::iterator, saidx_t, false> sa(local_str.begin(), local_str.end(), comm);
-    sa.construct_arr<2>(true);
-    //sa.construct_fast();
+    //sa.construct_arr<2>(true);
+    sa.construct();
     double end = t.get_ms() - start;
 
     // get rank
