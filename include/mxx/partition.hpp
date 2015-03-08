@@ -4,23 +4,23 @@
  * @brief   Implements the partition API and different data partitions, most
  *          notably the block decomposition.
  *
- * Copyright (c) 2014 Georgia Institute of Technology. All Rights Reserved.
- *
  * TODO add Licence
  */
 
-#ifndef PARTITION_HPP
-#define PARTITION_HPP
+#ifndef MXX_PARTITION_HPP
+#define MXX_PARTITION_HPP
 
 #include <vector>
 #include "assert.h"
 
-// We want inlined non virtual functions for the partition. We thus need to use
-// templating when these classes are used and no real inheritance to enforce
-// the API.
+namespace mxx
+{
 namespace partition
 {
 
+// We want inlined non virtual functions for the partition. We thus need to use
+// templating when these classes are used and no real inheritance to enforce
+// the API.
 template <typename index_t>
 class block_decomposition
 {
@@ -179,94 +179,6 @@ private:
 };
 
 } // namespace partition
+} // namespace mxx
 
-/****************************************************
- *  Legacy code: (need to be removed step by step:  *
- ****************************************************/
-
-/**
- * @brief Returns a block partitioning of an input of size `n` among `p` processors.
- *
- * @param n The number of elements.
- * @param p The number of processors.
- *
- * @return A vector of the number of elements for each processor.
- */
-/*
-std::vector<int> block_partition(int n, int p)
-{
-    // init result
-    std::vector<int> partition(p);
-    // get the number of elements per processor
-    int local_size = n / p;
-    // and the elements that are not evenly distributable
-    int remaining = n % p;
-    for (int i = 0; i < p; ++i) {
-        if (i < remaining) {
-            partition[i] = local_size + 1;
-        } else {
-            partition[i] = local_size;
-        }
-    }
-    return partition;
-}
-*/
-
-/*
-inline int block_partition_local_size(int n, int p, int i)
-{
-    return n/p + ((i < (n % p)) ? 1 : 0);
-}
-inline std::size_t block_partition_local_size(std::size_t n, int p, int i)
-{
-    return n/p + ((static_cast<std::size_t>(i) < (n % static_cast<std::size_t>(p))) ? 1 : 0);
-}
-inline std::size_t block_partition_prefix_size(std::size_t n, int p, int i)
-{
-    return (n/p)*(i+1) + std::min<std::size_t>(n % p, i+1);
-}
-
-inline int block_partition_prefix_size(int n, int p, int i)
-{
-    return (n/p)*(i+1) + std::min(n % p, i+1);
-}
-
-inline std::size_t block_partition_excl_prefix_size(std::size_t n, int p, int i)
-{
-    return (n/p)*i + std::min<std::size_t>(n % p, i);
-}
-
-inline int block_partition_excl_prefix_size(int n, int p, int i)
-{
-    return (n/p)*i + std::min(n % p, i);
-}
-
-// returns the target processor id {0,..,p-1} for an element with index i
-inline int block_partition_target_processor(std::size_t n, int p, std::size_t a_i)
-{
-    if (a_i < ((n/p)+1)*(n % p))
-    {
-        // a_i is within the first n % p processors
-        return a_i/((n/p)+1);
-    }
-    else
-    {
-        return n%p + (a_i - ((n/p)+1)*(n % p))/(n/p);
-    }
-}
-
-inline int block_partition_target_processor(int n, int p, int a_i)
-{
-    if (a_i < ((n/p)+1)*(n % p))
-    {
-        // a_i is within the first n % p processors
-        return a_i/((n/p)+1);
-    }
-    else
-    {
-        return n%p + (a_i - ((n/p)+1)*(n % p))/(n/p);
-    }
-}
-*/
-
-#endif // PARTITION_HPP
+#endif // MXX_PARTITION_HPP

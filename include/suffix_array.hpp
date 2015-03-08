@@ -6,13 +6,13 @@
 #include <cstring> // memcmp
 
 #include "timer.hpp"
-#include "partition.hpp"
 #include "alphabet.hpp"
 #include "mpi_samplesort.hpp"
 #include "par_rmq.hpp"
 
-#include "mxx/datatypes.hpp"
-#include "mxx/shift.hpp"
+#include <mxx/datatypes.hpp>
+#include <mxx/shift.hpp>
+#include <mxx/partition.hpp>
 
 #include "prettyprint.hpp"
 

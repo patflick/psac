@@ -103,36 +103,21 @@ endif(ENABLE_PROFILING_SCOREP)
 set(LIBRARY_OUTPUT_PATH ${PROJECT_BINARY_DIR}/lib CACHE PATH "Output directory for libraries" )
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin CACHE PATH "Output directory for applications" )
 
+include_directories("${PROJECT_SOURCE_DIR}/include")
+include_directories("${PROJECT_SOURCE_DIR}/ext/cxx-prettyprint")
 
 # add the binary tree to the search path for include files
 # so that we will find TutorialConfig.h
 #include_directories("${PROJECT_SOURCE_DIR}/src")
 #include_directories("${PROJECT_SOURCE_DIR}/include")
 
-
-message(STATUS "scorep libs: ${SCOREP_LIBS}, MPI libs: ${EXTRA_LIBS}")
-
-add_executable(test_sac main.cpp timer.cpp ${SCOREP_SRCFILES})
-target_link_libraries(test_sac ${EXTRA_LIBS})
-target_link_libraries(test_sac rt)
-#target_link_libraries(test_sac ${SCOREP_LIBS})
-
-add_executable(test_samplesort test_sort.cpp timer.cpp)
-target_link_libraries(test_samplesort ${EXTRA_LIBS})
-target_link_libraries(test_samplesort rt) # for timer
-
-add_executable(test_file test_file.cpp)
-message(STATUS "Extra libs: ${EXTRA_LIBS}")
-target_link_libraries(test_file ${EXTRA_LIBS})
-
-add_executable(test_rmq test_rmq.cpp)
-add_executable(test_bitops test_bitops.cpp)
-
+# include libdivsufsort
 add_subdirectory(ext/libdivsufsort)
 include_directories(${libdivsufsort_BINARY_DIR}/include)
 include_directories(${libdivsufsort_SOURCE_DIR}/include)
-add_executable(test_ldss test_libdss.cpp timer.cpp)
-target_link_libraries(test_ldss divsufsort)
-target_link_libraries(test_ldss ${EXTRA_LIBS})
-target_link_libraries(test_ldss rt)
+
+# add own subdirectories
+add_subdirectory(src)
+add_subdirectory(src/tests)
+
 

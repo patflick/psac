@@ -1,5 +1,5 @@
 /**
- * @file    mpi_file.hpp
+ * @file    file.hpp
  * @author  Patrick Flick <patrick.flick@gmail.com>
  * @brief   Block decompose and distribute file as string on MPI communicator.
  *
@@ -8,18 +8,22 @@
  * TODO add Licence
  */
 
-#ifndef MPI_FILE_HPP
-#define MPI_FILE_HPP
+#ifndef MXX_FILE_HPP
+#define MXX_FILE_HPP
 
 #include <mpi.h>
 
+// C++ includes
 #include <string>
 #include <fstream>
 #include <streambuf>
 #include <sstream>
 #include <iostream>
 
+// mxx includes
 #include "partition.hpp"
+
+namespace mxx {
 
 std::ifstream::pos_type get_filesize(const char* filename)
 {
@@ -91,5 +95,35 @@ std::string file_block_decompose(const char* filename, MPI_Comm comm = MPI_COMM_
     return local_str;
 }
 
+template <typename _Iterator>
+void write_files(const std::string& filename, _Iterator begin, _Iterator end, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get MPI Communicator properties
+    int rank, p;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
 
-#endif // MPI_FILE_HPP
+    // get max rank string length:
+    std::stringstream sslen;
+    sslen << p;
+    int rank_slen = sslen.str().size();
+
+    // concat rank at end of filename
+    std::stringstream ss;
+    ss << filename << "." << std::setfill('0') << std::setw(rank_slen) << p << "." << std::setfill('0') << std::setw(rank_slen) << rank;
+
+    // open file with stream
+    //std::cerr << "writing to file " << ss.str() << std::endl;
+    std::ofstream outfs(ss.str());
+
+    // write the content into the file, sep by newline
+    while (begin != end)
+    {
+        outfs << *(begin++) << std::endl;
+    }
+    outfs.close();
+}
+
+} // namespace mxx
+
+#endif // MXX_FILE_HPP

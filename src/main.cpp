@@ -1,9 +1,9 @@
 #include <mpi.h>
 
 #include <iostream>
-#include <vector>
+#include <vector> 
 
-#include "mpi_sa_test.hpp"
+#include "tests/mpi_sa_test.hpp"
 
 
 void my_mpi_errorhandler(MPI_Comm* comm, int* errorcode, ...)

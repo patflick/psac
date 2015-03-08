@@ -17,9 +17,9 @@
 #include <iostream>
 #include <string>
 
-#include "mpi_utils.hpp"
-//#include "mpi_sa_constr.hpp"
-#include "mpi_file.hpp"
+#include <mxx/mpi_utils.hpp>
+#include <mxx/mpi_file.hpp>
+
 #include "lcp.hpp"
 #include "suffix_array.hpp"
 
