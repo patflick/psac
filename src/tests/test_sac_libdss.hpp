@@ -12,8 +12,10 @@
 
 #include <mpi.h>
 
+#include <mxx/collective.hpp>
+
 #include <divsufsort.h>
-//#include "mpi_sa_constr.hpp"
+
 #include "suffix_array.hpp"
 #include "timer.hpp"
 
@@ -40,7 +42,7 @@ bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
     //std::vector<saidx_t> psac_SA;
     //std::vector<saidx_t> psac_ISA;
     // distribute input
-    std::string local_str = scatter_string_block_decomp(str, comm);
+    std::string local_str = mxx::scatter_string_block_decomp(str, comm);
     timer t;
     double start = t.get_ms();
     //sa_construction_gl<saidx_t>(str, psac_SA, psac_ISA, comm);
@@ -53,7 +55,7 @@ bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
     int rank;
     MPI_Comm_rank(comm, &rank);
 
-    std::vector<saidx_t> glSA = gather_vectors(sa.local_SA, comm);
+    std::vector<saidx_t> glSA = mxx::gather_vectors(sa.local_SA, comm);
 
     if (rank == 0)
     {

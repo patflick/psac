@@ -4,8 +4,11 @@
 #include <mpi.h>  // TODO: remove MPI dependency from this file once the MPI functions are relocated elsewhere
 #include <vector>
 #include <string>
+#include <algorithm>
 
-#include "mpi_utils.hpp"
+//#include "mpi_utils.hpp"
+#include <mxx/datatypes.hpp>
+
 #include "bitops.hpp"
 
 
@@ -37,7 +40,6 @@ std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, 
     // get MPI type
     mxx::datatype<index_t> dt;
     MPI_Datatype mpi_dt = dt.type();
-
 
     MPI_Allreduce(&hist[0], &out_hist[0], 256, mpi_dt, MPI_SUM, comm);
 

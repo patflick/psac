@@ -1,15 +1,15 @@
 /**
- * @file    mpi_samplesort.hpp
+ * @file    samplesort.hpp
  * @author  Patrick Flick <patrick.flick@gmail.com>
- * @brief   Implements sample sort for distributed MPI clusters
+ * @brief   Implements parallel, MPI sample sort
  *
  * Copyright (c) 2014 Georgia Institute of Technology. All Rights Reserved.
  *
  * TODO add Licence
  */
 
-#ifndef MPI_SAMPLESORT_HPP
-#define MPI_SAMPLESORT_HPP
+#ifndef MXX_SAMPLESORT_HPP
+#define MXX_SAMPLESORT_HPP
 
 #include <mpi.h>
 
@@ -25,8 +25,10 @@
 #include <parallel/multiway_merge.h>
 #include <parallel/merge.h>
 
-#include "mpi_utils.hpp"
 #include "partition.hpp"
+#include "datatypes.hpp"
+#include "collective.hpp"
+
 
 #include "timer.hpp"
 
@@ -38,6 +40,10 @@
 #define SS_TIMER_START()
 #define SS_TIMER_END_SECTION(str)
 #endif
+
+
+namespace mxx {
+namespace impl {
 
 /**
  * @brief Fixes an unequal distribution into a block decomposition
@@ -592,6 +598,9 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = M
     samplesort(begin, end, comp, mpi_dt, comm, _AssumeBlockDecomp);
 }
 
-#endif // MPI_SAMPLESORT_HPP
+} // namespace impl
+} // namespace mxx
+
+#endif // MXX_SAMPLESORT_HPP
 
 

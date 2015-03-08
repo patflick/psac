@@ -17,8 +17,8 @@
 #include <iostream>
 #include <string>
 
-#include <mxx/mpi_utils.hpp>
-#include <mxx/mpi_file.hpp>
+#include <mxx/utils.hpp>
+#include <mxx/file.hpp>
 
 #include "lcp.hpp"
 #include "suffix_array.hpp"
@@ -130,13 +130,13 @@ template <typename InputIterator, typename index_t, bool test_lcp>
 void gl_check_correct(const suffix_array<InputIterator, index_t, test_lcp>& sa, InputIterator str_begin, InputIterator str_end,  MPI_Comm comm)
 {
     // gather all the data to rank 0
-    std::vector<index_t> global_SA = gather_vectors(sa.local_SA, comm);
-    std::vector<index_t> global_ISA = gather_vectors(sa.local_B, comm);
+    std::vector<index_t> global_SA = mxx::gather_vectors(sa.local_SA, comm);
+    std::vector<index_t> global_ISA = mxx::gather_vectors(sa.local_B, comm);
     std::vector<index_t> global_LCP;
     if (test_lcp)
-        global_LCP = gather_vectors(sa.local_LCP, comm);
+        global_LCP = mxx::gather_vectors(sa.local_LCP, comm);
     // gather string
-    std::vector<char> global_str_vec = gather_range(str_begin, str_end, comm);
+    std::vector<char> global_str_vec = mxx::gather_range(str_begin, str_end, comm);
     std::string global_str(global_str_vec.begin(), global_str_vec.end());
 
     int rank;
@@ -214,12 +214,12 @@ void sa_test_file(const char* filename, MPI_Comm comm, std::size_t max_local_siz
     MPI_Comm_rank(comm, &rank);
 
     // print out node distribution
-    print_node_distribution(comm);
+    mxx::print_node_distribution(comm);
 
     SAC_TIMER_START();
 
     // block decompose input file
-    std::string local_str = file_block_decompose(filename, comm, max_local_size);
+    std::string local_str = mxx::file_block_decompose(filename, comm, max_local_size);
 
     SAC_TEST_TIMER_END_SECTION("load-input");
 

@@ -7,14 +7,14 @@
 
 #include "timer.hpp"
 #include "alphabet.hpp"
-#include "mpi_samplesort.hpp"
 #include "par_rmq.hpp"
 
 #include <mxx/datatypes.hpp>
 #include <mxx/shift.hpp>
 #include <mxx/partition.hpp>
+#include <mxx/sort.hpp>
 
-#include "prettyprint.hpp"
+#include <prettyprint.hpp>
 
 // TODO: move these macros to somewhere else
 /*********************************************************************
@@ -148,7 +148,7 @@ public:
         MPI_Datatype mpi_size_t = size_dt.type();
         // get local and global size by reduction
         MPI_Allreduce(&local_size, &n, 1, mpi_size_t, MPI_SUM, comm);
-        part = partition::block_decomposition_buffered<index_t>(n, p, rank);
+        part = mxx::partition::block_decomposition_buffered<index_t>(n, p, rank);
 
         // assert a block decomposition
         if (part.local_size() != local_size)
@@ -183,7 +183,7 @@ private:
     InputIterator input_end;
 
     // The block decomposition for the suffix array
-    partition::block_decomposition_buffered<index_t> part;
+    mxx::partition::block_decomposition_buffered<index_t> part;
 
 public: // TODO: make private again and provide some iterator and query access
     /// The local suffix array
@@ -973,7 +973,7 @@ void isa_2b_to_sa(std::vector<index_t>& local_B2)
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
     if(rank == 0)
         std::cerr << "  sorting local size = " << tuple_vec.size() << std::endl;
-    samplesort(tuple_vec.begin(), tuple_vec.end(), std::less<TwoBSA<index_t> >());
+    mxx::sort(tuple_vec.begin(), tuple_vec.end(), std::less<TwoBSA<index_t> >());
 
     SAC_TIMER_END_SECTION("isa2sa_samplesort");
 
@@ -1001,7 +1001,7 @@ void sort_array_tuples(std::vector<std::array<index_t, L+1> >& tuples)
 
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
     //samplesort(tuples.begin(), tuples.end(), cmp);
-    samplesort(tuples.begin(), tuples.end(),
+    mxx::sort(tuples.begin(), tuples.end(),
     [] (const std::array<index_t, L+1>& x,
         const std::array<index_t, L+1>& y) {
         for (unsigned int i = 1; i < L+1; ++i)
@@ -1043,7 +1043,7 @@ void kmer_sorting()
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
     if(rank == 0)
         std::cerr << "  sorting local size = " << tuple_vec.size() << std::endl;
-    samplesort(tuple_vec.begin(), tuple_vec.end(), [](const mypair<index_t>& x, const mypair<index_t>& y){return x.first < y.first;});
+    mxx::sort(tuple_vec.begin(), tuple_vec.end(), [](const mypair<index_t>& x, const mypair<index_t>& y){return x.first < y.first;});
 
     SAC_TIMER_END_SECTION("isa2sa_samplesort_pairs");
 
@@ -1536,7 +1536,7 @@ void reorder_sa_to_isa(std::vector<index_t>& SA)
         ++send_counts[target_p];
     }
     // get exclusive prefix sum
-    std::vector<int> send_displs = get_displacements(send_counts);
+    std::vector<int> send_displs = mxx::get_displacements(send_counts);
     std::vector<int> upper_bound(send_displs.begin(), send_displs.end());
     // create inclusive prefix sum
     for (int i = 0; i < p; ++i)
@@ -1577,11 +1577,11 @@ void reorder_sa_to_isa(std::vector<index_t>& SA)
     SAC_TIMER_END_SECTION("sa2isa_bucketing");
 
     // get displacements again (since they were modified above)
-    send_displs = get_displacements(send_counts);
+    send_displs = mxx::get_displacements(send_counts);
 
     // get receive information
-    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
-    std::vector<int> recv_displs = get_displacements(recv_counts);
+    std::vector<int> recv_counts = mxx::all2allv_get_recv_counts(send_counts, comm);
+    std::vector<int> recv_displs = mxx::get_displacements(recv_counts);
 
     std::vector<index_t> send_SA(SA.size());
     std::vector<index_t> send_B(local_B.size());
@@ -1729,7 +1729,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 
         // message exchange to processor which contains first index
         //msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.first);}, comm);
-        msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
+        mxx::msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
 
         // for each message, add the bucket no. into the `first` field
         for (auto it = msgs.begin(); it != msgs.end(); ++it)
@@ -1743,7 +1743,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
          */
         // send messages back to originator
         //msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.second);}, comm);
-        msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.second);}, comm);
+        mxx::msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.second);}, comm);
 
         // append the previous out-of-bounds messages (since they all have B2 = 0)
         if (out_of_bounds_msgs.size() > 0)
@@ -1949,7 +1949,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
                 MPI_Comm_rank(subcomm, &subrank);
 
                 // sample sort the bucket with arbitrary distribution
-                samplesort(border_bucket.begin(), border_bucket.end(), std::less<TwoBSA<index_t> >(), subcomm, false);
+                mxx::sort(border_bucket.begin(), border_bucket.end(), std::less<TwoBSA<index_t> >(), subcomm, false);
 
 #ifndef NDEBUG
                 index_t first_bucket = border_bucket[0].B1;
@@ -2043,7 +2043,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         }
 
         // message exchange to processor which contains first index
-        msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
+        mxx::msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
 
         // update local ISA with new bucket numbers
         for (auto it = msgs.begin(); it != msgs.end(); ++it)

@@ -18,8 +18,25 @@
 
 // mxx includes
 #include "datatypes.hpp"
+#include "algos.hpp"
+#include "partition.hpp"
 
 namespace mxx {
+
+/**
+ * @brief   Returns the displacements vector needed by MPI_Alltoallv.
+ *
+ * @param counts    The `counts` array needed by MPI_Alltoallv
+ *
+ * @return The displacements vector needed by MPI_Alltoallv.
+ */
+std::vector<int> get_displacements(const std::vector<int>& counts)
+{
+    // copy and do an exclusive prefix sum
+    std::vector<int> result = counts;
+    excl_prefix_sum(result.begin(), result.end());
+    return result;
+}
 
 template <typename Iterator>
 std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(Iterator begin, Iterator end, MPI_Comm comm)

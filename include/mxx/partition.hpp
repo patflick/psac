@@ -177,8 +177,34 @@ private:
     /// number of elements on processors with one more element
     index_t div1mod; // = (n/p + 1)*(n % p)
 };
-
 } // namespace partition
+
+/**
+ * @brief Returns a block partitioning of an input of size `n` among `p` processors.
+ *
+ * @param n The number of elements.
+ * @param p The number of processors.
+ *
+ * @return A vector of the number of elements for each processor.
+ */
+std::vector<int> block_partition(int n, int p)
+{
+    // init result
+    std::vector<int> partition(p);
+    // get the number of elements per processor
+    int local_size = n / p;
+    // and the elements that are not evenly distributable
+    int remaining = n % p;
+    for (int i = 0; i < p; ++i) {
+        if (i < remaining) {
+            partition[i] = local_size + 1;
+        } else {
+            partition[i] = local_size;
+        }
+    }
+    return partition;
+}
+
 } // namespace mxx
 
 #endif // MXX_PARTITION_HPP

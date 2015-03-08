@@ -9,5 +9,5 @@ target_link_libraries(psac-timer rt)
 
 add_executable(test_sac main.cpp ${SCOREP_SRCFILES})
 target_link_libraries(test_sac ${EXTRA_LIBS})
-target_link_libraries(psac-timer) # TODO continuehere!
+target_link_libraries(test_sac psac-timer) # TODO continuehere!
 #target_link_libraries(test_sac ${SCOREP_LIBS})

@@ -19,6 +19,7 @@
 #include <streambuf>
 #include <sstream>
 #include <iostream>
+#include <iomanip>
 
 // mxx includes
 #include "partition.hpp"

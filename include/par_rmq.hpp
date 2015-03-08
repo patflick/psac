@@ -15,7 +15,11 @@
 #include <vector>
 #include <cstdint>
 
-#include "mpi_utils.hpp"
+//#include "mpi_utils.hpp"
+#include <mxx/datatypes.hpp>
+#include <mxx/partition.hpp>
+#include <mxx/collective.hpp>
+
 #include "rmq.hpp"
 
 
@@ -44,7 +48,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     // get MPI type
     mxx::datatype<index_t> dt;
     MPI_Datatype mpi_index_t = dt.type();
-    partition::block_decomposition_buffered<index_t> part(n, p, rank);
+    mxx::partition::block_decomposition_buffered<index_t> part(n, p, rank);
 
     // get size parameters
     std::size_t local_size = local_els.size();
@@ -85,7 +89,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     std::vector<std::tuple<index_t, index_t, index_t> > ranges_right(ranges);
 
     // first communication
-    msgs_all2all(
+    mxx::msgs_all2all(
         ranges,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
             return part.target_processor(std::get<1>(x));
@@ -105,14 +109,14 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
         std::get<2>(*it) = *range_min;
     }
     // send results back to originator
-    msgs_all2all(
+    mxx::msgs_all2all(
         ranges,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
             return part.target_processor(std::get<0>(x));
         }, comm);
 
     // second communication
-    msgs_all2all(
+    mxx::msgs_all2all(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
             return part.target_processor(std::get<2>(x)-1);
@@ -132,7 +136,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
         std::get<2>(*it) = *range_min;
     }
     // send results back to originator
-    msgs_all2all(
+    mxx::msgs_all2all(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
             return part.target_processor(std::get<0>(x));

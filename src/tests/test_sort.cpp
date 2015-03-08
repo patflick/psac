@@ -2,9 +2,10 @@
 
 #include <vector>
 #include <iostream>
-#include "mpi_samplesort.hpp"
 #include "timer.hpp"
-#include "partition.hpp"
+
+#include <mxx/partition.hpp>
+#include <mxx/sort.hpp>
 
 typedef int element_t;
 
@@ -30,7 +31,7 @@ void time_samplesort(std::size_t input_size, MPI_Comm comm)
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
     timer t;
-    partition::block_decomposition<std::size_t> part(input_size, p, rank);
+    mxx::partition::block_decomposition<std::size_t> part(input_size, p, rank);
 
     // generate local input
     std::size_t local_size = part.local_size();
@@ -40,14 +41,14 @@ void time_samplesort(std::size_t input_size, MPI_Comm comm)
     // sort
     MPI_Barrier(comm);
     double start = t.get_ms();
-    samplesort(local_els.begin(), local_els.end(), std::less<element_t>(), comm);
+    mxx::sort(local_els.begin(), local_els.end(), std::less<element_t>(), comm);
     MPI_Barrier(comm);
     double duration = t.get_ms() - start;
     if (rank == 0)
         // print time taken in csv format
         std::cout << p << ";" << input_size << ";" << duration << std::endl;
     // check if input is sorted
-    if (!is_sorted(local_els.begin(), local_els.end(), std::less<element_t>(), comm))
+    if (!mxx::is_sorted(local_els.begin(), local_els.end(), std::less<element_t>(), comm))
     {
         std::cerr << "ERROR: Output is not sorted!" << std::endl;
         exit(1);

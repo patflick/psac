@@ -1,6 +1,6 @@
 #include <mpi.h>
 
-#include "mpi_file.hpp"
+#include <mxx/file.hpp>
 
 int main(int argc, char *argv[])
 {
@@ -14,7 +14,7 @@ int main(int argc, char *argv[])
     MPI_Comm_rank(comm, &rank);
 
     /* code */
-    std::string in = file_block_decompose(argv[1], comm, 100);
+    std::string in = mxx::file_block_decompose(argv[1], comm, 100);
 
     // finalize MPI
     MPI_Finalize();
