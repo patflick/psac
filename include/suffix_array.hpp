@@ -13,6 +13,7 @@
 #include <mxx/shift.hpp>
 #include <mxx/partition.hpp>
 #include <mxx/sort.hpp>
+#include <mxx/collective.hpp>
 
 #include <prettyprint.hpp>
 
@@ -217,12 +218,6 @@ void construct(bool fast_resolval = true) {
     unsigned int bits_per_char;
     std::tie(k, bits_per_char) = initial_bucketing();
     DEBUG_STAGE_VEC("after initial bucketing", local_B);
-#if 0
-    std::cerr << "========  After initial bucketing  ========" << std::endl;
-    std::cerr << "On processor rank = " << rank << std::endl;
-    std::cerr << "B : "; print_vec(local_B);
-#endif
-
     SAC_TIMER_END_SECTION("initial-bucketing");
 
     // init local_SA
@@ -248,12 +243,6 @@ void construct(bool fast_resolval = true) {
         std::vector<index_t> local_B2;
         shift_buckets(shift_by, local_B2);
         DEBUG_STAGE_VEC2("after shift by " << shift_by, local_B, local_B2);
-#if 0
-        std::cerr << "========  After shift by " << shift_by << "  ========" << std::endl;
-        std::cerr << "On processor rank = " << rank << std::endl;
-        std::cerr << "B : "; print_vec(local_B);
-        std::cerr << "B2: "; print_vec(local_B2);
-#endif
         SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets");
 
         /*************
@@ -363,12 +352,6 @@ void construct_arr(bool fast_resolval = true) {
     unsigned int bits_per_char;
     std::tie(k, bits_per_char) = initial_bucketing();
     DEBUG_STAGE_VEC("after initial bucketing", local_B);
-#if 0
-    std::cerr << "========  After initial bucketing  ========" << std::endl;
-    std::cerr << "On processor rank = " << rank << std::endl;
-    std::cerr << "B : "; print_vec(local_B);
-#endif
-
     SAC_TIMER_END_SECTION("initial-bucketing");
 
     // init local_SA
@@ -407,7 +390,6 @@ void construct_arr(bool fast_resolval = true) {
         shift_buckets<L>(shift_by, tuples);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets");
 
-//        std::cout << tuples << std::endl;
 
         /*************
          *  ISA->SA  *
@@ -416,8 +398,6 @@ void construct_arr(bool fast_resolval = true) {
         sort_array_tuples<L>(tuples);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "ISA-to-SA");
 
-//        std::cout << "After sort:" << std::endl;
-//        std::cout << tuples << std::endl;
 
         /****************
          *  Update LCP  *
@@ -447,9 +427,6 @@ void construct_arr(bool fast_resolval = true) {
         DEBUG_STAGE_VEC("after rebucket", local_B);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "rebucket");
 
-//        std::cout << "After rebucket:" << std::endl;
-//        std::cout << tuples << std::endl;
-//        std::cout << local_B << std::endl;
 
         /**************************************
          *  Reset local_SA array from tuples  *
@@ -457,7 +434,6 @@ void construct_arr(bool fast_resolval = true) {
         for (std::size_t i = 0; i < local_size; ++i)
         {
             local_SA[i] = tuples[i][0];
-            //local_B[i] = tuples[i][1];
         }
 
         // deallocate all memory
@@ -479,12 +455,6 @@ void construct_arr(bool fast_resolval = true) {
             std::vector<index_t> cpy_SA(local_SA);
             local_B_SA = local_B; // copy
             reorder_sa_to_isa(cpy_SA);
-
-//            std::cout << "after reorder ISA" << std::endl;
-//            std::cout << local_B << std::endl;
-//            std::cout << local_B_SA << std::endl;
-//            std::cout << cpy_SA << std::endl;
-
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
             break;
         }
@@ -1043,7 +1013,10 @@ void kmer_sorting()
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
     if(rank == 0)
         std::cerr << "  sorting local size = " << tuple_vec.size() << std::endl;
-    mxx::sort(tuple_vec.begin(), tuple_vec.end(), [](const mypair<index_t>& x, const mypair<index_t>& y){return x.first < y.first;});
+    mxx::sort(tuple_vec.begin(), tuple_vec.end(),
+              [](const mypair<index_t>& x, const mypair<index_t>& y) {
+                    return x.first < y.first;
+              });
 
     SAC_TIMER_END_SECTION("isa2sa_samplesort_pairs");
 
@@ -1577,34 +1550,17 @@ void reorder_sa_to_isa(std::vector<index_t>& SA)
     SAC_TIMER_END_SECTION("sa2isa_bucketing");
 
     // get displacements again (since they were modified above)
-    send_displs = mxx::get_displacements(send_counts);
-
-    // get receive information
-    std::vector<int> recv_counts = mxx::all2allv_get_recv_counts(send_counts, comm);
-    std::vector<int> recv_displs = mxx::get_displacements(recv_counts);
-
-    std::vector<index_t> send_SA(SA.size());
-    std::vector<index_t> send_B(local_B.size());
-    // perform the all2all communication
-    MPI_Alltoallv(&local_B[0], &send_counts[0], &send_displs[0], mpi_index_t,
-                  &send_B[0], &recv_counts[0], &recv_displs[0], mpi_index_t,
-                  comm);
-    MPI_Alltoallv(&SA[0], &send_counts[0], &send_displs[0], mpi_index_t,
-                  &send_SA[0], &recv_counts[0], &recv_displs[0], mpi_index_t,
-                  comm);
+    std::vector<index_t> recv_SA = mxx::all2all(SA, send_counts);
+    std::vector<index_t> recv_B = mxx::all2all(local_B, send_counts);
     SAC_TIMER_END_SECTION("sa2isa_all2all");
 
     // rearrange locally
-    // TODO [ENH]: more cache efficient by sorting rather than random assignment
     for (std::size_t i = 0; i < SA.size(); ++i)
     {
-        index_t out_idx = send_SA[i] - part.excl_prefix_size();
-        assert(0 <= out_idx && out_idx < send_SA.size());
-        local_B[out_idx] = send_B[i];
+        index_t out_idx = recv_SA[i] - part.excl_prefix_size();
+        assert(0 <= out_idx && out_idx < recv_SA.size());
+        local_B[out_idx] = recv_B[i];
     }
-
-    // output is now in send_B -> swap vectors
-    //local_B.swap(send_B);
 
     // reassign the SA
     std::size_t global_offset = part.excl_prefix_size();
@@ -1869,7 +1825,6 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
             // gather all types to first processor
             std::vector<int> overlaps(p);
             MPI_Gather(&overlap_type, 1, MPI_INT, &overlaps[0], 1, MPI_INT, 0, comm);
-            //std::cerr << "HAVE OVERLAPS: "; print_range(overlaps.begin(), overlaps.end());
 
             // create schedule using linear scan over the overlap types
             std::vector<int> schedule(p);

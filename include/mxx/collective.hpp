@@ -1,6 +1,7 @@
 /**
  * @file    collective.hpp
  * @author  Patrick Flick <patrick.flick@gmail.com>
+ * @author  Nagakishore Jammula <njammula3@mail.gatech.edu>
  * @brief   Collective operations.
  *
  * Copyright (c) TODO
@@ -112,6 +113,8 @@ std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm)
 {
     return gather_range(local_vec.begin(), local_vec.end(), comm);
 }
+
+
 
 template <typename InputIterator, typename OutputIterator>
 void copy_n(InputIterator& in, std::size_t n, OutputIterator out)
@@ -402,17 +405,45 @@ void global_prefix_sum(Iterator begin, Iterator end, MPI_Comm comm)
   }
 }
 
+
+
+
+
 // assumes only local send_counts for an all2allv operation are available
 // this function scatters the send counts to get the receive counts
-inline std::vector<int> all2allv_get_recv_counts(std::vector<int>& send_counts, MPI_Comm comm)
+inline std::vector<int> all2allv_get_recv_counts(const std::vector<int>& send_counts, MPI_Comm comm)
 {
     std::size_t size = send_counts.size();
     std::vector<int> recv_counts;
     recv_counts.resize(size);
-    MPI_Alltoall(&send_counts[0], 1, MPI_INT, &recv_counts[0], 1, MPI_INT, comm);
+    MPI_Alltoall(const_cast<int*>(&send_counts[0]), 1, MPI_INT, &recv_counts[0], 1, MPI_INT, comm);
     return recv_counts;
 }
 
+template<typename T>
+std::vector<T> all2all(const std::vector<T>& send_buffer, const std::vector<int>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get counts and displacements
+    std::vector<int> send_displs = get_displacements(send_counts);
+    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    std::vector<int> recv_displs = get_displacements(recv_counts);
+
+    // get total size
+    std::size_t recv_size = recv_displs.back() + recv_counts.back();
+    std::vector<T> recv_buffer(recv_size);
+
+    // get MPI type
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
+
+    // collective all2all!
+    MPI_Alltoallv(const_cast<T*>(&send_buffer[0]), const_cast<int*>(&send_counts[0]), &send_displs[0], mpi_dt,
+                  &recv_buffer[0], &recv_counts[0], &recv_displs[0], mpi_dt,
+                  comm);
+
+    // return the receive buffer
+    return recv_buffer;
+}
 
 template<typename T, typename _TargetP>
 void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)

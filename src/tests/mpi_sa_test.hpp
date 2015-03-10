@@ -75,7 +75,7 @@ bool gl_check_correct_SA(const std::vector<index_t>& SA, const std::vector<index
         // check SA conditions
         if (i >= 1 && SA[i-1] < n-1)
         {
-            if (!(str[SA[i]] >= str[SA[i-1]]))
+            if (!(str[SA[i-1]] <= str[SA[i]]))
             {
                 std::cerr << "[ERROR] wrong SA order: str[SA[i]] >= str[SA[i-1]]" << std::endl;
                 success = false;
@@ -83,7 +83,7 @@ bool gl_check_correct_SA(const std::vector<index_t>& SA, const std::vector<index
 
             // if strings are equal, the ISA of these positions have to be
             // ordered
-            if (str[SA[i]] == str[SA[i-1]])
+            if (str[SA[i-1]] == str[SA[i]])
             {
                 if (!(ISA[SA[i-1]+1] < ISA[SA[i]+1]))
                 {

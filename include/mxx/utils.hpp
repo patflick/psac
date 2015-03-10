@@ -1,36 +1,26 @@
 /**
  * @file    mpi_utils.hpp
- * @author  Nagakishore Jammula <njammula3@mail.gatech.edu>
  * @author  Patrick Flick <patrick.flick@gmail.com>
- * @brief   Implements some helpful MPI utility function, mostly for
- *          interacting with MPI using std::vectors
-
- * Copyright (c) TODO
+ * @brief   Implements some helpful MPI utility functions.
+ *
+ * Copyright (c) 2014 Georgia Institute of Technology. All Rights Reserved.
  *
  * TODO add Licence
  */
-
 #ifndef MXX_UTILS_HPP
 #define MXX_UTILS_HPP
 
 // MPI include
 #include <mpi.h>
 
-// for sleep()
-#include <unistd.h>
+// C includes
+#include <unistd.h> // for sleep()
+#include <assert.h>
 
 // C++ includes
 #include <vector>
 #include <algorithm>
-#include <numeric>
-#include <stdexcept>
-#include <sstream>
 #include <string>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
-
-#include <assert.h>
 
 // MXX
 #include "datatypes.hpp"
@@ -39,6 +29,12 @@
 
 namespace mxx {
 
+/**
+ * @brief   Prints out summary information of which MPI processes (ranks)
+ *          are running on which nodes.
+ *
+ * @param comm  The MPI communicator (default = MPI_COMM_WORLD)
+ */
 void print_node_distribution(MPI_Comm comm = MPI_COMM_WORLD)
 {
     // get MPI parameters
@@ -110,6 +106,13 @@ void print_node_distribution(MPI_Comm comm = MPI_COMM_WORLD)
     }
 }
 
+/**
+ * @brief   Helper function for debugging. Prints out it's process PID
+ *          and sleeps till the loop is broken via the debugger.
+ *
+ * @param wait_rank
+ * @param comm
+ */
 void wait_gdb_attach(int wait_rank, MPI_Comm comm)
 {
     int p, rank;
