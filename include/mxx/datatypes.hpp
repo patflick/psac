@@ -16,6 +16,7 @@
 
 // C++ includes
 #include <vector>
+#include <map>
 #include <array>
 #include <tuple>
 #include <numeric>
