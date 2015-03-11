@@ -6,10 +6,10 @@
 #include "tests/mpi_sa_test.hpp"
 
 
-void my_mpi_errorhandler(MPI_Comm* comm, int* errorcode, ...)
+void my_mpi_errorhandler(MPI_Comm*, int* errorcode, ...)
 {
     // throw exception, enables gdb stack trace analysis
-    throw std::runtime_error("Shit: mpi fuckup");
+    throw std::runtime_error("MPI Error!");
 }
 
 int main(int argc, char *argv[])
@@ -27,9 +27,6 @@ int main(int argc, char *argv[])
     MPI_Errhandler errhandler;
     MPI_Errhandler_create(&my_mpi_errorhandler, &errhandler);
     MPI_Errhandler_set(comm, errhandler);
-
-    // attach to process 0
-    //wait_gdb_attach(0, comm);
 
     // run the suffix array construction
     //sa_test_random_dna(comm, 20000000);

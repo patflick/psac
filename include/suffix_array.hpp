@@ -23,10 +23,10 @@
  *********************************************************************/
 
 // TODO: use a proper logging engine!
-#define INFO(msg) {std::cerr << msg << std::endl;}
-//#define INFO(msg) {}
+//#define INFO(msg) {std::cerr << msg << std::endl;}
+#define INFO(msg) {}
 
-#define SAC_ENABLE_TIMER 1
+#define SAC_ENABLE_TIMER 0
 #if SAC_ENABLE_TIMER
 #define SAC_TIMER_START() TIMER_START()
 #define SAC_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
