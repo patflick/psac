@@ -17,66 +17,14 @@
 
 #include <prettyprint.hpp>
 
-// TODO: move these macros to somewhere else
-/*********************************************************************
- *                 macros for debugging with distributed vectors     *
- *********************************************************************/
-// whether to gather all vectors to rank 0 prior to debug output
-// set both to `0` to disable debug output
-#define DO_DEBUG_GLOBAL_VEC 0
-#define DO_DEBUG_LOCAL_VEC 0
-
-// print vector helpers
-#define DEBUG_PRINT_STAGE(stage) \
-    std::cerr << "========  " << stage << "  =======" << std::endl;\
-
-#define DEBUG_PRINT_LOCAL_VEC(vec) \
-    fprintf(stderr, "%-10s: ",#vec);print_vec(vec);
-
-#define DEBUG_PRINT_GLOBAL_VEC(vec) \
-    {\
-        std::vector<index_t> gl_##vec = gather_vectors(vec,comm);\
-        if (rank == 0) {\
-            fprintf(stderr, "GLOBAL %-10s: ",#vec);print_vec(gl_##vec);\
-    }}
-
-// defining common macros for stage vector output
-#if DO_DEBUG_GLOBAL_VEC
-#define DEBUG_STAGE_VEC(stage, vec)\
-        DEBUG_PRINT_STAGE(stage)\
-        DEBUG_PRINT_GLOBAL_VEC(vec)
-#define DEBUG_STAGE_VEC2(stage, vec, vec2)\
-        DEBUG_PRINT_STAGE(stage)\
-        DEBUG_PRINT_GLOBAL_VEC(vec)\
-        DEBUG_PRINT_GLOBAL_VEC(vec2)
-#define DEBUG_STAGE_VEC3(stage, vec, vec2, vec3)\
-        DEBUG_PRINT_STAGE(stage)\
-        DEBUG_PRINT_GLOBAL_VEC(vec)\
-        DEBUG_PRINT_GLOBAL_VEC(vec2)\
-        DEBUG_PRINT_GLOBAL_VEC(vec3)
-#elif DO_DEBUG_LOCAL_VEC
-#define DEBUG_STAGE_VEC(stage, vec)\
-        DEBUG_PRINT_STAGE(stage)\
-        DEBUG_PRINT_LOCAL_VEC(vec)
-#define DEBUG_STAGE_VEC2(stage, vec, vec2)\
-        DEBUG_PRINT_STAGE(stage)\
-        DEBUG_PRINT_LOCAL_VEC(vec)\
-        DEBUG_PRINT_LOCAL_VEC(vec2)
-#define DEBUG_STAGE_VEC3(stage, vec, vec2, vec3)\
-        DEBUG_PRINT_STAGE(stage)\
-        DEBUG_PRINT_LOCAL_VEC(vec)\
-        DEBUG_PRINT_LOCAL_VEC(vec2)\
-        DEBUG_PRINT_LOCAL_VEC(vec3)
-#else
-#define DEBUG_STAGE_VEC(stage, vec)
-#define DEBUG_STAGE_VEC2(stage, vec, vec2)
-#define DEBUG_STAGE_VEC3(stage, vec, vec2, vec3)
-#endif
-
 
 /*********************************************************************
  *              Macros for timing sections in the code               *
  *********************************************************************/
+
+// TODO: use a proper logging engine!
+#define INFO(msg) {std::cerr << msg << std::endl;}
+//#define INFO(msg) {}
 
 #define SAC_ENABLE_TIMER 1
 #if SAC_ENABLE_TIMER
@@ -217,7 +165,6 @@ void construct(bool fast_resolval = true) {
     unsigned int k;
     unsigned int bits_per_char;
     std::tie(k, bits_per_char) = initial_bucketing();
-    DEBUG_STAGE_VEC("after initial bucketing", local_B);
     SAC_TIMER_END_SECTION("initial-bucketing");
 
     // init local_SA
@@ -242,7 +189,6 @@ void construct(bool fast_resolval = true) {
         // shift the B1 buckets by 2^k to the left => equals B2
         std::vector<index_t> local_B2;
         shift_buckets(shift_by, local_B2);
-        DEBUG_STAGE_VEC2("after shift by " << shift_by, local_B, local_B2);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets");
 
         /*************
@@ -250,7 +196,6 @@ void construct(bool fast_resolval = true) {
          *************/
         // by using sample sort on tuples (B1,B2)
         isa_2b_to_sa(local_B2);
-        DEBUG_STAGE_VEC3("after reorder ISA->SA", local_B, local_B2, local_SA);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "ISA-to-SA");
 
         /****************
@@ -266,7 +211,6 @@ void construct(bool fast_resolval = true) {
                 resolve_next_lcp(shift_by, local_B2);
                 SAC_TIMER_END_LOOP_SECTION(shift_by, "update-lcp");
             }
-            DEBUG_STAGE_VEC("LCP update", local_LCP);
         }
 
         /*******************************
@@ -274,8 +218,7 @@ void construct(bool fast_resolval = true) {
          *******************************/
         unfinished_buckets = rebucket(local_B2, true);
         if (rank == 0)
-            std::cerr << "iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << std::endl;
-        DEBUG_STAGE_VEC("after rebucket", local_B);
+            INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "rebucket");
 
         /*************
@@ -307,7 +250,6 @@ void construct(bool fast_resolval = true) {
             reorder_sa_to_isa();
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
-        DEBUG_STAGE_VEC2("after reorder SA->ISA", local_B, local_SA);
 
         // end iteratior
         SAC_TIMER_END_SECTION("sac-iteration");
@@ -320,7 +262,7 @@ void construct(bool fast_resolval = true) {
     if (unfinished_buckets > 0)
     {
         if (rank == 0)
-            std::cerr << "Starting Bucket chasing algorithm" << std::endl;
+            INFO("Starting Bucket chasing algorithm");
         construct_msgs(local_B_SA, local_B, 2*shift_by);
     }
     SAC_TIMER_END_SECTION("construct-msgs");
@@ -351,7 +293,6 @@ void construct_arr(bool fast_resolval = true) {
     unsigned int k;
     unsigned int bits_per_char;
     std::tie(k, bits_per_char) = initial_bucketing();
-    DEBUG_STAGE_VEC("after initial bucketing", local_B);
     SAC_TIMER_END_SECTION("initial-bucketing");
 
     // init local_SA
@@ -414,7 +355,6 @@ void construct_arr(bool fast_resolval = true) {
                 resolve_next_lcp(shift_by, local_B2);
                 SAC_TIMER_END_LOOP_SECTION(shift_by, "update-lcp");
             }
-            DEBUG_STAGE_VEC("LCP update", local_LCP);
         }
         */
 
@@ -423,8 +363,7 @@ void construct_arr(bool fast_resolval = true) {
          *******************************/
         unfinished_buckets = rebucket_arr<L>(tuples, true);
         if (rank == 0)
-            std::cerr << "iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << std::endl;
-        DEBUG_STAGE_VEC("after rebucket", local_B);
+            INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "rebucket");
 
 
@@ -471,7 +410,6 @@ void construct_arr(bool fast_resolval = true) {
             reorder_sa_to_isa();
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
-        DEBUG_STAGE_VEC2("after reorder SA->ISA", local_B, local_SA);
 
         // end iteratior
         SAC_TIMER_END_SECTION("sac-iteration");
@@ -485,7 +423,7 @@ void construct_arr(bool fast_resolval = true) {
     if (true)
     {
         if (rank == 0)
-            std::cerr << "Starting Bucket chasing algorithm" << std::endl;
+            INFO("Starting Bucket chasing algorithm");
         construct_msgs(local_B_SA, local_B, L*shift_by);
     }
     SAC_TIMER_END_SECTION("construct-msgs");
@@ -515,7 +453,6 @@ void construct_fast() {
     unsigned int k;
     unsigned int bits_per_char;
     std::tie(k, bits_per_char) = initial_bucketing();
-    DEBUG_STAGE_VEC("after initial bucketing", local_B);
 
     SAC_TIMER_END_SECTION("initial-bucketing");
 
@@ -548,7 +485,7 @@ void construct_fast() {
 
 
     if (rank == 0)
-        std::cerr << "Starting Bucket chasing algorithm" << std::endl;
+        INFO("Starting Bucket chasing algorithm");
     construct_msgs(local_B_SA, local_B, k);
     SAC_TIMER_END_SECTION("construct-msgs");
 
@@ -593,8 +530,7 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     }
 
     if (rank == 0)
-        std::cerr << "Detecting sigma=" << sigma << " => l=" << l << ", k=" << k
-                  << std::endl;
+        INFO("Detecting sigma=" << sigma << " => l=" << l << ", k=" << k);
 
     // get k-mer mask
     index_t kmer_mask = ((static_cast<index_t>(1) << (l*k)) - static_cast<index_t>(1));
@@ -941,8 +877,6 @@ void isa_2b_to_sa(std::vector<index_t>& local_B2)
     SAC_TIMER_END_SECTION("isa2sa_tupleize");
 
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
-    if(rank == 0)
-        std::cerr << "  sorting local size = " << tuple_vec.size() << std::endl;
     mxx::sort(tuple_vec.begin(), tuple_vec.end(), std::less<TwoBSA<index_t> >());
 
     SAC_TIMER_END_SECTION("isa2sa_samplesort");
@@ -1011,8 +945,6 @@ void kmer_sorting()
     SAC_TIMER_END_SECTION("isa2sa_pairize");
 
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
-    if(rank == 0)
-        std::cerr << "  sorting local size = " << tuple_vec.size() << std::endl;
     mxx::sort(tuple_vec.begin(), tuple_vec.end(),
               [](const mypair<index_t>& x, const mypair<index_t>& y) {
                     return x.first < y.first;
@@ -1676,8 +1608,8 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         MPI_Allreduce(&unfinished_b, &gl_unfinished, 1, mpi_size_t, MPI_SUM, comm);
         if (rank == 0)
         {
-            std::cerr << "==== chaising iteration " << shift_by << " unresolved = " << gl_unresolved << std::endl;
-            std::cerr << "==== chaising iteration " << shift_by << " unfinished = " << gl_unfinished << std::endl;
+            INFO("==== chaising iteration " << shift_by << " unresolved = " << gl_unresolved);
+            INFO("==== chaising iteration " << shift_by << " unfinished = " << gl_unfinished);
         }
         if (gl_unresolved == 0)
             // finished!
@@ -1860,7 +1792,6 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
                 }
             }
 
-            //std::cerr << "FOUND SCHEDULE: "; print_range(schedule.begin(), schedule.end());
             // scatter the schedule to the processors
             MPI_Scatter(&schedule[0], 1, MPI_INT, &my_schedule, 1, MPI_INT, 0, comm);
         }
