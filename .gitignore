@@ -50,3 +50,5 @@ install_manifest.txt
 .swp.*
 
 .kdev_include_paths
+BATCH_*
+runlog/

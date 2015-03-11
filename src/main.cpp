@@ -33,15 +33,15 @@ int main(int argc, char *argv[])
 
     // run the suffix array construction
     //sa_test_random_dna(comm, 20000000);
-    sa_test_random_dna(comm, 10000, true);
+    //sa_test_random_dna(comm, 10000, true);
     //sa_test_random_dna(comm, 10000, true);
     //sa_test_random_dna(comm, 100000, true);
-    //if (argc < 2)
-    //{
-    //    std::cerr << "Usage ./test_sac <filename>" << std::endl;
-    //    exit(1);
-    //}
-    //sa_test_file(argv[1], comm, 0, true);
+    if (argc < 2)
+    {
+        std::cerr << "Usage ./test_sac <filename>" << std::endl;
+        exit(1);
+    }
+    sa_test_file(argv[1], comm, 0, false);
 
     // finalize MPI
     MPI_Finalize();
