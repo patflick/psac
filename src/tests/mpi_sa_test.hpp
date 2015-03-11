@@ -225,8 +225,10 @@ void sa_test_file(const char* filename, MPI_Comm comm, std::size_t max_local_siz
 
     // construct local SA for input string
     //sa_construction(local_str, local_SA, local_ISA, local_LCP, comm);
-    suffix_array<std::string::iterator, unsigned int, false> sa(local_str.begin(), local_str.end(), comm);
-    sa.construct_arr();
+    suffix_array<std::string::iterator, unsigned int, true> sa(local_str.begin(), local_str.end(), comm);
+    //sa.construct_arr();
+    //sa.construct_arr<5>();
+    sa.construct(true);
 
     SAC_TEST_TIMER_END_SECTION("sac");
 
