@@ -72,12 +72,12 @@ std::string file_block_decompose(const char* filename, MPI_Comm comm = MPI_COMM_
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
-    partition::block_decomposition<std::size_t> part(file_size, p, rank);
 
     // restrict max local size (assuming that it is the same parameter on each
     // processor)
     if (max_local_size > 0 && file_size / p > max_local_size)
         file_size = p*max_local_size;
+    partition::block_decomposition<std::size_t> part(file_size, p, rank);
     // block decompose
     std::size_t local_size = part.local_size();
     std::size_t offset = part.excl_prefix_size();
