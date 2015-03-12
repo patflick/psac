@@ -18,7 +18,7 @@
 #PBS  -o BATCH_OUTPUT 
 #PBS  -e BATCH_ERRORS 
 
-#PBS -lnodes=16:ppn=16:compute,walltime=1:00:00
+#PBS -lnodes=64:ppn=16:compute,walltime=1:00:00
 
 source /home/pflick/gcc48env.sh
 
@@ -47,7 +47,8 @@ INFILE=/lustre/alurugroup/pflick/human_g1k_v37.actg
 #for p in 1 2 4 8 16 32 64 128 256 512 1024
 #for i in `seq 1 10`
 #do
-	for p in 64 128  #128 256 #512 1024
+	#for p in # 64 128  #128 256 #512 1024
+	for p in 512 1024
 	do
 		printf "### Running with p = $p processors ###" 1>&2
 		#printf "$p;" 1>&2
