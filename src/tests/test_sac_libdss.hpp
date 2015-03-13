@@ -33,7 +33,7 @@ bool divsufsort_sa_check(const std::string& str, const std::vector<saidx64_t>& S
 {
     saidx64_t n = str.size();
     const sauchar_t* T = reinterpret_cast<const sauchar_t*>(str.data());
-    return sufcheck(T, &SA[0], n, 1) == 0;
+    return sufcheck64(T, &SA[0], n, 1) == 0;
 }
 
 bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
@@ -42,7 +42,7 @@ bool test_compare_divsufsort_psac(std::string& str, MPI_Comm comm)
     //std::vector<saidx_t> psac_SA;
     //std::vector<saidx_t> psac_ISA;
     // distribute input
-    std::string local_str = mxx::scatter_string_block_decomp(str, comm);
+    //std::string local_str = mxx::scatter_string_block_decomp(str, comm);
     timer t;
     double start = t.get_ms();
     //sa_construction_gl<saidx_t>(str, psac_SA, psac_ISA, comm);
