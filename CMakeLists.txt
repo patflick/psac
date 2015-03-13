@@ -113,6 +113,7 @@ include_directories("${PROJECT_SOURCE_DIR}/ext/cxx-prettyprint")
 #include_directories("${PROJECT_SOURCE_DIR}/include")
 
 # include libdivsufsort
+set(BUILD_DIVSUFSORT64 ON)
 add_subdirectory(ext/libdivsufsort)
 include_directories(${libdivsufsort_BINARY_DIR}/include)
 include_directories(${libdivsufsort_SOURCE_DIR}/include)
