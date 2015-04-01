@@ -23,8 +23,8 @@
  *********************************************************************/
 
 // TODO: use a proper logging engine!
-//#define INFO(msg) {std::cerr << msg << std::endl;}
-#define INFO(msg) {}
+#define INFO(msg) {std::cerr << msg << std::endl;}
+//#define INFO(msg) {}
 
 #define SAC_ENABLE_TIMER 0
 #if SAC_ENABLE_TIMER

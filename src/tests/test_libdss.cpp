@@ -58,7 +58,7 @@ int main(int argc, char *argv[])
         long n = 100;
         str = rand_dna(n,0);
     }
-    if (!test_compare_divsufsort_psac(str,comm))
+    //if (!test_compare_divsufsort_psac(str,comm))
     {
         std::cerr << "Failed with p = " << p << std::endl;
         exit(1);

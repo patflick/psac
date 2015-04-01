@@ -11,6 +11,27 @@
 
 #include "bitops.hpp"
 
+/*****************************
+ *  create random DNA input  *
+ *****************************/
+
+inline char rand_dna_char()
+{
+    char DNA[4] = {'A', 'C', 'G', 'T'};
+    return DNA[rand() % 4];
+}
+
+std::string rand_dna(std::size_t size, int seed)
+{
+    srand(1337*seed);
+    std::string str;
+    str.resize(size, ' ');
+    for (std::size_t i = 0; i < size; ++i)
+    {
+        str[i] = rand_dna_char();
+    }
+    return str;
+}
 
 // TODO: put the histrogram functions somewhere else and leave the alphabet
 //       to be non mpi
