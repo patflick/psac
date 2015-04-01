@@ -467,48 +467,55 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
     // 5. locally find splitter positions in data
     //    (if an identical splitter appears at least three times (or more),
     //    then split the intermediary buckets evenly) => send_counts
-    std::vector<int> send_counts(p);
+    std::vector<int> send_counts(p, 0);
     _Iterator pos = begin;
+    partition::block_decomposition<std::size_t> local_part(local_size, p, rank);
     for (std::size_t i = 0; i < local_splitters.size();)
     {
-        // the number of splitters which are equal starting from `i`
+        // get the number of splitters which are equal starting from `i`
         unsigned int split_by = 1;
-        if (i > 0 && !comp(local_splitters[i-1], local_splitters[i]))
+        while (i+split_by < local_splitters.size()
+               && !comp(local_splitters[i], local_splitters[i+split_by]))
         {
-            while (i+split_by < local_splitters.size()
-                   && !comp(local_splitters[i], local_splitters[i+split_by]))
-            {
-                ++split_by;
-            }
+            ++split_by;
         }
 
-        // get bucket boundary and size
-        _Iterator next = std::upper_bound(pos, end, local_splitters[i], comp);
-        std::size_t bucket_size = std::distance(pos, next);
+        // get the range of equal elements
+        std::pair<_Iterator, _Iterator> eqr = std::equal_range(pos, end, local_splitters[i], comp);
 
-        // potentially split accross processors
+        // assign smaller elements to processor left of splitter (= `i`)
+        send_counts[i] += std::distance(pos, eqr.first);
+        pos = eqr.first;
+
+        // split equal elements fairly across processors
+        std::size_t eq_size = std::distance(pos, eqr.second);
         for (unsigned int j = 0; j < split_by; ++j)
         {
-            // TODO: this kind of splitting is not `stable` -> fix it
-            // -> send all elements to single processor, but change processor
-            //    based on own rank
-            std::size_t out_bucket_size = bucket_size / split_by;
-            if (split_by > 1 && j < (bucket_size % split_by))
-                ++out_bucket_size;
-            assert(out_bucket_size < std::numeric_limits<int>::max());
-            send_counts[i] = static_cast<int>(out_bucket_size);
-            ++i;
+            // TODO: this kind of splitting is not `stable` (need other strategy
+            // to mak such splitting stable across processors)
+            std::size_t out_size = 0;
+            if ((std::size_t)send_counts[i+j] < local_part.local_size(i+j))
+            {
+                // try to distribute fairly
+                out_size = std::min(local_part.local_size(i+j) - send_counts[i+j], eq_size);
+                eq_size -= out_size;
+            }
+            assert(out_size < std::numeric_limits<int>::max());
+            send_counts[i+j] += static_cast<int>(out_size);
         }
-        pos = next;
+        // assign remaining elements to next processor
+        assert(eq_size < std::numeric_limits<int>::max());
+        send_counts[i+split_by] += static_cast<int>(eq_size);
+        i += split_by;
+        pos = eqr.second;
     }
+    // send last elements to last processor
+    std::size_t out_size = std::distance(pos, end);
+    assert(out_size < std::numeric_limits<int>::max());
+    send_counts[p-1] += static_cast<int>(out_size);
+    assert(std::accumulate(send_counts.begin(), send_counts.end(), 0) == local_size);
 
     SS_TIMER_END_SECTION("send_counts");
-
-    // send last elements to last processor
-    std::size_t out_bucket_size = std::distance(pos, end);
-    assert(out_bucket_size < std::numeric_limits<int>::max());
-    send_counts[p-1] = static_cast<int>(out_bucket_size);
-    assert(std::accumulate(send_counts.begin(), send_counts.end(), 0) == local_size);
 
 
     // 6. distribute send_counts with all2all to get recv_counts
@@ -518,8 +525,8 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
     std::size_t recv_n = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
     assert(!_AssumeBlockDecomp || recv_n <= 2* local_size);
 
-    //std::cerr << "Allocating for RECV: " << recv_n << std::endl;
     std::vector<value_type> recv_elements(recv_n);
+
 
     // 8. all2all
     std::vector<int> send_displs = get_displacements(send_counts);

@@ -36,7 +36,7 @@ void time_samplesort(std::size_t input_size, MPI_Comm comm)
     // generate local input
     std::size_t local_size = part.local_size();
     std::vector<element_t> local_els(local_size);
-    RandInput rand_input(rank, 1000000);
+    RandInput rand_input(rank, 4);
     std::generate(local_els.begin(), local_els.end(), rand_input);
     // sort
     MPI_Barrier(comm);
