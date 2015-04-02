@@ -11,10 +11,10 @@
 
 // suffix array construction
 #include <suffix_array.hpp>
+#include <alphabet.hpp> // for random DNA
+
 #include <timer.hpp>
 
-// for random DNA:
-#include "tests/mpi_sa_test.hpp"
 
 void benchmark_all(const std::string& local_str, MPI_Comm comm)
 {

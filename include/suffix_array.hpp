@@ -531,7 +531,7 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     // get global alphabet histogram
     std::vector<index_t> alphabet_hist = alphabet_histogram<InputIterator, index_t>(input_begin, input_end, comm);
     // get mapping table and alphabet sizes
-    std::vector<char> alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
+    std::vector<unsigned char> alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
     unsigned int sigma = alphabet_unique_chars(alphabet_hist);
     // bits per character: set l=ceil(log(sigma))
     unsigned int l = alphabet_bits_per_char(sigma);
@@ -563,7 +563,8 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     for (unsigned int i = 0; i < k-1; ++i)
     {
         kmer <<= l;
-        kmer |= alphabet_mapping[static_cast<index_t>(*str_it)];
+        index_t s = (unsigned char)(*str_it);
+        kmer |= alphabet_mapping[s];
         ++str_it;
     }
 
@@ -580,7 +581,8 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     {
         // get next kmer
         kmer <<= l;
-        kmer |= alphabet_mapping[static_cast<index_t>(*str_it)];
+        index_t s = (unsigned char)(*str_it);
+        kmer |= alphabet_mapping[s];
         kmer &= kmer_mask;
         // add to bucket number array
         *buk_it = kmer;

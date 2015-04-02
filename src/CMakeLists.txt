@@ -7,10 +7,6 @@ project(psac-main)
 add_library(psac-timer timer.cpp)
 target_link_libraries(psac-timer rt)
 
-add_executable(test_sac main.cpp)
-target_link_libraries(test_sac ${EXTRA_LIBS})
-target_link_libraries(test_sac psac-timer)
-
 # our main executable for suffix array construction
 add_executable(psac psac.cpp)
 target_link_libraries(psac ${EXTRA_LIBS})

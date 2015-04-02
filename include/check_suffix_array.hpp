@@ -46,7 +46,8 @@ bool check_SA(const std::vector<index_t>& SA, const std::vector<index_t>& ISA, c
         // check SA conditions
         if (i >= 1 && SA[i-1] < n-1)
         {
-            if (!(str[SA[i-1]] <= str[SA[i]]))
+            if (!(static_cast<unsigned char>(str[SA[i-1]])
+                  <= static_cast<unsigned char>(str[SA[i]])))
             {
                 std::cerr << "[ERROR] wrong SA order: str[SA[i]] >= str[SA[i-1]]" << std::endl;
                 success = false;
@@ -54,7 +55,8 @@ bool check_SA(const std::vector<index_t>& SA, const std::vector<index_t>& ISA, c
 
             // if strings are equal, the ISA of these positions have to be
             // ordered
-            if (str[SA[i-1]] == str[SA[i]])
+            if (!(static_cast<unsigned char>(str[SA[i-1]])
+                  == static_cast<unsigned char>(str[SA[i]])))
             {
                 if (!(ISA[SA[i-1]+1] < ISA[SA[i]+1]))
                 {

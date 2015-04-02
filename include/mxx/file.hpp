@@ -91,7 +91,7 @@ std::string file_block_decompose(const char* filename, MPI_Comm comm = MPI_COMM_
     std::stringstream ss;
     ss << &rb;
 
-    std::string local_str = ss.str();
+    std::string local_str(ss.str());
 
     return local_str;
 }

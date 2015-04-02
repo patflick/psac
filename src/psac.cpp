@@ -39,8 +39,9 @@ int main(int argc, char *argv[])
 {
     // set up MPI
     MPI_Init(&argc, &argv);
-    int rank;
+    int rank, p;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &p);
 
     try {
     // define commandline usage
@@ -59,12 +60,11 @@ int main(int argc, char *argv[])
     // read input file or generate input on master processor
     // block decompose input file
     std::string local_str;
-    std::string input_str;
     if (fileArg.getValue() != "") {
         local_str = mxx::file_block_decompose(fileArg.getValue().c_str(), MPI_COMM_WORLD);
     } else {
         // TODO proper distributed random!
-        input_str = rand_dna(randArg.getValue(), seedArg.getValue() * rank);
+        local_str = rand_dna(randArg.getValue()/p, seedArg.getValue() * rank);
     }
 
     // TODO differentiate between index types
