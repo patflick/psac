@@ -16,9 +16,3 @@ target_link_libraries(test_file ${EXTRA_LIBS})
 add_executable(test_rmq test_rmq.cpp)
 # Bitops
 add_executable(test_bitops test_bitops.cpp)
-
-# testing against libdivsufsort
-add_executable(test_ldss test_libdss.cpp)
-target_link_libraries(test_ldss divsufsort64)
-target_link_libraries(test_ldss ${EXTRA_LIBS})
-target_link_libraries(test_ldss psac-timer) # for timer

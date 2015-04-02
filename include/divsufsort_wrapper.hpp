@@ -1,8 +1,8 @@
 /**
  * @file    difsufsort_wrapper.hpp
  * @author  Patrick Flick <patrick.flick@gmail.com>
- * @brief   Wraps the C function calls of libdivsufsort with templates calls
- *          and namespaces. This allows clean usage for comparisons.
+ * @brief   Wraps the C function calls of libdivsufsort with C++ templated
+ *          calls and into a namespace. Requires linking against libdivsufsort.
  *
  * Copyright (c) 2014 Georgia Institute of Technology. All Rights Reserved.
  *
@@ -18,48 +18,26 @@
 #include <limits>
 #include <stdexcept>
 
-// include divsufsort files
+// include divsufsort files (both 32 and 64 bits)
 #include <divsufsort.h>
 #include <divsufsort64.h>
 
 
-// C++ interface for libdivsufsort
+/// C++ interface for libdivsufsort
 namespace dss
 {
 
-#if 0
-// construction
-void sa_construction(const std::string& str, std::vector<saidx_t>& SA)
-{
-    saidx_t n = str.size();
-    SA.resize(n);
-    divsufsort(reinterpret_cast<const sauchar_t*>(str.data()), &SA[0], n);
-}
-// construction 64 bits
-void sa_construction(const std::string& str, std::vector<saidx64_t>& SA)
-{
-    saidx64_t n = str.size();
-    SA.resize(n);
-    divsufsort64(reinterpret_cast<const sauchar_t*>(str.data()), &SA[0], n);
-}
-
-// check correctness
-bool sa_check(const std::string& str, const std::vector<saidx_t>& SA)
-{
-    saidx_t n = str.size();
-    const sauchar_t* T = reinterpret_cast<const sauchar_t*>(str.data());
-    return sufcheck(T, &SA[0], n, 1) == 0;
-}
-
-// check correctness 64 bits
-bool sa_check(const std::string& str, const std::vector<saidx64_t>& SA)
-{
-    saidx64_t n = str.size();
-    const sauchar_t* T = reinterpret_cast<const sauchar_t*>(str.data());
-    return sufcheck64(T, &SA[0], n, 1) == 0;
-}
-#endif
-
+/**
+ * @brief   Constuct the suffix array for the given character range using
+ *          libdivsufsort.
+ *
+ * @tparam InputIterator    An input iterator with value type char
+ * @tparam T                An index type for the suffix array. Either a 32bit
+ *                          or 64 bit integer.
+ * @param begin             The `begin` iterator for the input string.
+ * @param end               The `end` iterator for the input string.
+ * @param SA                The suffix array (as std::vector).
+ */
 template <typename InputIterator, typename T>
 void construct(InputIterator begin, InputIterator end, std::vector<T>& SA)
 {
@@ -67,6 +45,8 @@ void construct(InputIterator begin, InputIterator end, std::vector<T>& SA)
     if (sizeof(char_t) != 1)
         throw std::runtime_error("Input must be a char type");
     std::size_t n = std::distance(begin, end);
+    if (SA.size() != n)
+        SA.resize(n);
     if (sizeof(T) == sizeof(saidx_t)) {
         if (n >= std::numeric_limits<saidx_t>::max())
             throw std::runtime_error("Input size is too large for 32bit indexing.");
@@ -78,6 +58,22 @@ void construct(InputIterator begin, InputIterator end, std::vector<T>& SA)
     }
 }
 
+/**
+ * @brief   Checks whether the given suffix array is correct given the string.
+ *
+ *  This uses libdivsufsort's `sufcheck()` function to check the suffix array
+ *  sequentially.
+ *
+ * @tparam InputIterator    An input iterator with value type char
+ * @tparam T                An index type for the suffix array. Either a 32bit
+ *                          or 64 bit integer.
+ * @param begin             The `begin` iterator for the input string.
+ * @param end               The `end` iterator for the input string.
+ * @param SA                The suffix array (as std::vector).
+ *
+ * @return  True, if the given suffix array is correct given the string. False
+ *          otherwise.
+ */
 template <typename InputIterator, typename T>
 bool check(InputIterator begin, InputIterator end, const std::vector<T>& SA)
 {
@@ -85,12 +81,16 @@ bool check(InputIterator begin, InputIterator end, const std::vector<T>& SA)
     if (sizeof(char_t) != 1)
         throw std::runtime_error("Input must be a char type");
     std::size_t n = std::distance(begin, end);
+    if (SA.size() != n)
+        return false;
     if (sizeof(T) == sizeof(saidx_t)) {
         if (n >= std::numeric_limits<saidx_t>::max())
             throw std::runtime_error("Input size is too large for 32bit indexing.");
-        return sufcheck(reinterpret_cast<const sauchar_t*>(str.data()), reinterpret_cast<saidx_t*>(&SA[0]), n, 1) == 0;
+        return sufcheck(reinterpret_cast<const sauchar_t*>(&(*begin)),
+                        reinterpret_cast<const saidx_t*>(&SA[0]), n, 1) == 0;
     } else if (sizeof(T) == sizeof(saidx64_t)) {
-        return sufcheck64(reinterpret_cast<const sauchar_t*>(str.data()), reinterpret_cast<saidx64_t*>(&SA[0]), n, 1) == 0;
+        return sufcheck64(reinterpret_cast<const sauchar_t*>(&(*begin)),
+                          reinterpret_cast<const saidx64_t*>(&SA[0]), n, 1) == 0;
     } else {
         throw std::runtime_error("Unsupported datatype of Suffix Array.");
     }

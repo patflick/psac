@@ -14,7 +14,8 @@
 #include <string>
 #include <iostream>
 
-#include <suffix_array.hpp>
+#include "suffix_array.hpp"
+#include "lcp.hpp"
 
 /**
  * @brief   Checks whether a given suffix array is correct. This function is
@@ -153,7 +154,7 @@ void gl_check_correct(const suffix_array<InputIterator, index_t, test_lcp>& sa,
 
     if (rank == 0)
     {
-        if (!gl_check_correct_SA(global_SA, global_ISA, global_str))
+        if (!check_SA(global_SA, global_ISA, global_str))
         {
             std::cerr << "[ERROR] Test unsuccessful" << std::endl;
             exit(1);

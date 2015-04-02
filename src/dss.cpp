@@ -19,6 +19,7 @@
 
 // libdivsufsort wrapper
 #include <divsufsort_wrapper.hpp>
+
 // random input generation:
 #include <alphabet.hpp>
 
@@ -32,8 +33,9 @@ int main(int argc, char *argv[])
     TCLAP::CmdLine cmd("Run libdivsufsort suffix array construction and time its execution.");
     TCLAP::ValueArg<std::string> fileArg("f", "file", "Input filename.", true, "", "filename");
     TCLAP::ValueArg<std::size_t> randArg("r", "random", "Random input size", true, 0, "size");
-    TCLAP::ValueArg<int> seedArg("s", "seed", "Sets the seed for the ranom input generation", false, 0, "int");
     cmd.xorAdd(fileArg, randArg);
+    TCLAP::ValueArg<int> seedArg("s", "seed", "Sets the seed for the ranom input generation", false, 0, "int");
+    cmd.add(seedArg);
     TCLAP::ValueArg<int> iterArg("i", "iterations", "Number of iterations to run", false, 1, "num");
     cmd.add(iterArg);
     cmd.parse(argc, argv);
@@ -55,7 +57,7 @@ int main(int argc, char *argv[])
     timer t;
     for (int i = 0; i < iterArg.getValue(); ++i)
     {
-        std::vector<uint32_t> SA;
+        std::vector<uint64_t> SA;
         double start = t.get_ms();
         dss::construct(input_str.begin(), input_str.end(), SA);
         double end = t.get_ms() - start;

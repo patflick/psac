@@ -109,7 +109,7 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
  *         (On the slave processors): An empty vector.
  */
 template<typename T>
-std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm)
+std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm = MPI_COMM_WORLD)
 {
     return gather_range(local_vec.begin(), local_vec.end(), comm);
 }
@@ -283,7 +283,7 @@ std::vector<T> scatter_vector_block_decomp(std::vector<T>& global_vec, MPI_Comm 
 
 // same as scatter_vector_block_decomp, but for std::basic_string
 template<typename CharT>
-std::basic_string<CharT> scatter_string_block_decomp(std::basic_string<CharT>& global_str, MPI_Comm comm)
+std::basic_string<CharT> scatter_string_block_decomp(std::basic_string<CharT>& global_str, MPI_Comm comm = MPI_COMM_WORLD)
 {
     // get MPI Communicator properties
     int rank, p;

@@ -1,20 +1,15 @@
 #ifndef ALPHABET_HPP
 #define ALPHABET_HPP
 
-#include <mpi.h>  // TODO: remove MPI dependency from this file once the MPI functions are relocated elsewhere
 #include <vector>
 #include <string>
 #include <algorithm>
-
-//#include "mpi_utils.hpp"
-#include <mxx/datatypes.hpp>
 
 #include "bitops.hpp"
 
 /*****************************
  *  create random DNA input  *
  *****************************/
-
 inline char rand_dna_char()
 {
     char DNA[4] = {'A', 'C', 'G', 'T'};
@@ -48,23 +43,6 @@ std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0)
     }
 
     return hist;
-}
-
-template <typename InputIterator, typename index_t>
-std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, MPI_Comm comm)
-{
-    static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, char>::value, "Iterator must be of value type `char`.");
-    // get local histogram of alphabet characters
-    std::vector<index_t> hist = get_histogram<index_t>(begin, end, 256);
-
-    std::vector<index_t> out_hist(256);
-    // get MPI type
-    mxx::datatype<index_t> dt;
-    MPI_Datatype mpi_dt = dt.type();
-
-    MPI_Allreduce(&hist[0], &out_hist[0], 256, mpi_dt, MPI_SUM, comm);
-
-    return out_hist;
 }
 
 template <typename index_t>
