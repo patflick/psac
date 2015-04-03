@@ -32,7 +32,7 @@
 
 #include "timer.hpp"
 
-#define SS_ENABLE_TIMER 0
+#define SS_ENABLE_TIMER 1
 #if SS_ENABLE_TIMER
 #define SS_TIMER_START() TIMER_START()
 #define SS_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
@@ -146,7 +146,8 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     std::size_t min_new, max_new;
     MPI_Reduce(&new_local_size, &min_new, 1, mpi_size_t, MPI_MIN, 0, comm);
     MPI_Reduce(&new_local_size, &max_new, 1, mpi_size_t, MPI_MAX, 0, comm);
-    std::cerr << " Decomposition: old [" << min << "," << max << "], new= [" << min_new << "," << max_new << "], for n=" << total_size << " fair decomposition: " << total_size / p << std::endl;
+    if(rank == 0)
+      std::cerr << " Decomposition: old [" << min << "," << max << "], new= [" << min_new << "," << max_new << "], for n=" << total_size << " fair decomposition: " << total_size / p << std::endl;
 #endif
 
     // get the new local sizes from all processors
