@@ -554,14 +554,26 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
         seqs[i].second = seqs[i].first + recv_counts[i];
     }
     val_it start_merge_it = recv_elements.begin();
+
+    std::size_t merge_n = local_size;
+    value_type* merge_buf_begin = &(*begin);
+    std::vector<value_type> merge_buf;
+    // TODO: reasonable values for the buffer?
+    // currently: at least 1/10 th of the size to merge or 1 MiB
+    if (local_size == 0 || local_size < recv_n / 10)
+    {
+        // at least 1MB buffer
+        merge_n = std::max<std::size_t>(recv_n / 10, (1024*1024)/sizeof(value_type));
+        merge_buf.resize(merge_n);
+        merge_buf_begin = &merge_buf[0];
+    }
     for (; recv_n > 0;)
     {
-        std::size_t merge_n = local_size;
-        if (recv_n < local_size)
+        if (recv_n < merge_n)
             merge_n = recv_n;
         // i)   merge at most `local_size` many elements sequentially
         __gnu_parallel::sequential_tag seq_tag;
-        __gnu_parallel::multiway_merge(seqs.begin(), seqs.end(), begin, merge_n, comp, seq_tag);
+        __gnu_parallel::multiway_merge(seqs.begin(), seqs.end(), merge_buf_begin, merge_n, comp, seq_tag);
 
         // ii)  compact the remaining elements in `recv_elements`
         for (int i = p-1; i > 0; --i)
@@ -571,7 +583,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
         }
         // iii) copy the output buffer `local_size` elements back into
         //      `recv_elements`
-        start_merge_it = std::copy(begin, begin + merge_n, start_merge_it);
+        start_merge_it = std::copy(merge_buf_begin, merge_buf_begin + merge_n, start_merge_it);
         assert(start_merge_it == seqs[0].first);
 
         // reduce the number of elements to be merged
