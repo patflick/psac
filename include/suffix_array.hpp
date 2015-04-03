@@ -81,12 +81,10 @@ std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, 
     static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, char>::value, "Iterator must be of value type `char`.");
     // get local histogram of alphabet characters
     std::vector<index_t> hist = get_histogram<index_t>(begin, end, 256);
-
     std::vector<index_t> out_hist(256);
     // get MPI type
     mxx::datatype<index_t> dt;
     MPI_Datatype mpi_dt = dt.type();
-
     MPI_Allreduce(&hist[0], &out_hist[0], 256, mpi_dt, MPI_SUM, comm);
 
     return out_hist;
@@ -531,7 +529,7 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     // get global alphabet histogram
     std::vector<index_t> alphabet_hist = alphabet_histogram<InputIterator, index_t>(input_begin, input_end, comm);
     // get mapping table and alphabet sizes
-    std::vector<unsigned char> alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
+    std::vector<uint16_t> alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
     unsigned int sigma = alphabet_unique_chars(alphabet_hist);
     // bits per character: set l=ceil(log(sigma))
     unsigned int l = alphabet_bits_per_char(sigma);

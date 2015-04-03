@@ -49,11 +49,11 @@ std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0)
 }
 
 template <typename index_t>
-std::vector<unsigned char> alphabet_mapping_tbl(const std::vector<index_t>& global_hist)
+std::vector<uint16_t> alphabet_mapping_tbl(const std::vector<index_t>& global_hist)
 {
-    std::vector<unsigned char> mapping(256, 0);
+    std::vector<uint16_t> mapping(256, 0);
 
-    unsigned char next = static_cast<unsigned char>(1);
+    uint16_t next = static_cast<uint16_t>(1);
     for (std::size_t c = 0; c < 256; ++c)
     {
         if (global_hist[c] != 0)
