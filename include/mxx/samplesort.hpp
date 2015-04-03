@@ -270,21 +270,29 @@ sample_arbit_decomp(_Iterator begin, _Iterator end, _Compare comp, int s, MPI_Co
     //  pick a total of s*p samples, thus locally pick ceil((local_size/n)*s*p)
     //  and at least one samples from each processor.
     //  this will result in at least s*p samples.
-    std::size_t local_s = ((local_size*s*p)+total_size-1)/total_size;
+    std::size_t local_s;
+    if (local_size == 0)
+        local_s = 0;
+    else
+        local_s = std::max<std::size_t>(((local_size*s*p)+total_size-1)/total_size, 1);
     local_s = std::max<std::size_t>(local_s, 1);
 
     //. init samples
-    std::vector<value_type> local_splitters(local_s);
+    std::vector<value_type> local_splitters;
 
     // pick local samples
-    _Iterator pos = begin;
-    for (std::size_t i = 0; i < local_splitters.size(); ++i)
+    if (local_s > 0)
     {
-        std::size_t bucket_size = local_size / (local_s+1) + (i < (local_size % (local_s+1)) ? 1 : 0);
-        // pick last element of each bucket
-        pos += (bucket_size-1);
-        local_splitters[i] = *pos;
-        ++pos;
+        local_splitters.resize(local_s);
+        _Iterator pos = begin;
+        for (std::size_t i = 0; i < local_splitters.size(); ++i)
+        {
+            std::size_t bucket_size = local_size / (local_s+1) + (i < (local_size % (local_s+1)) ? 1 : 0);
+            // pick last element of each bucket
+            pos += (bucket_size-1);
+            local_splitters[i] = *pos;
+            ++pos;
+        }
     }
 
     // 2. gather samples to `rank = 0`
