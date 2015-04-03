@@ -589,6 +589,8 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
         // reduce the number of elements to be merged
         recv_n -= merge_n;
     }
+    // clean up
+    merge_buf.clear(); merge_buf.shrink_to_fit();
 
     SS_TIMER_END_SECTION("local_merge");
 
