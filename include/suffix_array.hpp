@@ -90,7 +90,6 @@ std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, 
     return out_hist;
 }
 
-
 // distributed suffix array
 template <typename InputIterator, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
 class suffix_array

@@ -139,6 +139,16 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     if (rank == 0)
         prefix = 0;
 
+#ifndef NDEBUG
+    std::size_t min, max;
+    MPI_Reduce(&local_size, &min, 1, mpi_size_t, MPI_MIN, 0, comm);
+    MPI_Reduce(&local_size, &max, 1, mpi_size_t, MPI_MAX, 0, comm);
+    std::size_t min_new, max_new;
+    MPI_Reduce(&new_local_size, &min_new, 1, mpi_size_t, MPI_MIN, 0, comm);
+    MPI_Reduce(&new_local_size, &max_new, 1, mpi_size_t, MPI_MAX, 0, comm);
+    std::cerr << " Decomposition: old [" << min << "," << max << "], new= [" << min_new << "," << max_new << "], for n=" << total_size << " fair decomposition: " << total_size / p << std::endl;
+#endif
+
     // get the new local sizes from all processors
     std::vector<std::size_t> new_local_sizes(p);
     // this all-gather is what makes the arbitrary decomposition worse
@@ -434,6 +444,9 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
     if (p == 1)
         return;
 
+#if SS_ENABLE_TIMER
+    MPI_Barrier(comm);
+#endif
     SS_TIMER_END_SECTION("local_sort");
 
     /*
@@ -600,6 +613,9 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
     // clean up
     merge_buf.clear(); merge_buf.shrink_to_fit();
 
+#if SS_ENABLE_TIMER
+    MPI_Barrier(comm);
+#endif
     SS_TIMER_END_SECTION("local_merge");
 
     // A. equalizing distribution into original size (e.g.,block decomposition)
