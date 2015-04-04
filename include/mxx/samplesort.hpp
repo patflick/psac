@@ -405,7 +405,6 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
     int s = p-1;
     // local size
     std::size_t local_size = std::distance(begin, end);
-    assert(local_size > 0);
 
     // sample sort
     // 1. pick `s` samples on each processor
