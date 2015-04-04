@@ -28,6 +28,7 @@
 #include "partition.hpp"
 #include "datatypes.hpp"
 #include "collective.hpp"
+#include "shift.hpp"
 
 
 #include "timer.hpp"
@@ -51,17 +52,10 @@ namespace impl {
 template<typename _InIterator, typename _OutIterator>
 void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator out, MPI_Comm comm = MPI_COMM_WORLD)
 {
-    // get types from iterators
-    typedef typename std::iterator_traits<_InIterator>::value_type value_type;
-
     // get communicator properties
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
-
-    // get MPI type
-    mxx::datatype<value_type> dt;
-    MPI_Datatype mpi_dt = dt.type();
 
     // get local size
     std::size_t local_size = std::distance(begin, end);
@@ -94,15 +88,7 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
         prefix += nsend;
     }
 
-    // prepare all2all
-    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
-    std::vector<int> send_displs = get_displacements(send_counts);
-    std::vector<int> recv_displs = get_displacements(recv_counts);
-
-    // execute all2all into output iterator
-    MPI_Alltoallv(&(*begin), &send_counts[0], &send_displs[0], mpi_dt,
-                  &(*out),   &recv_counts[0], &recv_displs[0], mpi_dt,
-                  comm);
+    all2all(begin, out, send_counts, comm);
 }
 
 /**
@@ -112,17 +98,10 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
 template<typename _InIterator, typename _OutIterator>
 void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator out, std::size_t new_local_size, MPI_Comm comm = MPI_COMM_WORLD)
 {
-    // get types from iterators
-    typedef typename std::iterator_traits<_InIterator>::value_type value_type;
-
     // get communicator properties
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
-
-    // get MPI type
-    mxx::datatype<value_type> dt;
-    MPI_Datatype mpi_dt = dt.type();
 
     // get local size
     std::size_t local_size = std::distance(begin, end);
@@ -189,15 +168,7 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
         prefix += nsend;
     }
 
-    // prepare all2all
-    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
-    std::vector<int> send_displs = get_displacements(send_counts);
-    std::vector<int> recv_displs = get_displacements(recv_counts);
-
-    // execute all2all into output iterator
-    MPI_Alltoallv(&(*begin), &send_counts[0], &send_displs[0], mpi_dt,
-                  &(*out),   &recv_counts[0], &recv_displs[0], mpi_dt,
-                  comm);
+    all2all(begin, out, send_counts, comm);
 }
 
 
@@ -215,36 +186,15 @@ bool is_sorted(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MP
     if (p == 1)
         return std::is_sorted(begin, end, comp);
 
-    // get MPI type
-    mxx::datatype<value_type> dt;
-    MPI_Datatype mpi_dt = dt.type();
-
-    // check that it is locally sorted
+    // check that it is locally sorted (int for MPI_Reduction)
     int sorted = std::is_sorted(begin, end, comp);
 
     // compare if last element on left processor is not bigger than first
     // element on mine
-    MPI_Request req;
-    value_type left_el;
-    if (rank > 0)
-    {
-        // start async receive
-        // TODO: use some tag
-        MPI_Irecv(&left_el, 1, mpi_dt, rank-1, 0, comm, &req);
-    }
-    if (rank < p-1)
-    {
-        // send last element to right
-        // TODO: use custom tag
-        MPI_Send(&(*(end-1)), 1, mpi_dt, rank+1, 0, comm);
-    }
+    value_type left_el = mxx::right_shift(*(end-1));
 
-    // check the received element
-    if (rank > 0)
-    {
-        // wait for successful receive
-        MPI_Wait(&req, MPI_STATUS_IGNORE);
-        // check if sorted
+    // check if sorted
+    if (rank > 0) {
         sorted = sorted && !comp(*begin, left_el);
     }
 
@@ -449,15 +399,10 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
 #endif
     SS_TIMER_END_SECTION("local_sort");
 
-    /*
-    std::cerr << "on rank = " << rank << std::endl;
-    std::cerr << "IN="; print_range(begin, end);
-    */
-
 
     // number of samples
     int s = p-1;
-
+    // local size
     std::size_t local_size = std::distance(begin, end);
     assert(local_size > 0);
 
@@ -538,16 +483,14 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
 
     SS_TIMER_END_SECTION("send_counts");
 
-
+    /*
     // 6. distribute send_counts with all2all to get recv_counts
     std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
 
     // 7. allocate enough space (may be more than previously allocated) for receiving
     std::size_t recv_n = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
     assert(!_AssumeBlockDecomp || recv_n <= 2* local_size);
-
     std::vector<value_type> recv_elements(recv_n);
-
 
     // 8. all2all
     std::vector<int> send_displs = get_displacements(send_counts);
@@ -556,6 +499,13 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
     MPI_Alltoallv(&(*begin), &send_counts[0], &send_displs[0], mpi_dt,
                   &recv_elements[0], &recv_counts[0], &recv_displs[0], mpi_dt,
                   comm);
+    */
+    std::vector<int> recv_counts = all2all(send_counts, 1, comm);
+    std::vector<int> recv_displs = get_displacements(recv_counts);
+    std::size_t recv_n = recv_displs[p-1] + recv_counts[p-1];
+    assert(!_AssumeBlockDecomp || recv_n <= 2* local_size);
+    std::vector<value_type> recv_elements(recv_n);
+    all2all(begin, recv_elements.begin(), send_counts, recv_counts, comm);
     SS_TIMER_END_SECTION("all2all");
 
     // 9. local reordering

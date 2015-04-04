@@ -16,6 +16,8 @@
 #include <mpi.h>
 
 #include <vector>
+#include <iterator>
+#include <limits>
 
 // mxx includes
 #include "datatypes.hpp"
@@ -406,41 +408,107 @@ void global_prefix_sum(Iterator begin, Iterator end, MPI_Comm comm)
 }
 
 
+/*********************************************************************
+ *                             All-2-All                             *
+ *********************************************************************/
 
+/***********************************************
+ *  default MPI_Alltoall (no custom msg size)  *
+ ***********************************************/
 
+template <typename InputIterator, typename OutputIterator>
+void all2all(InputIterator begin, OutputIterator out, std::size_t m, MPI_Comm comm)
+{
+    // get MPI datatype
+    typedef typename std::iterator_traits<InputIterator>::value_type T;
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
+    // all2all
+    // TODO: use multi round or BigMPI when size is too big for int
+    assert(m < std::numeric_limits<int>::max());
+    int num = m;
+    MPI_Alltoall(const_cast<T*>(&(*begin)), num, mpi_dt, &(*out), num, mpi_dt, comm);
+}
 
-// assumes only local send_counts for an all2allv operation are available
-// this function scatters the send counts to get the receive counts
+template <typename T>
+std::vector<T> all2all(const std::vector<T>& msg, std::size_t m = 1, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get comm parameters
+#ifndef NDEBUG
+    int p;
+    MPI_Comm_size(comm, &p);
+    assert(msg.size() == m*p);
+#endif
+
+    // get MPI datatype
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
+    // allocate result
+    std::vector<T> result(msg.size());
+    // all2all
+    // TODO: use multi round or BigMPI when size is too big for int
+    assert(m < std::numeric_limits<int>::max());
+    int num = m;
+    MPI_Alltoall(const_cast<T*>(&msg[0]), num, mpi_dt, &result[0], num, mpi_dt, comm);
+    // return results
+    return result;
+}
+
+/**************************************
+ *  All2all-v (variable vector size)  *
+ **************************************/
+
 inline std::vector<int> all2allv_get_recv_counts(const std::vector<int>& send_counts, MPI_Comm comm)
 {
-    std::size_t size = send_counts.size();
-    std::vector<int> recv_counts;
-    recv_counts.resize(size);
-    MPI_Alltoall(const_cast<int*>(&send_counts[0]), 1, MPI_INT, &recv_counts[0], 1, MPI_INT, comm);
-    return recv_counts;
+    return all2all(send_counts, 1, comm);
+}
+
+template <typename InputIterator, typename OutputIterator>
+void all2all(InputIterator begin, OutputIterator out, const std::vector<int>& send_counts, const std::vector<int>& recv_counts, MPI_Comm comm)
+{
+    std::vector<int> send_displs = get_displacements(send_counts);
+    std::vector<int> recv_displs = get_displacements(recv_counts);
+    // get MPI type
+    typedef typename std::iterator_traits<InputIterator>::value_type T;
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
+    // collective all2all!
+    MPI_Alltoallv(const_cast<T*>(&(*begin)), const_cast<int*>(&send_counts[0]), &send_displs[0], mpi_dt,
+                  &(*out), const_cast<int*>(&recv_counts[0]), &recv_displs[0], mpi_dt, comm);
+}
+
+template <typename InputIterator, typename OutputIterator>
+void all2all(InputIterator begin, OutputIterator out, const std::vector<int>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get counts and displacements
+    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    all2all(begin, out, send_counts, recv_counts, comm);
+}
+
+template <typename InputIterator>
+std::vector<typename std::iterator_traits<InputIterator>::value_type>
+all2all(InputIterator begin, const std::vector<int>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    typedef typename std::iterator_traits<InputIterator>::value_type T;
+    // get receive counts
+    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    // get total size allocate result
+    std::size_t recv_size = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
+    std::vector<T> recv_buffer(recv_size);
+    // all-2-all
+    all2all(begin, recv_buffer.begin(), send_counts, recv_counts, comm);
 }
 
 template<typename T>
 std::vector<T> all2all(const std::vector<T>& send_buffer, const std::vector<int>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
 {
     // get counts and displacements
-    std::vector<int> send_displs = get_displacements(send_counts);
     std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
-    std::vector<int> recv_displs = get_displacements(recv_counts);
-
     // get total size
-    std::size_t recv_size = recv_displs.back() + recv_counts.back();
+    std::size_t recv_size = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
     std::vector<T> recv_buffer(recv_size);
-
-    // get MPI type
-    mxx::datatype<T> dt;
-    MPI_Datatype mpi_dt = dt.type();
-
-    // collective all2all!
-    MPI_Alltoallv(const_cast<T*>(&send_buffer[0]), const_cast<int*>(&send_counts[0]), &send_displs[0], mpi_dt,
-                  &recv_buffer[0], &recv_counts[0], &recv_displs[0], mpi_dt,
-                  comm);
-
+    // all-2-all
+    all2all(send_buffer.begin(), recv_buffer.begin(), send_counts, recv_counts, comm);
     // return the receive buffer
     return recv_buffer;
 }
