@@ -235,7 +235,6 @@ sample_arbit_decomp(_Iterator begin, _Iterator end, _Compare comp, int s, MPI_Co
         local_s = 0;
     else
         local_s = std::max<std::size_t>(((local_size*s*p)+total_size-1)/total_size, 1);
-    local_s = std::max<std::size_t>(local_s, 1);
 
     //. init samples
     std::vector<value_type> local_splitters;
