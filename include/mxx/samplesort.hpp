@@ -42,6 +42,7 @@
 #define SS_TIMER_END_SECTION(str)
 #endif
 
+#define MEASURE_LOAD_BALANCE 1
 
 namespace mxx {
 namespace impl {
@@ -118,7 +119,7 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     if (rank == 0)
         prefix = 0;
 
-#ifndef NDEBUG
+#if MEASURE_LOAD_BALANCE
     std::size_t min, max;
     MPI_Reduce(&local_size, &min, 1, mpi_size_t, MPI_MIN, 0, comm);
     MPI_Reduce(&local_size, &max, 1, mpi_size_t, MPI_MAX, 0, comm);
