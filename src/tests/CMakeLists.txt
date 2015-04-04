@@ -12,7 +12,14 @@ target_link_libraries(test_samplesort psac-timer) # for timer
 add_executable(test_file test_file.cpp)
 target_link_libraries(test_file ${EXTRA_LIBS})
 
+# test big all2alls TODO: add theses tests to MXX
+add_executable(test_all2all test_bigall2all.cpp)
+target_link_libraries(test_all2all ${EXTRA_LIBS})
+target_link_libraries(test_all2all psac-timer)
+
+
 # RMQ
 add_executable(test_rmq test_rmq.cpp)
 # Bitops
 add_executable(test_bitops test_bitops.cpp)
+
