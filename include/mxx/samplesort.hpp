@@ -213,7 +213,6 @@ sample_arbit_decomp(_Iterator begin, _Iterator end, _Compare comp, int s, MPI_Co
 {
     typedef typename std::iterator_traits<_Iterator>::value_type value_type;
     std::size_t local_size = std::distance(begin, end);
-    assert(local_size > 0);
 
     // get communicator properties
     int p, rank;
