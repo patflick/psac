@@ -119,8 +119,11 @@ std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm = M
 template <typename T>
 std::vector<T> allgather(T& t, int size = 1, MPI_Comm comm = MPI_COMM_WORLD)
 {
+    // get MPI Communicator properties
+    int p;
+    MPI_Comm_size(comm, &p);
     // init result
-    std::vector<T> result;
+    std::vector<T> result(size*p);
 
     // get type
     mxx::datatype<T> dt;
