@@ -29,12 +29,13 @@
 #include "datatypes.hpp"
 #include "collective.hpp"
 #include "shift.hpp"
+#include "distribution.hpp"
 
 
 #include "timer.hpp"
 #include "prettyprint.hpp"
 
-#define SS_ENABLE_TIMER 1
+#define SS_ENABLE_TIMER 0
 #if SS_ENABLE_TIMER
 #define SS_TIMER_START() TIMER_START()
 #define SS_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
@@ -47,139 +48,6 @@
 
 namespace mxx {
 namespace impl {
-
-/**
- * @brief Fixes an unequal distribution into a block decomposition
- */
-template<typename _InIterator, typename _OutIterator>
-void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator out, MPI_Comm comm = MPI_COMM_WORLD)
-{
-    // get communicator properties
-    int p, rank;
-    MPI_Comm_size(comm, &p);
-    MPI_Comm_rank(comm, &rank);
-
-    // get local size
-    std::size_t local_size = std::distance(begin, end);
-
-    // get prefix sum of size and total size
-    // TODO: implement some of these functions into an arbitrary decomposition
-    // class
-    std::size_t prefix;
-    std::size_t total_size;
-    // get MPI type
-    mxx::datatype<std::size_t> size_dt;
-    MPI_Datatype mpi_size_t = size_dt.type();
-
-    MPI_Allreduce(&local_size, &total_size, 1, mpi_size_t, MPI_SUM, comm);
-    MPI_Exscan(&local_size, &prefix, 1, mpi_size_t, MPI_SUM, comm);
-    if (rank == 0)
-        prefix = 0;
-
-    // calculate where to send elements
-    std::vector<int> send_counts(p, 0);
-    partition::block_decomposition<std::size_t> part(total_size, p, rank);
-    int first_p = part.target_processor(prefix);
-    std::size_t left_to_send = local_size;
-    for (; left_to_send > 0 && first_p < p; ++first_p)
-    {
-        std::size_t nsend = std::min<std::size_t>(part.prefix_size(first_p) - prefix, left_to_send);
-        assert(nsend < std::numeric_limits<int>::max());
-        send_counts[first_p] = nsend;
-        left_to_send -= nsend;
-        prefix += nsend;
-    }
-
-    all2all(begin, out, send_counts, comm);
-}
-
-/**
- * @brief Redistributes elements from the given decomposition across processors
- *        into the decomposition given by the requested local_size
- */
-template<typename _InIterator, typename _OutIterator>
-void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator out, std::size_t new_local_size, MPI_Comm comm = MPI_COMM_WORLD)
-{
-    // get communicator properties
-    int p, rank;
-    MPI_Comm_size(comm, &p);
-    MPI_Comm_rank(comm, &rank);
-
-    // get local size
-    std::size_t local_size = std::distance(begin, end);
-
-    // get prefix sum of size and total size
-    std::size_t prefix;
-    std::size_t total_size;
-    // get MPI type
-    mxx::datatype<std::size_t> size_dt;
-    MPI_Datatype mpi_size_t = size_dt.type();
-
-    MPI_Allreduce(&local_size, &total_size, 1, mpi_size_t, MPI_SUM, comm);
-    MPI_Exscan(&local_size, &prefix, 1, mpi_size_t, MPI_SUM, comm);
-    if (rank == 0)
-        prefix = 0;
-
-#if MEASURE_LOAD_BALANCE
-    std::size_t min, max;
-    MPI_Reduce(&local_size, &min, 1, mpi_size_t, MPI_MIN, 0, comm);
-    MPI_Reduce(&local_size, &max, 1, mpi_size_t, MPI_MAX, 0, comm);
-    std::size_t min_new, max_new;
-    MPI_Reduce(&new_local_size, &min_new, 1, mpi_size_t, MPI_MIN, 0, comm);
-    MPI_Reduce(&new_local_size, &max_new, 1, mpi_size_t, MPI_MAX, 0, comm);
-    if(rank == 0)
-      std::cerr << " Decomposition: old [" << min << "," << max << "], new= [" << min_new << "," << max_new << "], for n=" << total_size << " fair decomposition: " << total_size / p << std::endl;
-
-    std::vector<std::size_t> toReceive(p);
-    MPI_Gather(&new_local_size, 1, mpi_size_t, &toReceive[0], 1, mpi_size_t, 0, comm);
-    if(rank == 0)
-      std::cerr << toReceive << "\n";
-
-#endif
-
-    // get the new local sizes from all processors
-    std::vector<std::size_t> new_local_sizes(p);
-    // this all-gather is what makes the arbitrary decomposition worse
-    // in terms of complexity than when assuming a block decomposition
-    MPI_Allgather(&new_local_size, 1, mpi_size_t, &new_local_sizes[0], 1, mpi_size_t, comm);
-#ifndef NDEBUG
-    std::size_t new_total_size = std::accumulate(new_local_sizes.begin(), new_local_sizes.end(), 0);
-    assert(total_size == new_total_size);
-#endif
-
-    // calculate where to send elements
-    std::vector<int> send_counts(p, 0);
-    int first_p;
-    std::size_t new_prefix = 0;
-    for (first_p = 0; first_p < p-1; ++first_p)
-    {
-        // find processor for which the prefix sum exceeds mine
-        // i have to send to the previous
-        if (new_prefix + new_local_sizes[first_p] > prefix)
-            break;
-        new_prefix += new_local_sizes[first_p];
-    }
-
-    //= block_partition_target_processor(total_size, p, prefix);
-    std::size_t left_to_send = local_size;
-    for (; left_to_send > 0 && first_p < p; ++first_p)
-    {
-        // make the `new` prefix inclusive (is an exlcusive prefix prior)
-        new_prefix += new_local_sizes[first_p];
-        // send as many elements to the current processor as it needs to fill
-        // up, but at most as many as I have left
-        std::size_t nsend = std::min<std::size_t>(new_prefix - prefix, left_to_send);
-        assert(nsend < std::numeric_limits<int>::max());
-        send_counts[first_p] = nsend;
-        // update the number of elements i have left (`left_to_send`) and
-        // at which global index they start `prefix`
-        left_to_send -= nsend;
-        prefix += nsend;
-    }
-
-    all2all(begin, out, send_counts, comm);
-}
-
 
 template<typename _Iterator, typename _Compare>
 bool is_sorted(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MPI_COMM_WORLD)
