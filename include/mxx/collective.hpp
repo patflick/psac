@@ -634,6 +634,7 @@ all2all(InputIterator begin, const std::vector<count_t>& send_counts, MPI_Comm c
     std::vector<T> recv_buffer(recv_size);
     // all-2-all
     all2all(begin, recv_buffer.begin(), send_counts, recv_counts, comm);
+    return recv_buffer;
 }
 
 template<typename T, typename count_t = int>
