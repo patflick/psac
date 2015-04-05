@@ -34,7 +34,7 @@
 
 #include "timer.hpp"
 
-#define SS_ENABLE_TIMER 1
+#define SS_ENABLE_TIMER 0
 #if SS_ENABLE_TIMER
 #define SS_TIMER_START() TIMER_START()
 #define SS_TIMER_END_SECTION(str) TIMER_END_SECTION(str)

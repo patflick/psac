@@ -13,6 +13,7 @@
 #include <mpi.h>
 
 #include <vector>
+#include <queue>
 #include "assert.h"
 
 #include "datatypes.hpp"
@@ -63,7 +64,7 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
  * (This invalidates all previous iterators)
  */
 template <typename T>
-void block_decompose(std::vector<T>& local_els, MPI_Comm comm = MPI_COMM_WORLD) {
+std::vector<T> block_decompose(const std::vector<T>& local_els, MPI_Comm comm = MPI_COMM_WORLD) {
     // get communicator properties
     int p, rank;
     MPI_Comm_size(comm, &p);
@@ -94,8 +95,7 @@ void block_decompose(std::vector<T>& local_els, MPI_Comm comm = MPI_COMM_WORLD) 
     }
     // communication
     mxx::all2all(local_els.begin(), buffer.begin(), send_counts, comm);
-    // swap buffer
-    local_els.swap(buffer);
+    return buffer;
 }
 
 /**
@@ -179,10 +179,11 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     all2all(begin, out, send_counts, comm);
 }
 
-// TODO: function for block decompsing vector of two partitions (for equal
+// function for block decompsing vector of two partitions (for equal
 // distributing of two halves)
+// this one is stable for both halves. Do one that is non-stable and fast
 template<typename _Iterator>
-void block_decompose_partitions(_Iterator begin, _Iterator mid, _Iterator end, MPI_Comm comm = MPI_COMM_WORLD)
+_Iterator stable_block_decompose_partitions(_Iterator begin, _Iterator mid, _Iterator end, MPI_Comm comm = MPI_COMM_WORLD)
 {
     typedef typename std::iterator_traits<_Iterator>::value_type T;
     // get communicator properties
@@ -196,17 +197,134 @@ void block_decompose_partitions(_Iterator begin, _Iterator mid, _Iterator end, M
     std::size_t left_size = mxx::allreduce(left_local_size, comm);
     std::size_t right_size = mxx::allreduce(right_local_size, comm);
     partition::block_decomposition<std::size_t> part(left_size+right_size, p, rank);
-    partition::block_decomposition<std::size_t> left_part(left_size+right_size, p, rank);
+    partition::block_decomposition<std::size_t> left_part(left_size, p, rank);
 
     // shuffle into buffer
     std::vector<T> buffer(part.local_size());
     redo_block_decomposition(begin, mid, buffer.begin(), comm);
-    redo_arbit_decomposition(mid, end, buffer.begin()+left_part.local_size(), comm);
+    redo_arbit_decomposition(mid, end, buffer.begin()+left_part.local_size(), part.local_size() - left_part.local_size(), comm);
 
     // copy back
     std::copy(buffer.begin(), buffer.end(), begin);
+    return begin + left_part.local_size();
 }
 
+// non-stable version (much faster, since data exchange is only for unequal parts)
+template<typename _Iterator>
+_Iterator block_decompose_partitions(_Iterator begin, _Iterator mid, _Iterator end, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    typedef typename std::iterator_traits<_Iterator>::value_type T;
+    // get communicator properties
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+    // get sizes
+    long long left_local_size = std::distance(begin, mid);
+    long long left_size = mxx::allreduce(left_local_size, comm);
+    partition::block_decomposition<std::size_t> left_part(left_size, p, rank);
+    long long surplus = left_local_size - (long long)left_part.local_size();
+    std::vector<long long> surpluses = mxx::allgather(surplus, comm);
+
+    assert(std::accumulate(surpluses.begin(), surpluses.end(), 0) == 0);
+
+    // calculate the send and receive counts by a linear scan over
+    // the surpluses, using a queue to keep track of all surpluses
+    std::vector<int> send_counts(p, 0);
+    //std::vector<int> recv_counts(p, 0);
+    std::queue<std::pair<int, long long> > fifo;
+    for (int i = 0; i < p; ++i)
+    {
+        if (fifo.empty()) {
+            fifo.push(std::make_pair(i, surpluses[i]));
+        } else if (surpluses[i] > 0) {
+            if (fifo.front().second > 0) {
+                fifo.push(std::make_pair(i, surpluses[i]));
+            } else {
+                while (surpluses[i] > 0 && !fifo.empty())
+                {
+                    long long min = std::min(surpluses[i], -fifo.front().second);
+                    int j = fifo.front().first;
+                    surpluses[i] -= min;
+                    fifo.front().second += min;
+                    if (fifo.front().second == 0)
+                        fifo.pop();
+                    // these processors communicate!
+                    if (rank == i)
+                        send_counts[j] += min;
+                    else if (rank == j)
+                        send_counts[i] += min;
+                }
+                if (surpluses[i] > 0)
+                    fifo.push(std::make_pair(i, surpluses[i]));
+            }
+        } else if (surpluses[i] < 0) {
+            if (fifo.front().second < 0) {
+                fifo.push(std::make_pair(i, surpluses[i]));
+            } else {
+                while (surpluses[i] < 0 && !fifo.empty())
+                {
+                    long long min = std::min(-surpluses[i], fifo.front().second);
+                    int j = fifo.front().first;
+                    surpluses[i] += min;
+                    fifo.front().second -= min;
+                    if (fifo.front().second == 0)
+                        fifo.pop();
+                    // these processors communicate!
+                    if (rank == i)
+                        send_counts[j] += min;
+                    else if (rank == j)
+                        send_counts[i] += min;
+                }
+                if (surpluses[i] < 0)
+                    fifo.push(std::make_pair(i, surpluses[i]));
+            }
+        }
+    }
+    assert(fifo.empty());
+
+
+    // send and receive size are the same!
+    std::size_t send_size = std::accumulate(send_counts.begin(), send_counts.end(), 0);
+    std::vector<T> buffer;
+    if (send_size > 0)
+        buffer.resize(send_size);
+
+#ifndef NDEBUG
+    std::vector<int> recv_counts = all2all(send_counts, 1, comm);
+    for (int i = 0; i < p; ++i) {
+        assert(send_counts[i] == recv_counts[i]);
+    }
+#endif
+
+    // send from the surplus, receive into buffer
+    if (surplus > 0) {
+        mxx::all2all(mid - surplus, buffer.begin(), send_counts, comm);
+        std::copy(buffer.begin(), buffer.end(), mid-surplus);
+    } else if (surplus < 0) {
+        mxx::all2all(mid, buffer.begin(), send_counts, comm);
+        std::copy(buffer.begin(), buffer.end(), mid);
+    } else {
+        assert(send_size == 0);
+        mxx::all2all(mid, buffer.begin(), send_counts, comm);
+    }
+
+
+    /*
+    std::size_t right_local_size = std::distance(mid, end);
+    // TODO: use array of 2 (single reduction!)
+    std::size_t right_size = mxx::allreduce(right_local_size, comm);
+    partition::block_decomposition<std::size_t> part(left_size+right_size, p, rank);
+    partition::block_decomposition<std::size_t> left_part(left_size, p, rank);
+
+    // shuffle into buffer
+    std::vector<T> buffer(part.local_size());
+    redo_block_decomposition(begin, mid, buffer.begin(), comm);
+    redo_arbit_decomposition(mid, end, buffer.begin()+left_part.local_size(), part.local_size() - left_part.local_size(), comm);
+    */
+
+    // copy back
+    return mid - surplus;
+}
 } // namespace mxx
 
 #endif // MXX_DISTRIBUTION_HPP
