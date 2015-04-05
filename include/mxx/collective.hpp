@@ -33,10 +33,11 @@ namespace mxx {
  *
  * @return The displacements vector needed by MPI_Alltoallv.
  */
-std::vector<int> get_displacements(const std::vector<int>& counts)
+template <typename T>
+std::vector<T> get_displacements(const std::vector<T>& counts)
 {
     // copy and do an exclusive prefix sum
-    std::vector<int> result = counts;
+    std::vector<T> result = counts;
     excl_prefix_sum(result.begin(), result.end());
     return result;
 }
@@ -61,7 +62,6 @@ std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(It
     // get type
     mxx::datatype<T> dt;
     MPI_Datatype mpi_dt = dt.type();
-
 
     // master process: receive results
     if (rank == 0)
@@ -116,7 +116,52 @@ std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm = M
     return gather_range(local_vec.begin(), local_vec.end(), comm);
 }
 
+template <typename T>
+std::vector<T> allgather(T& t, int size = 1, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get MPI Communicator properties
+    int p;
+    MPI_Comm_size(comm, &p);
+    // init result
+    std::vector<T> result(size*p);
 
+    // get type
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
+
+    // actual gathering
+    MPI_Allgather(&t, size, mpi_dt, &result[0], size, mpi_dt, comm);
+
+    return result;
+}
+
+template <typename InputIterator, typename OutputIterator>
+void allgather(InputIterator begin, int send_size, OutputIterator out, const std::vector<int>& recv_counts, MPI_Comm comm)
+{
+    typedef typename std::iterator_traits<InputIterator>::value_type T;
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
+    std::vector<int> recv_displs = get_displacements(recv_counts);
+
+    MPI_Allgatherv((void*)&(*begin), send_size, mpi_dt,
+                   &(*out), const_cast<int*>(&recv_counts[0]), &recv_displs[0], mpi_dt, comm);
+
+}
+
+template <typename T>
+std::vector<T> allgather(const std::vector<T>& local_vec, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // gather sizes
+    int size = local_vec.size();
+    std::vector<int> recv_sizes = allgather(size, 1, comm);
+    std::size_t total_size = std::accumulate(recv_sizes.begin(), recv_sizes.end(), 0);
+    // allocate result
+    std::vector<T> result(total_size);
+    // gather
+    allgather(local_vec.begin(), size, result.begin(), recv_sizes, comm);
+
+    return result;
+}
 
 template <typename InputIterator, typename OutputIterator>
 void copy_n(InputIterator& in, std::size_t n, OutputIterator out)
@@ -458,10 +503,12 @@ std::vector<T> all2all(const std::vector<T>& msg, std::size_t m = 1, MPI_Comm co
  *  All2all-v (variable vector size)  *
  **************************************/
 
+/*
 inline std::vector<int> all2allv_get_recv_counts(const std::vector<int>& send_counts, MPI_Comm comm)
 {
     return all2all(send_counts, 1, comm);
 }
+*/
 
 template <typename InputIterator, typename OutputIterator>
 void all2all(InputIterator begin, OutputIterator out, const std::vector<int>& send_counts, const std::vector<int>& recv_counts, MPI_Comm comm)
@@ -478,20 +525,61 @@ void all2all(InputIterator begin, OutputIterator out, const std::vector<int>& se
 }
 
 template <typename InputIterator, typename OutputIterator>
-void all2all(InputIterator begin, OutputIterator out, const std::vector<int>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
+void all2all(InputIterator begin, OutputIterator out, const std::vector<std::size_t>& send_counts, const std::vector<std::size_t>& recv_counts, MPI_Comm comm)
+{
+    // get comm parameters
+    int p, rank;
+    MPI_Comm_size(comm, &p);
+    MPI_Comm_rank(comm, &rank);
+    // calc displacements
+    std::vector<std::size_t> send_displs = get_displacements(send_counts);
+    std::vector<std::size_t> recv_displs = get_displacements(recv_counts);
+    // get type
+    typedef typename std::iterator_traits<InputIterator>::value_type T;
+
+    // TODO: unify tag usage
+    int tag = 12345;
+    // implementing this using point-to-point communication!
+    // dispatch receives
+    std::vector<MPI_Request> reqs(2*p);
+    for (int i = 0; i < p; ++i)
+    {
+        // start with self send/recv
+        int recv_from = (rank + (p-i)) % p;
+        datatype_contiguous<T> bigtype(recv_counts[recv_from]);
+        std::cerr << "p = " << rank << " recv from: " << recv_from << " els=" << recv_counts[recv_from] << std::endl;
+        MPI_Irecv(const_cast<T*>(&(*out)) + recv_displs[recv_from], 1, bigtype.type(),
+                  recv_from, tag, comm, &reqs[i]);
+    }
+    // dispatch sends
+    for (int i = 0; i < p; ++i)
+    {
+        int send_to = (rank + i) % p;
+        datatype_contiguous<T> bigtype(send_counts[send_to]);
+        std::cerr << "p = " << rank << " send to: " << send_to << " els=" << send_counts[send_to] << std::endl;
+        MPI_Isend(const_cast<T*>(&(*begin))+send_displs[send_to], 1, bigtype.type(), send_to,
+                  tag, comm, &reqs[p+i]);
+    }
+
+    // wait for completion
+    MPI_Waitall(2*p, &reqs[0], MPI_STATUSES_IGNORE);
+}
+
+template <typename InputIterator, typename OutputIterator, typename count_t = int>
+void all2all(InputIterator begin, OutputIterator out, const std::vector<count_t>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
 {
     // get counts and displacements
-    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    std::vector<count_t> recv_counts = all2all(send_counts, 1, comm);
     all2all(begin, out, send_counts, recv_counts, comm);
 }
 
-template <typename InputIterator>
+template <typename InputIterator, typename count_t = int>
 std::vector<typename std::iterator_traits<InputIterator>::value_type>
-all2all(InputIterator begin, const std::vector<int>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
+all2all(InputIterator begin, const std::vector<count_t>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
 {
     typedef typename std::iterator_traits<InputIterator>::value_type T;
     // get receive counts
-    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    std::vector<count_t> recv_counts = all2all(send_counts, 1, comm);
     // get total size allocate result
     std::size_t recv_size = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
     std::vector<T> recv_buffer(recv_size);
@@ -499,11 +587,11 @@ all2all(InputIterator begin, const std::vector<int>& send_counts, MPI_Comm comm 
     all2all(begin, recv_buffer.begin(), send_counts, recv_counts, comm);
 }
 
-template<typename T>
-std::vector<T> all2all(const std::vector<T>& send_buffer, const std::vector<int>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
+template<typename T, typename count_t = int>
+std::vector<T> all2all(const std::vector<T>& send_buffer, const std::vector<count_t>& send_counts, MPI_Comm comm = MPI_COMM_WORLD)
 {
     // get counts and displacements
-    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    std::vector<count_t> recv_counts = all2all(send_counts, 1, comm);
     // get total size
     std::size_t recv_size = std::accumulate(recv_counts.begin(), recv_counts.end(), 0);
     std::vector<T> recv_buffer(recv_size);
@@ -543,7 +631,7 @@ void msgs_all2all(std::vector<T>& msgs, _TargetP target_p_fun, MPI_Comm comm)
     }
 
     // get all2all params
-    std::vector<int> recv_counts = all2allv_get_recv_counts(send_counts, comm);
+    std::vector<int> recv_counts = all2all(send_counts, 1, comm);
     std::vector<int> send_displs = get_displacements(send_counts);
     std::vector<int> recv_displs = get_displacements(recv_counts);
 

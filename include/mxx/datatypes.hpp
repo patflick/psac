@@ -20,6 +20,7 @@
 #include <array>
 #include <tuple>
 #include <numeric>
+#include <limits>
 
 
 namespace mxx
@@ -252,19 +253,73 @@ private:
 
 
 /*
- * "templates" (non-C++) for different kinds of data structures.
+ * "templates" for different kinds of data structures.
  * Inherit from these to specialize for your own type easily.
  */
+
 
 /**
  * @brief   A contiguous datatype of the same base type
  */
-template <typename T, std::size_t size>
+template <typename T, std::size_t size = 0>
 class datatype_contiguous {
+  static_assert(size <= std::numeric_limits<int>::max(),
+          "Compile time contiguous types only support sizes up to INT_MAX");
 public:
     datatype_contiguous() : _base_type() {
         MPI_Type_contiguous(size, _base_type.type(), &_type);
         MPI_Type_commit(&_type);
+    }
+    virtual MPI_Datatype& type() {
+        return _type;
+    }
+    virtual ~datatype_contiguous() {
+        MPI_Type_free(&_type);
+    }
+private:
+    MPI_Datatype _type;
+    datatype<T> _base_type;
+};
+
+/*
+ * Runtime selection of size
+ */
+template <typename T>
+class datatype_contiguous<T,0> {
+public:
+    datatype_contiguous(std::size_t size) : _base_type() {
+        if (size <= std::numeric_limits<int>::max())
+        {
+            MPI_Type_contiguous(size, _base_type.type(), &_type);
+            MPI_Type_commit(&_type);
+        } else {
+            // create custom data types of blocks and remainder
+            std::size_t intmax = std::numeric_limits<int>::max();
+            std::size_t nblocks = size / intmax;
+            std::size_t rem = size % intmax;
+
+            // create block and remainder data types
+            datatype_contiguous<T, std::numeric_limits<int>::max()> _block;
+            MPI_Datatype _blocks;
+            MPI_Datatype _remainder;
+            // create two contiguous types for blocks and remainder
+            MPI_Type_contiguous(nblocks, _block.type(), &_blocks);
+            MPI_Type_contiguous(rem, _base_type.type(), &_type);
+
+            // create struct for the concatenation of this type
+            MPI_Aint lb, extent;
+            MPI_Type_get_extent(_base_type.type(), &lb, &extent);
+            MPI_Aint displ = nblocks*intmax*extent;
+            MPI_Aint displs[2] = {0, displ};
+            int blocklen[2] = {1, 1};
+            MPI_Datatype mpitypes[2] = {_blocks, _remainder};
+            MPI_Type_create_struct(2, blocklen, displs, mpitypes, &_type);
+            MPI_Type_commit(&_type);
+
+            // clean up unused types
+            MPI_Type_free(&_blocks);
+            MPI_Type_free(&_remainder);
+        }
     }
     virtual MPI_Datatype& type() {
         return _type;
