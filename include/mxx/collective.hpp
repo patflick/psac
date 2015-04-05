@@ -172,7 +172,7 @@ std::vector<T> allgather(T& t, MPI_Comm comm = MPI_COMM_WORLD)
 }
 
 template <typename InputIterator, typename OutputIterator>
-void allgather(InputIterator begin, int send_size, OutputIterator out, const std::vector<int>& recv_counts, MPI_Comm comm)
+void allgatherv(InputIterator begin, int send_size, OutputIterator out, const std::vector<int>& recv_counts, MPI_Comm comm)
 {
     typedef typename std::iterator_traits<InputIterator>::value_type T;
     mxx::datatype<T> dt;
@@ -199,7 +199,7 @@ allgatherv(InputIterator begin, InputIterator end, MPI_Comm comm = MPI_COMM_WORL
 }
 
 template <typename T>
-std::vector<T> allgather(const std::vector<T>& local_vec, MPI_Comm comm = MPI_COMM_WORLD)
+std::vector<T> allgatherv(const std::vector<T>& local_vec, MPI_Comm comm = MPI_COMM_WORLD)
 {
     // gather sizes
     int size = local_vec.size();
@@ -208,7 +208,7 @@ std::vector<T> allgather(const std::vector<T>& local_vec, MPI_Comm comm = MPI_CO
     // allocate result
     std::vector<T> result(total_size);
     // gather
-    allgather(local_vec.size(), size, result.begin(), recv_sizes, comm);
+    allgatherv(local_vec.begin(), size, result.begin(), recv_sizes, comm);
     return result;
 }
 
