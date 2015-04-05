@@ -44,7 +44,7 @@
 #define SS_TIMER_END_SECTION(str)
 #endif
 
-#define MEASURE_LOAD_BALANCE 1
+#define MEASURE_LOAD_BALANCE 0
 
 namespace mxx {
 namespace impl {

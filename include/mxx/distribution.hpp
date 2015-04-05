@@ -23,7 +23,7 @@
 
 
 
-#define MEASURE_LOAD_BALANCE 1
+#define MEASURE_LOAD_BALANCE 0
 
 namespace mxx
 {
