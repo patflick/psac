@@ -128,6 +128,8 @@ std::vector<T> allgather(T& t, int size = 1, MPI_Comm comm = MPI_COMM_WORLD)
 
     // actual gathering
     MPI_Allgather(&t, size, mpi_dt, &result[0], size, mpi_dt, comm);
+
+    return result;
 }
 
 template <typename InputIterator, typename OutputIterator>
@@ -139,7 +141,7 @@ void allgather(InputIterator begin, int send_size, OutputIterator out, const std
     std::vector<int> recv_displs = get_displacements(recv_counts);
 
     MPI_Allgatherv((void*)&(*begin), send_size, mpi_dt,
-                   &(*out), &recv_counts[0], &recv_displs[0], mpi_dt, comm);
+                   &(*out), const_cast<int*>(&recv_counts[0]), &recv_displs[0], mpi_dt, comm);
 
 }
 
@@ -153,7 +155,9 @@ std::vector<T> allgather(const std::vector<T>& local_vec, MPI_Comm comm = MPI_CO
     // allocate result
     std::vector<T> result(total_size);
     // gather
-    allgather(local_vec.size(), size, result.begin(), recv_sizes, comm);
+    allgather(local_vec.begin(), size, result.begin(), recv_sizes, comm);
+
+    return result;
 }
 
 template <typename InputIterator, typename OutputIterator>
