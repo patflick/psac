@@ -329,6 +329,8 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
 
         // split equal elements fairly across processors
         std::size_t eq_size = std::distance(pos, eqr.second);
+        // try to split approx equal:
+        std::size_t eq_size_split = (eq_size + send_counts[i]) / (split_by+1) + 1;
         for (unsigned int j = 0; j < split_by; ++j)
         {
             // TODO: this kind of splitting is not `stable` (need other strategy
@@ -337,7 +339,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
             if ((std::size_t)send_counts[i+j] < local_part.local_size(i+j))
             {
                 // try to distribute fairly
-                out_size = std::min(local_part.local_size(i+j) - send_counts[i+j], eq_size);
+                out_size = std::min(std::max(local_part.local_size(i+j) - send_counts[i+j], eq_size_split), eq_size);
                 eq_size -= out_size;
             }
             assert(out_size < std::numeric_limits<int>::max());
@@ -377,7 +379,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
     std::vector<int> recv_counts = all2all(send_counts, 1, comm);
     std::vector<int> recv_displs = get_displacements(recv_counts);
     std::size_t recv_n = recv_displs[p-1] + recv_counts[p-1];
-    assert(!_AssumeBlockDecomp || recv_n <= 2* local_size);
+    assert(!_AssumeBlockDecomp || (local_size <= 2 || recv_n <= 2* local_size));
     std::vector<value_type> recv_elements(recv_n);
     all2all(begin, recv_elements.begin(), send_counts, recv_counts, comm);
     SS_TIMER_END_SECTION("all2all");
