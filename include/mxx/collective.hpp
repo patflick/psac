@@ -158,25 +158,17 @@ std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm = M
 template <typename T>
 std::vector<T> allgather(T& t, MPI_Comm comm = MPI_COMM_WORLD)
 {
+    // get MPI Communicator properties
+    int p;
+    MPI_Comm_size(comm, &p);
     // init result
-<<<<<<< HEAD
     std::vector<T> result(p);
-=======
-    std::vector<T> result;
->>>>>>> 69683e798030cebef8fb1277c76d8e527d7249a6
-
     // get type
     mxx::datatype<T> dt;
     MPI_Datatype mpi_dt = dt.type();
-
     // actual gathering
-<<<<<<< HEAD
     MPI_Allgather(&t, 1, mpi_dt, &result[0], 1, mpi_dt, comm);
-
     return result;
-=======
-    MPI_Allgather(&t, size, mpi_dt, &result[0], size, mpi_dt, comm);
->>>>>>> 69683e798030cebef8fb1277c76d8e527d7249a6
 }
 
 template <typename InputIterator, typename OutputIterator>
@@ -187,12 +179,8 @@ void allgather(InputIterator begin, int send_size, OutputIterator out, const std
     MPI_Datatype mpi_dt = dt.type();
     std::vector<int> recv_displs = get_displacements(recv_counts);
     MPI_Allgatherv((void*)&(*begin), send_size, mpi_dt,
-<<<<<<< HEAD
                    &(*out), const_cast<int*>(&recv_counts[0]), &recv_displs[0], mpi_dt, comm);
 }
-=======
-                   &(*out), &recv_counts[0], &recv_displs[0], mpi_dt, comm);
->>>>>>> 69683e798030cebef8fb1277c76d8e527d7249a6
 
 template <typename InputIterator>
 std::vector<typename std::iterator_traits<InputIterator>::value_type>
@@ -221,6 +209,7 @@ std::vector<T> allgather(const std::vector<T>& local_vec, MPI_Comm comm = MPI_CO
     std::vector<T> result(total_size);
     // gather
     allgather(local_vec.size(), size, result.begin(), recv_sizes, comm);
+    return result;
 }
 
 template <typename InputIterator, typename OutputIterator>
