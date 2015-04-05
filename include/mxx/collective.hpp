@@ -117,20 +117,20 @@ std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm = M
 }
 
 template <typename T>
-std::vector<T> allgather(T& t, int size = 1, MPI_Comm comm = MPI_COMM_WORLD)
+std::vector<T> allgather(T& t, MPI_Comm comm = MPI_COMM_WORLD)
 {
     // get MPI Communicator properties
     int p;
     MPI_Comm_size(comm, &p);
     // init result
-    std::vector<T> result(size*p);
+    std::vector<T> result(p);
 
     // get type
     mxx::datatype<T> dt;
     MPI_Datatype mpi_dt = dt.type();
 
     // actual gathering
-    MPI_Allgather(&t, size, mpi_dt, &result[0], size, mpi_dt, comm);
+    MPI_Allgather(&t, 1, mpi_dt, &result[0], 1, mpi_dt, comm);
 
     return result;
 }
@@ -142,10 +142,24 @@ void allgatherv(InputIterator begin, int send_size, OutputIterator out, const st
     mxx::datatype<T> dt;
     MPI_Datatype mpi_dt = dt.type();
     std::vector<int> recv_displs = get_displacements(recv_counts);
-
     MPI_Allgatherv((void*)&(*begin), send_size, mpi_dt,
                    &(*out), const_cast<int*>(&recv_counts[0]), &recv_displs[0], mpi_dt, comm);
+}
 
+template <typename InputIterator>
+std::vector<typename std::iterator_traits<InputIterator>::value_type>
+allgatherv(InputIterator begin, InputIterator end, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // gather sizes
+    int size = std::distance(begin, end);
+    std::vector<int> recv_sizes = allgather(size, comm);
+    std::size_t total_size = std::accumulate(recv_sizes.begin(), recv_sizes.end(), 0);
+    // allocate result
+    typedef typename std::iterator_traits<InputIterator>::value_type T;
+    std::vector<T> result(total_size);
+    // gather
+    allgatherv(&(*begin), size, result.begin(), recv_sizes, comm);
+    return result;
 }
 
 template <typename T>
@@ -153,7 +167,7 @@ std::vector<T> allgatherv(const std::vector<T>& local_vec, MPI_Comm comm = MPI_C
 {
     // gather sizes
     int size = local_vec.size();
-    std::vector<int> recv_sizes = allgather(size, 1, comm);
+    std::vector<int> recv_sizes = allgather(size, comm);
     std::size_t total_size = std::accumulate(recv_sizes.begin(), recv_sizes.end(), 0);
     // allocate result
     std::vector<T> result(total_size);
