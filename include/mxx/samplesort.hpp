@@ -342,11 +342,11 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
                 out_size = std::min(std::max(local_part.local_size(i+j) - send_counts[i+j], eq_size_split), eq_size);
                 eq_size -= out_size;
             }
-            assert(out_size < std::numeric_limits<int>::max());
+            assert(out_size + send_counts[i+j] < (std::size_t)std::numeric_limits<int>::max());
             send_counts[i+j] += static_cast<int>(out_size);
         }
         // assign remaining elements to next processor
-        assert(eq_size < std::numeric_limits<int>::max());
+        assert(eq_size + send_counts[i+split_by] < (std::size_t)std::numeric_limits<int>::max());
         send_counts[i+split_by] += static_cast<int>(eq_size);
         i += split_by;
         pos = eqr.second;
