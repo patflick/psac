@@ -33,7 +33,7 @@ void benchmark_k(const std::string& local_str, int k, MPI_Comm comm)
         sa.construct(true, k);
         double time = t.get_ms() - start;
         if (rank == 0)
-            std::cout << p << ";" << method_name << ";" << time << std::endl;
+            std::cout << p << ";" << method_name << ";" << k << ";" << time << std::endl;
     }
     {
         // without LCP and slow
@@ -43,7 +43,7 @@ void benchmark_k(const std::string& local_str, int k, MPI_Comm comm)
         sa.construct(false, k);
         double time = t.get_ms() - start;
         if (rank == 0)
-            std::cout << p << ";" << method_name << ";" << time << std::endl;
+            std::cout << p << ";" << method_name << ";" << k << ";" << time << std::endl;
     }
     // TODO: array construction with multiple
 }
