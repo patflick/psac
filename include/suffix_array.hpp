@@ -26,7 +26,7 @@
 #define INFO(msg) {std::cerr << msg << std::endl;}
 //#define INFO(msg) {}
 
-#define SAC_ENABLE_TIMER 0
+#define SAC_ENABLE_TIMER 1
 #if SAC_ENABLE_TIMER
 #define SAC_TIMER_START() TIMER_START()
 #define SAC_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
@@ -164,7 +164,7 @@ private:
     static const int PSAC_TAG_EDGE_B = 3;
 
 public:
-void construct(bool fast_resolval = true) {
+void construct(bool fast_resolval = true, unsigned int k = 0) {
     SAC_TIMER_START();
 
     /***********************
@@ -176,14 +176,13 @@ void construct(bool fast_resolval = true) {
     // `k` depends on the alphabet size and the word size of each suffix array
     // element. `k` is choosen to maximize the number of alphabet characters
     // that fit into one machine word
-    unsigned int k;
+    //unsigned int k;
     unsigned int bits_per_char;
-    std::tie(k, bits_per_char) = initial_bucketing();
+    std::tie(k, bits_per_char) = initial_bucketing(k);
     SAC_TIMER_END_SECTION("initial-bucketing");
 
     // init local_SA
-    if (local_SA.size() != local_B.size())
-    {
+    if (local_SA.size() != local_B.size()) {
         local_SA.resize(local_B.size());
     }
 
@@ -521,7 +520,7 @@ private:
  *                         Initial Bucketing                         *
  *********************************************************************/
 // TODO: externalize some code as "k-mer generation"
-std::pair<unsigned int, unsigned int> initial_bucketing()
+std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
 {
     std::size_t min_local_size = part.local_size(p-1);
 
@@ -533,8 +532,12 @@ std::pair<unsigned int, unsigned int> initial_bucketing()
     // bits per character: set l=ceil(log(sigma))
     unsigned int l = alphabet_bits_per_char(sigma);
     // number of characters per word => the `k` in `k-mer`
-    unsigned int k = alphabet_chars_per_word<index_t>(l);
-
+    unsigned int opt_k = alphabet_chars_per_word<index_t>(l);
+    if (k == 0 || k > opt_k) {
+        if (k > opt_k)
+            std::cerr << "[WARNING] given `k` value of " << k << " is too large, setting k=" << opt_k << " instead." << std::endl;
+        k = opt_k;
+    }
     // TODO: during current debugging:
     //k = 2;
     // if the input is too small for `k`, choose a smaller `k`
