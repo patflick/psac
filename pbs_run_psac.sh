@@ -24,14 +24,13 @@ source /home/pflick/gcc48env.sh
 
 MPIRUN=/usr/mpi/gcc/mvapich2-1.7-qlc/bin/mpirun
 
-# Change to directory from which qsub command was issued 
+# Change to directory from which qsub command was issued
 cd $PBS_O_WORKDIR
 
 # define executable to run
 #EXE=./release/bin/test_sac
-EXE=./release/bin/benchmark_sac
-
-echoerr() { cat <<< "$@" 1>&2; }
+#EXE=./release/bin/benchmark_sac
+EXE=./release/bin/benchmark_k
 
 # prepare log folder
 OUT_FOLDER=runlog
@@ -48,11 +47,17 @@ INFILE=/lustre/alurugroup/pflick/human_g1k_v37.actg
 #for i in `seq 1 10`
 #do
 	#for p in # 64 128  #128 256 #512 1024
+for i in `seq 1 10`
+do
+for k in 1 2 4 8 12 16 20
+do
 	for p in 512 1024
 	do
-		printf "### Running with p = $p processors ###" 1>&2
+		printf "### Running iteration $i with p = $p , k = $k processors ###" 1>&2
 		#printf "$p;" 1>&2
 		#/usr/bin/time -f "%E" $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-%r.log $EXE -f $INFILE -i 5
-		$MPIRUN -np $p $EXE -f $INFILE -i 5
+		$MPIRUN -np $p $EXE -f $INFILE -k $k
 	done
+done
+done
 #done

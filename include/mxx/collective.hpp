@@ -42,11 +42,13 @@ std::vector<index_t> get_displacements(const std::vector<index_t>& counts)
     index_t sum = 0;
     index_t tmp;
 
-    // calculate the inclusive prefix sum
+    // calculate the exclusive prefix sum
     typename std::vector<index_t>::iterator begin = result.begin();
-    while (begin != counts.end())
+    while (begin != result.end())
     {
         tmp = sum;
+        // assert that the sum will still fit into the index type (MPI default:
+        // int)
         assert((std::size_t)sum + (std::size_t)*begin < (std::size_t) std::numeric_limits<index_t>::max());
         sum += *begin;
         *begin = tmp;
