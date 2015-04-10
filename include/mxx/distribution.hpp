@@ -111,6 +111,8 @@ std::vector<index_t> surplus_send_pairing(std::vector<long long>& surpluses, int
     std::queue<std::pair<int, long long> > fifo;
     for (int i = 0; i < p; ++i)
     {
+        if (surpluses[i] == 0)
+            continue;
         if (fifo.empty()) {
             fifo.push(std::make_pair(i, surpluses[i]));
         } else if (surpluses[i] > 0) {
