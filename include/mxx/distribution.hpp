@@ -38,6 +38,8 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    if (p == 1)
+        return;
 
     // get local size
     std::size_t local_size = std::distance(begin, end);
@@ -74,6 +76,8 @@ std::vector<T> stable_block_decompose(const std::vector<T>& local_els, MPI_Comm 
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    if (p == 1)
+        return std::vector<T>();
 
     // get local size
     std::size_t local_size = local_els.size();
@@ -170,6 +174,8 @@ void block_decompose(std::vector<T>& local_els, MPI_Comm comm = MPI_COMM_WORLD) 
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    if (p == 1)
+        return;
     // get sizes
     long long local_size = local_els.size();
     long long total_size = mxx::allreduce(local_size, comm);
@@ -213,6 +219,8 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    if (p == 1)
+        return;
 
     // get local size
     std::size_t local_size = std::distance(begin, end);
@@ -299,6 +307,8 @@ _Iterator stable_block_decompose_partitions(_Iterator begin, _Iterator mid, _Ite
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    if (p == 1)
+        return mid;
     // get sizes
     std::size_t left_local_size = std::distance(begin, mid);
     std::size_t right_local_size = std::distance(mid, end);
@@ -328,6 +338,8 @@ _Iterator block_decompose_partitions(_Iterator begin, _Iterator mid, _Iterator e
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
+    if (p == 1)
+        return mid;
     // get sizes
     long long left_local_size = std::distance(begin, mid);
     long long left_size = mxx::allreduce(left_local_size, comm);
