@@ -30,6 +30,10 @@ namespace mxx {
 
 // this wrapper for user functions is not thread-safe!
 // TODO: use another approach in order to make this thread safe!
+// TODO: count template intializations, and make each of these static classes
+//       templated by a counter. thus each user function used in the code
+//       will get its own compile time template instantiation of this static
+//       class
 template <typename T>
 struct user_func_wrapper
 {
@@ -97,8 +101,12 @@ void free_user_op(MPI_Op op)
 /*********************************************************************
  *                Reductions                                         *
  *********************************************************************/
-// TODO add more (vectorized, different reduce ops, etc)
+// TODO: add more (vectorized, different reduce ops, etc)
 // TODO: naming of functions !?
+// TODO: template specialize for std::min, std::max, std::plus, std::multiply
+//       etc for integers to use MPI builtin ops
+
+
 template <typename T>
 T allreduce(T& x, MPI_Comm comm = MPI_COMM_WORLD) {
     // get type
@@ -109,8 +117,6 @@ T allreduce(T& x, MPI_Comm comm = MPI_COMM_WORLD) {
 }
 
 
-// TODO: template specialize for std::min, std::max, std::plus, std::multiply etc
-//       for integers to use MPI builtin ops
 template <typename T, typename Func>
 T allreduce(T& x, Func func, MPI_Comm comm = MPI_COMM_WORLD) {
     // get user op
@@ -190,7 +196,6 @@ void rev_comm(MPI_Comm comm, MPI_Comm& rev)
     int p;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &p);
-
     MPI_Comm_split(comm, 0, p - rank, &rev);
 }
 
@@ -228,6 +233,40 @@ T reverse_scan(T& x, Func func, MPI_Comm comm = MPI_COMM_WORLD) {
     T result = scan(x, func, rev);
     MPI_Comm_free(&rev);
     return result;
+}
+
+
+/*********************
+ *  Specialized ops  *
+ *********************/
+
+/************************
+ *  Boolean reductions  *
+ ************************/
+// useful for testing global conditions, such as termination conditions
+
+template<int dummy = 0>
+bool test_all(bool x, MPI_Comm comm = MPI_COMM_WORLD) {
+    int i = x ? 1 : 0;
+    int result;
+    MPI_Allreduce(&i, &result, 1, MPI_INT, MPI_LAND, comm);
+    return result != 0;
+}
+
+template<int dummy = 0>
+bool test_any(bool x, MPI_Comm comm = MPI_COMM_WORLD) {
+    int i = x ? 1 : 0;
+    int result;
+    MPI_Allreduce(&i, &result, 1, MPI_INT, MPI_LOR, comm);
+    return result != 0;
+}
+
+template<int dummy = 0>
+bool test_none(bool x, MPI_Comm comm = MPI_COMM_WORLD) {
+    int i = x ? 1 : 0;
+    int result;
+    MPI_Allreduce(&i, &result, 1, MPI_INT, MPI_LAND, comm);
+    return result == 0;
 }
 
 } // namespace mxx
