@@ -116,6 +116,15 @@ T allreduce(T& x, MPI_Comm comm = MPI_COMM_WORLD) {
     return result;
 }
 
+template <typename T>
+T reduce(T& x, MPI_Comm comm = MPI_COMM_WORLD, int root = 0)
+{
+    // get type
+    mxx::datatype<T> dt;
+    T result;
+    MPI_Reduce(&x, &result, 1, dt.type(), MPI_SUM, root, comm);
+    return result;
+}
 
 template <typename T, typename Func>
 T allreduce(T& x, Func func, MPI_Comm comm = MPI_COMM_WORLD) {
