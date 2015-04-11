@@ -18,6 +18,7 @@
 
 #include "datatypes.hpp"
 #include "partition.hpp"
+#include "reduction.hpp"
 #include "collective.hpp"
 
 namespace mxx

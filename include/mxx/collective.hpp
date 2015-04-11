@@ -18,6 +18,7 @@
 #include <vector>
 #include <iterator>
 #include <limits>
+#include <functional>
 
 // mxx includes
 #include "datatypes.hpp"
@@ -57,44 +58,6 @@ std::vector<index_t> get_displacements(const std::vector<index_t>& counts)
     return result;
 }
 
-/*********************************************************************
- *                Reductions (TODO: put in own file)                 *
- *********************************************************************/
-// TODO add more (vectorized, different reduce ops, etc)
-// TODO: naming of functions !?
-template <typename T>
-T allreduce(T& x, MPI_Comm comm = MPI_COMM_WORLD)
-{
-    // get type
-    mxx::datatype<T> dt;
-    T result;
-    MPI_Allreduce(&x, &result, 1, dt.type(), MPI_SUM, comm);
-    return result;
-}
-
-template <typename T>
-T exscan(T& x, MPI_Comm comm = MPI_COMM_WORLD)
-{
-    // get type
-    mxx::datatype<T> dt;
-    T result;
-    MPI_Exscan(&x, &result, 1, dt.type(), MPI_SUM, comm);
-    int rank;
-    MPI_Comm_rank(comm, &rank);
-    if (rank == 0)
-      result = T();
-    return result;
-}
-
-template <typename T>
-T scan(T& x, MPI_Comm comm = MPI_COMM_WORLD)
-{
-    // get type
-    mxx::datatype<T> dt;
-    T result;
-    MPI_Scan(&x, &result, 1, dt.type(), MPI_SUM, comm);
-    return result;
-}
 
 template <typename Iterator>
 std::vector<typename std::iterator_traits<Iterator>::value_type> gather_range(Iterator begin, Iterator end, MPI_Comm comm)

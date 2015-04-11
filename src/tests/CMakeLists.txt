@@ -17,6 +17,9 @@ add_executable(test_all2all test_bigall2all.cpp)
 target_link_libraries(test_all2all ${EXTRA_LIBS})
 target_link_libraries(test_all2all psac-timer)
 
+# test big all2alls TODO: add theses tests to MXX
+add_executable(test_reduce reduce.cpp)
+target_link_libraries(test_reduce ${EXTRA_LIBS})
 
 # RMQ
 add_executable(test_rmq test_rmq.cpp)
