@@ -23,7 +23,6 @@
 #include "prettyprint.hpp"
 
 
-
 #define MEASURE_LOAD_BALANCE 0
 
 namespace mxx
@@ -61,7 +60,6 @@ void redo_block_decomposition(_InIterator begin, _InIterator end, _OutIterator o
         left_to_send -= nsend;
         prefix += nsend;
     }
-
     mxx::all2all(begin, out, send_counts, comm);
 }
 
@@ -348,6 +346,10 @@ _Iterator block_decompose_partitions(_Iterator begin, _Iterator mid, _Iterator e
     long long left_size = mxx::allreduce(left_local_size, comm);
     partition::block_decomposition<std::size_t> left_part(left_size, p, rank);
     long long surplus = left_local_size - (long long)left_part.local_size();
+    bool fits = end-begin >= left_part.local_size();
+    bool all_fits = mxx::test_all(fits, comm);
+    if (!all_fits)
+        return mid;
     std::vector<long long> surpluses = mxx::allgather(surplus, comm);
 
     assert(std::accumulate(surpluses.begin(), surpluses.end(), 0) == 0);
