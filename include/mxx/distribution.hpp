@@ -20,6 +20,11 @@
 #include "partition.hpp"
 #include "reduction.hpp"
 #include "collective.hpp"
+#include "prettyprint.hpp"
+
+
+
+#define MEASURE_LOAD_BALANCE 0
 
 namespace mxx
 {
@@ -235,7 +240,7 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     if (rank == 0)
         prefix = 0;
 
-#ifndef NDEBUG
+#if MEASURE_LOAD_BALANCE
     std::size_t min, max;
     MPI_Reduce(&local_size, &min, 1, mpi_size_t, MPI_MIN, 0, comm);
     MPI_Reduce(&local_size, &max, 1, mpi_size_t, MPI_MAX, 0, comm);
@@ -244,6 +249,11 @@ void redo_arbit_decomposition(_InIterator begin, _InIterator end, _OutIterator o
     MPI_Reduce(&new_local_size, &max_new, 1, mpi_size_t, MPI_MAX, 0, comm);
     if(rank == 0)
       std::cerr << " Decomposition: old [" << min << "," << max << "], new= [" << min_new << "," << max_new << "], for n=" << total_size << " fair decomposition: " << total_size / p << std::endl;
+
+    std::vector<std::size_t> toReceive(p);
+    MPI_Gather(&new_local_size, 1, mpi_size_t, &toReceive[0], 1, mpi_size_t, 0, comm);
+    if(rank == 0)
+      std::cerr << toReceive << "\n";
 #endif
 
     // get the new local sizes from all processors

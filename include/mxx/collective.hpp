@@ -133,6 +133,27 @@ std::vector<T> gather_vectors(const std::vector<T>& local_vec, MPI_Comm comm = M
     return gather_range(local_vec.begin(), local_vec.end(), comm);
 }
 
+/**
+ * @brief   Gathers local std::vectors to the all processors inside the
+ *          given communicator.
+ */
+template <typename T>
+std::vector<T> allgather_vectors(const std::vector<T>& local_vec, MPI_Comm comm = MPI_COMM_WORLD)
+{
+    // get MPI Communicator properties
+    int p;
+    MPI_Comm_size(comm, &p);
+    // init result
+    std::vector<T> result(p*local_vec.size());
+    // get type
+    mxx::datatype<T> dt;
+    MPI_Datatype mpi_dt = dt.type();
+    // actual gathering
+    MPI_Allgather((void*)(&local_vec[0]), local_vec.size(), mpi_dt, &result[0], local_vec.size(), mpi_dt, comm);
+    return result;
+}
+
+
 template <typename T>
 std::vector<T> allgather(T& t, MPI_Comm comm = MPI_COMM_WORLD)
 {

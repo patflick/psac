@@ -33,6 +33,7 @@
 
 
 #include "timer.hpp"
+#include "prettyprint.hpp"
 
 #define SS_ENABLE_TIMER 0
 #if SS_ENABLE_TIMER
@@ -43,10 +44,10 @@
 #define SS_TIMER_END_SECTION(str)
 #endif
 
+#define MEASURE_LOAD_BALANCE 0
 
 namespace mxx {
 namespace impl {
-
 
 template<typename _Iterator, typename _Compare>
 bool is_sorted(_Iterator begin, _Iterator end, _Compare comp, MPI_Comm comm = MPI_COMM_WORLD)
