@@ -3,6 +3,7 @@
  * @author  Patrick Flick <patrick.flick@gmail.com>
  * @brief   Reduction operations.
  *
+ *
  * TODO add Licence
  */
 
@@ -175,6 +176,57 @@ T scan(T& x, Func func, MPI_Comm comm = MPI_COMM_WORLD) {
     MPI_Scan(&x, &result, 1, dt.type(), op, comm);
     // clean up op
     free_user_op<T>(op);
+    return result;
+}
+
+/****************************************************
+ *  reverse reductions (with reverse communicator)  *
+ ****************************************************/
+
+void rev_comm(MPI_Comm comm, MPI_Comm& rev)
+{
+    // get MPI parameters
+    int rank;
+    int p;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &p);
+
+    MPI_Comm_split(comm, 0, p - rank, &rev);
+}
+
+template <typename T>
+T reverse_exscan(T& x, MPI_Comm comm = MPI_COMM_WORLD) {
+    MPI_Comm rev;
+    rev_comm(comm, rev);
+    T result = exscan(x, rev);
+    MPI_Comm_free(&rev);
+    return result;
+}
+
+template <typename T, typename Func>
+T reverse_exscan(T& x, Func func, MPI_Comm comm = MPI_COMM_WORLD) {
+    MPI_Comm rev;
+    rev_comm(comm, rev);
+    T result = exscan(x, func, rev);
+    MPI_Comm_free(&rev);
+    return result;
+}
+
+template <typename T>
+T reverse_scan(T& x, MPI_Comm comm = MPI_COMM_WORLD) {
+    MPI_Comm rev;
+    rev_comm(comm, rev);
+    T result = scan(x, rev);
+    MPI_Comm_free(&rev);
+    return result;
+}
+
+template <typename T, typename Func>
+T reverse_scan(T& x, Func func, MPI_Comm comm = MPI_COMM_WORLD) {
+    MPI_Comm rev;
+    rev_comm(comm, rev);
+    T result = scan(x, func, rev);
+    MPI_Comm_free(&rev);
     return result;
 }
 
