@@ -31,7 +31,7 @@
 	#include <time.h>
 #endif
 
-
+#if 0
 #define TIMER_START() timer _t; double _last_time = _t.get_ms();\
                       _last_time += 0.0; /* otherwise: warning: unused variable */ \
                       if (rank == 0) {\
@@ -66,3 +66,4 @@ private:
 	struct timespec creation_time;
 #endif
 };
+#endif

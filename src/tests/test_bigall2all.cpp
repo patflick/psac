@@ -2,7 +2,6 @@
 
 #include <vector>
 #include <iostream>
-#include "timer.hpp"
 
 #include <mxx/partition.hpp>
 #include <mxx/collective.hpp>
@@ -20,7 +19,6 @@ void test_all2all(std::size_t input_size, MPI_Comm comm)
     int p, rank;
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
-    timer t;
     // get local size
     mxx::partition::block_decomposition<std::size_t> part(input_size, p, rank);
     // generate local input

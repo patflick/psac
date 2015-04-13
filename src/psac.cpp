@@ -27,9 +27,8 @@
 
 // parallel file block decompose
 #include <mxx/file.hpp>
-
 // Timer
-#include <timer.hpp>
+#include <mxx/timer.hpp>
 
 // TODO differentiate between index types (input param or automatic based on
 // size!)
@@ -70,14 +69,14 @@ int main(int argc, char *argv[])
     // TODO differentiate between index types
 
     // run our distributed suffix array construction
-    timer t;
-    double start = t.get_ms();
+    mxx::timer t;
+    double start = t.elapsed();
     if (lcpArg.getValue()) {
         // construct with LCP
         suffix_array<std::string::iterator, index_t, true> sa(local_str.begin(), local_str.end(), MPI_COMM_WORLD);
         // TODO choose construction method
         sa.construct(true);
-        double end = t.get_ms() - start;
+        double end = t.elapsed() - start;
         if (rank == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
@@ -88,7 +87,7 @@ int main(int argc, char *argv[])
         suffix_array<std::string::iterator, index_t, false> sa(local_str.begin(), local_str.end(), MPI_COMM_WORLD);
         // TODO choose construction method
         sa.construct_arr<2>(true);
-        double end = t.get_ms() - start;
+        double end = t.elapsed() - start;
         if (rank == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {

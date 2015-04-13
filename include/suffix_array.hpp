@@ -28,10 +28,10 @@
 
 #define SAC_ENABLE_TIMER 1
 #if SAC_ENABLE_TIMER
-#define SAC_TIMER_START() TIMER_START()
-#define SAC_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
-#define SAC_TIMER_LOOP_START() TIMER_LOOP_START()
-#define SAC_TIMER_END_LOOP_SECTION(iter, str) TIMER_END_LOOP_SECTION(iter, str)
+#define SAC_TIMER_START() mxx::section_timer timer;
+#define SAC_TIMER_END_SECTION(str) timer.end_section(str);
+#define SAC_TIMER_LOOP_START() mxx::section_timer timer;
+#define SAC_TIMER_END_LOOP_SECTION(iter, str) timer.end_section(str);
 #else
 #define SAC_TIMER_START()
 #define SAC_TIMER_END_SECTION(str)

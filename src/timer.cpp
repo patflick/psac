@@ -31,6 +31,8 @@
 	#include <errno.h>
 #endif
 
+#if 0
+
 timer::timer() {
 #ifdef _WIN32
 	BOOL qpf_result = ::QueryPerformanceFrequency(&this->frequency);
@@ -74,3 +76,4 @@ double timer::get_ms() {
 	return double((current_time.tv_sec * 1000000000ll + current_time.tv_nsec) - (creation_time.tv_sec * 1000000000ll + creation_time.tv_nsec)) / 1.0e+6; // ns to ms
 #endif
 }
+#endif

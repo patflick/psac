@@ -24,7 +24,7 @@
 #include <alphabet.hpp>
 
 // Timer
-#include <timer.hpp>
+#include <mxx/timer.hpp>
 
 int main(int argc, char *argv[])
 {
@@ -54,13 +54,13 @@ int main(int argc, char *argv[])
     }
 
     // TODO differentiate between index types
-    timer t;
+    mxx::timer t;
     for (int i = 0; i < iterArg.getValue(); ++i)
     {
         std::vector<uint64_t> SA;
-        double start = t.get_ms();
+        double start = t.elapsed();
         dss::construct(input_str.begin(), input_str.end(), SA);
-        double end = t.get_ms() - start;
+        double end = t.elapsed() - start;
         std::cerr << end << " ms" << std::endl;
     }
 

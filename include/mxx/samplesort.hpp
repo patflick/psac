@@ -30,15 +30,14 @@
 #include "collective.hpp"
 #include "shift.hpp"
 #include "distribution.hpp"
-
-
 #include "timer.hpp"
+
 #include "prettyprint.hpp"
 
-#define SS_ENABLE_TIMER 0
+#define SS_ENABLE_TIMER 1
 #if SS_ENABLE_TIMER
-#define SS_TIMER_START() TIMER_START()
-#define SS_TIMER_END_SECTION(str) TIMER_END_SECTION(str)
+#define SS_TIMER_START() mxx::section_timer timer;
+#define SS_TIMER_END_SECTION(str) timer.end_section(str);
 #else
 #define SS_TIMER_START()
 #define SS_TIMER_END_SECTION(str)
