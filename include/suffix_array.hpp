@@ -537,8 +537,6 @@ std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
             std::cerr << "[WARNING] given `k` value of " << k << " is too large, setting k=" << opt_k << " instead." << std::endl;
         k = opt_k;
     }
-    // TODO: during current debugging:
-    //k = 2;
     // if the input is too small for `k`, choose a smaller `k`
     if (k > min_local_size)
     {
