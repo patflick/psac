@@ -36,10 +36,10 @@
 
 #define SS_ENABLE_TIMER 1
 #if SS_ENABLE_TIMER
-#define SS_TIMER_START() mxx::section_timer timer;
+#define SS_TIMER_START(comm) mxx::section_timer timer(std::cerr, comm, 0);
 #define SS_TIMER_END_SECTION(str) timer.end_section(str);
 #else
-#define SS_TIMER_START()
+#define SS_TIMER_START(comm)
 #define SS_TIMER_END_SECTION(str)
 #endif
 
@@ -257,7 +257,7 @@ void samplesort(_Iterator begin, _Iterator end, _Compare comp, MPI_Datatype mpi_
     MPI_Comm_size(comm, &p);
     MPI_Comm_rank(comm, &rank);
 
-    SS_TIMER_START();
+    SS_TIMER_START(comm);
 
     // perform local (stable) sorting
     if (_Stable)
