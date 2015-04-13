@@ -94,7 +94,7 @@ public:
         time_rep mean = sum / (double)p;
         // only root process outputs the timings
         if (rank == root)
-            ostr << min << sep << mean << sep << max << sep << depth << sep << name << std::endl;
+            ostr << "TIMER" << sep << min << sep << mean << sep << max << sep << depth << sep << name << std::endl;
         // restart timer
         MPI_Barrier(comm);
         start = std::chrono::steady_clock::now();

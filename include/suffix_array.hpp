@@ -5,7 +5,6 @@
 #include <vector>
 #include <cstring> // memcmp
 
-#include "timer.hpp"
 #include "alphabet.hpp"
 #include "par_rmq.hpp"
 
