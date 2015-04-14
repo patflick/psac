@@ -34,7 +34,7 @@
 
 #include "prettyprint.hpp"
 
-#define SS_ENABLE_TIMER 1
+#define SS_ENABLE_TIMER 0
 #if SS_ENABLE_TIMER
 #define SS_TIMER_START(comm) mxx::section_timer timer(std::cerr, comm, 0);
 #define SS_TIMER_END_SECTION(str) timer.end_section(str);
