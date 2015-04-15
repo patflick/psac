@@ -1,0 +1,259 @@
+renice +18 6752
+### Running PABIES iteration 1 with p = 1024 processors ###
+Detecting sigma=4 => l=3, k=21
+TIMER	104.065	108.619	119.951	1	initial-bucketing
+TIMER	247.716	255.664	261.346	2	arr-tupelize
+TIMER	114.422	118.281	143.601	2	shift-buckets
+TIMER	7553.63	7588.88	7666.87	3	isa2sa_samplesort
+TIMER	7671.02	7671.05	7671.39	2	ISA-to-SA
+iteration 21: unfinished buckets = 0
+TIMER	225.876	228.943	245.734	2	rebucket
+TIMER	94.1163	96.6704	103.111	2	arr-untupelize
+TIMER	719.57	729.115	805.175	3	sa2isa_bucketing
+TIMER	2284.66	2292.52	2301.43	3	sa2isa_all2all
+TIMER	432.774	441.476	447.396	3	sa2isa_rearrange
+TIMER	3727.53	3728.99	3729.34	2	SA-to-ISA
+Starting Bucket chasing algorithm
+TIMER	63.2394	84.7243	100.183	2	get active elements
+==== chaising iteration 42 unresolved = 2605285850
+==== chaising iteration 42 unfinished = 843588773
+TIMER	3268.64	3292.39	3316.15	2	bucket-chaising iteration
+==== chaising iteration 84 unresolved = 831300591
+==== chaising iteration 84 unfinished = 386703967
+TIMER	1179.83	1198.25	1222.96	2	bucket-chaising iteration
+==== chaising iteration 168 unresolved = 549791282
+==== chaising iteration 168 unfinished = 264647074
+TIMER	898.481	913.645	936.209	2	bucket-chaising iteration
+==== chaising iteration 336 unresolved = 395618045
+==== chaising iteration 336 unfinished = 190307855
+TIMER	591.449	746.538	779.135	2	bucket-chaising iteration
+==== chaising iteration 672 unresolved = 287041986
+==== chaising iteration 672 unfinished = 138206766
+TIMER	492.433	623.645	659.793	2	bucket-chaising iteration
+==== chaising iteration 1344 unresolved = 189672676
+==== chaising iteration 1344 unfinished = 91503177
+TIMER	367.88	478.991	513.362	2	bucket-chaising iteration
+==== chaising iteration 2688 unresolved = 108815932
+==== chaising iteration 2688 unfinished = 52596130
+TIMER	237.689	312.818	339.45	2	bucket-chaising iteration
+==== chaising iteration 5376 unresolved = 49965054
+==== chaising iteration 5376 unfinished = 24216213
+TIMER	151.807	190.369	214.038	2	bucket-chaising iteration
+==== chaising iteration 10752 unresolved = 15501156
+==== chaising iteration 10752 unfinished = 7540316
+TIMER	79.3748	107.097	124.581	2	bucket-chaising iteration
+==== chaising iteration 21504 unresolved = 1778458
+==== chaising iteration 21504 unfinished = 865743
+TIMER	29.878	32.9026	51.21	2	bucket-chaising iteration
+==== chaising iteration 43008 unresolved = 0
+==== chaising iteration 43008 unfinished = 0
+TIMER	20494.3	20494.7	20495.7	1	construct-msgs
+TIMER	38.3592	39.3224	41.0609	1	fix-isa
+PSAC time: 34278.4 ms
+### Running PABIES iteration 1 with p = 512 processors ###
+Detecting sigma=4 => l=3, k=21
+TIMER	207.961	219.881	237.489	1	initial-bucketing
+TIMER	495.705	514.613	527.95	2	arr-tupelize
+TIMER	231.407	235.177	239.7	2	shift-buckets
+TIMER	13402.2	13462.2	13647.2	3	isa2sa_samplesort
+TIMER	13647.7	13647.8	13648.1	2	ISA-to-SA
+iteration 21: unfinished buckets = 0
+TIMER	410.653	415.187	417.084	2	rebucket
+TIMER	192.176	193.969	196.613	2	arr-untupelize
+TIMER	1364.45	1378.67	1599.02	3	sa2isa_bucketing
+TIMER	3963.4	3997.23	4047.88	3	sa2isa_all2all
+TIMER	879.758	891.416	898.756	3	sa2isa_rearrange
+TIMER	6873.69	6874.07	6874.37	2	SA-to-ISA
+Starting Bucket chasing algorithm
+TIMER	122.507	168.654	176.688	2	get active elements
+==== chaising iteration 42 unresolved = 2605285850
+==== chaising iteration 42 unfinished = 843588773
+TIMER	4939.14	5003.15	5083.97	2	bucket-chaising iteration
+==== chaising iteration 84 unresolved = 831300591
+==== chaising iteration 84 unfinished = 386703967
+TIMER	1821.84	1856.21	1897.53	2	bucket-chaising iteration
+==== chaising iteration 168 unresolved = 549791282
+==== chaising iteration 168 unfinished = 264647074
+TIMER	1520.33	1558.54	1602.12	2	bucket-chaising iteration
+==== chaising iteration 336 unresolved = 395618045
+==== chaising iteration 336 unfinished = 190307855
+TIMER	1085.55	1255.37	1299.85	2	bucket-chaising iteration
+==== chaising iteration 672 unresolved = 287041986
+==== chaising iteration 672 unfinished = 138206766
+TIMER	965.063	1154.88	1215.91	2	bucket-chaising iteration
+==== chaising iteration 1344 unresolved = 189672676
+==== chaising iteration 1344 unfinished = 91503177
+TIMER	771.944	905.154	955.216	2	bucket-chaising iteration
+==== chaising iteration 2688 unresolved = 108815932
+==== chaising iteration 2688 unfinished = 52596130
+TIMER	420.012	526.255	570.574	2	bucket-chaising iteration
+==== chaising iteration 5376 unresolved = 49965054
+==== chaising iteration 5376 unfinished = 24216213
+TIMER	235.228	295.826	324.59	2	bucket-chaising iteration
+==== chaising iteration 10752 unresolved = 15501156
+==== chaising iteration 10752 unfinished = 7540316
+TIMER	97.3595	124.164	139.661	2	bucket-chaising iteration
+==== chaising iteration 21504 unresolved = 1778458
+==== chaising iteration 21504 unfinished = 865743
+TIMER	26.3811	35.6891	41.8555	2	bucket-chaising iteration
+==== chaising iteration 43008 unresolved = 0
+==== chaising iteration 43008 unfinished = 0
+TIMER	35350.3	35350.5	35352.1	1	construct-msgs
+TIMER	76.1789	78.4324	82.1024	1	fix-isa
+PSAC time: 38952.9 ms
+### Running PABIES iteration 1 with p = 256 processors ###
+Detecting sigma=4 => l=3, k=21
+TIMER	429.419	448.404	490.082	1	initial-bucketing
+TIMER	999.4	1023.88	1040.37	2	arr-tupelize
+TIMER	466.268	470.689	477.286	2	shift-buckets
+TIMER	23740.6	23870.7	24202.1	3	isa2sa_samplesort
+TIMER	24202.6	24202.7	24203	2	ISA-to-SA
+iteration 21: unfinished buckets = 0
+TIMER	847.612	854.466	858.601	2	rebucket
+TIMER	385.054	387.454	392.549	2	arr-untupelize
+TIMER	2839.01	2872.56	2935.72	3	sa2isa_bucketing
+TIMER	5806.16	5833.26	5875.28	3	sa2isa_all2all
+TIMER	1782.55	1790.91	1810.16	3	sa2isa_rearrange
+TIMER	11268.7	11269.2	11269.4	2	SA-to-ISA
+Starting Bucket chasing algorithm
+TIMER	298.93	337.093	350.213	2	get active elements
+==== chaising iteration 42 unresolved = 2605285850
+==== chaising iteration 42 unfinished = 843588773
+TIMER	8296.58	8416.72	8541	2	bucket-chaising iteration
+==== chaising iteration 84 unresolved = 831300591
+==== chaising iteration 84 unfinished = 386703967
+TIMER	3106.57	3158.47	3237.1	2	bucket-chaising iteration
+==== chaising iteration 168 unresolved = 549791282
+==== chaising iteration 168 unfinished = 264647074
+TIMER	2306.19	2358.91	2432.69	2	bucket-chaising iteration
+==== chaising iteration 336 unresolved = 395618045
+==== chaising iteration 336 unfinished = 190307855
+TIMER	1689.63	1749.16	1816.52	2	bucket-chaising iteration
+==== chaising iteration 672 unresolved = 287041986
+==== chaising iteration 672 unfinished = 138206766
+TIMER	1275.89	1344.53	1406.15	2	bucket-chaising iteration
+==== chaising iteration 1344 unresolved = 189672676
+==== chaising iteration 1344 unfinished = 91503177
+TIMER	947.888	1006.92	1058.92	2	bucket-chaising iteration
+==== chaising iteration 2688 unresolved = 108815932
+==== chaising iteration 2688 unfinished = 52596130
+TIMER	655.258	735.833	783.411	2	bucket-chaising iteration
+==== chaising iteration 5376 unresolved = 49965054
+==== chaising iteration 5376 unfinished = 24216213
+TIMER	376.587	441.186	476.52	2	bucket-chaising iteration
+==== chaising iteration 10752 unresolved = 15501156
+==== chaising iteration 10752 unfinished = 7540316
+TIMER	148.16	185.401	204.911	2	bucket-chaising iteration
+==== chaising iteration 21504 unresolved = 1778458
+==== chaising iteration 21504 unfinished = 865743
+TIMER	30.1305	36.4992	41.362	2	bucket-chaising iteration
+==== chaising iteration 43008 unresolved = 0
+==== chaising iteration 43008 unfinished = 0
+TIMER	58814.9	58815.1	58815.8	1	construct-msgs
+TIMER	154.775	156.899	159.606	1	fix-isa
+PSAC time: 62443.1 ms
+### Running PABIES iteration 1 with p = 128 processors ###
+Detecting sigma=4 => l=3, k=21
+TIMER	884.049	904.133	922.542	1	initial-bucketing
+TIMER	2008.23	225681	709005	2	arr-tupelize
+TIMER	937.075	1037.86	1377.51	2	shift-buckets
+TIMER	771489	771783	772338	3	isa2sa_samplesort
+TIMER	772368	772368	772369	2	ISA-to-SA
+iteration 21: unfinished buckets = 0
+TIMER	11028.1	11036.1	11041.8	2	rebucket
+TIMER	648.564	804.638	932.324	2	arr-untupelize
+TIMER	5620.89	5681.03	5784.41	3	sa2isa_bucketing
+TIMER	10774	10854.5	10910.8	3	sa2isa_all2all
+TIMER	3509.03	3618.97	3717.52	3	sa2isa_rearrange
+TIMER	21739.9	21740.7	21741.4	2	SA-to-ISA
+Starting Bucket chasing algorithm
+TIMER	571.538	666.38	763.047	2	get active elements
+==== chaising iteration 42 unresolved = 2605285850
+==== chaising iteration 42 unfinished = 843588773
+TIMER	15755.9	15976.9	16160.2	2	bucket-chaising iteration
+==== chaising iteration 84 unresolved = 831300591
+==== chaising iteration 84 unfinished = 386703967
+TIMER	5744.54	5851.99	6003.84	2	bucket-chaising iteration
+==== chaising iteration 168 unresolved = 549791282
+==== chaising iteration 168 unfinished = 264647074
+TIMER	4126.42	4247.63	4369.22	2	bucket-chaising iteration
+==== chaising iteration 336 unresolved = 395618045
+==== chaising iteration 336 unfinished = 190307855
+TIMER	3091.89	3211.91	3335.77	2	bucket-chaising iteration
+==== chaising iteration 672 unresolved = 287041986
+==== chaising iteration 672 unfinished = 138206766
+TIMER	2369.19	2484.18	2592.44	2	bucket-chaising iteration
+==== chaising iteration 1344 unresolved = 189672676
+==== chaising iteration 1344 unfinished = 91503177
+TIMER	1703.48	1813.81	1905.75	2	bucket-chaising iteration
+==== chaising iteration 2688 unresolved = 108815932
+==== chaising iteration 2688 unfinished = 52596130
+TIMER	1116.24	1194.69	1268.36	2	bucket-chaising iteration
+==== chaising iteration 5376 unresolved = 49965054
+==== chaising iteration 5376 unfinished = 24216213
+TIMER	794.413	849.048	896.892	2	bucket-chaising iteration
+==== chaising iteration 10752 unresolved = 15501156
+==== chaising iteration 10752 unfinished = 7540316
+TIMER	563.152	583.261	602.01	2	bucket-chaising iteration
+==== chaising iteration 21504 unresolved = 1778458
+==== chaising iteration 21504 unfinished = 865743
+TIMER	565.506	590.85	623.964	2	bucket-chaising iteration
+==== chaising iteration 43008 unresolved = 0
+==== chaising iteration 43008 unfinished = 0
+TIMER	1.5555e+06	1.5555e+06	1.5555e+06	1	construct-msgs
+TIMER	310.266	313.763	319.018	1	fix-isa
+PSAC time: 1.55745e+06 ms
+### Running PABIES iteration 1 with p = 64 processors ###
+Detecting sigma=4 => l=3, k=21
+TIMER	1811.56	1825.99	1960.33	1	initial-bucketing
+TIMER	174546	263438	375598	2	arr-tupelize
+TIMER	1605.46	2083.11	3124.17	2	shift-buckets
+=>> PBS: job killed: walltime 3637 exceeded limit 3600
+Killed by signal 15.
+
+psac:1378 terminated with signal 11 at PC=351de35d05 SP=7fffa819dac0.  Backtrace:
+
+psac:28492 terminated with signal 11 at PC=3529a35d05 SP=7fe5e6075400.  Backtrace:
+Killed by signal 15.
+
+psac:28498 terminated with signal 11 at PC=3529a35d05 SP=7f8896df5400.  Backtrace:
+Killed by signal 15.
+
+psac:5143 terminated with signal 11 at PC=3cff835d05 SP=7f7e23216400.  Backtrace:
+### Running iteration 1 with p = 1024 , k =  processors ###### Running iteration 1 with p = 512 , k =  processors ###### Running iteration 2 with p = 1024 , k =  processors ###### Running iteration 2 with p = 512 , k =  processors ###### Running iteration 3 with p = 1024 , k =  processors ###### Running iteration 3 with p = 512 , k =  processors ###### Running iteration 4 with p = 1024 , k =  processors ###### Running iteration 4 with p = 512 , k =  processors ###### Running iteration 5 with p = 1024 , k =  processors ###### Running iteration 5 with p = 512 , k =  processors ###### Running iteration 6 with p = 1024 , k =  processors ###### Running iteration 6 with p = 512 , k =  processors ###### Running iteration 7 with p = 1024 , k =  processors ###### Running iteration 7 with p = 512 , k =  processors ###=>> PBS: job killed: walltime 1823 exceeded limit 1800
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+Killed by signal 15.
+[mpiexec@node187] HYD_pmcd_pmiserv_send_signal (./pm/pmiserv/pmiserv_cb.c:184): assert (!closed) failed
+[mpiexec@node187] ui_cmd_cb (./pm/pmiserv/pmiserv_pmci.c:74): unable to send SIGUSR1 downstream
+[mpiexec@node187] HYDT_dmxu_poll_wait_for_event (./tools/demux/demux_poll.c:77): callback returned error status
+[mpiexec@node187] HYD_pmci_wait_for_completion (./pm/pmiserv/pmiserv_pmci.c:181): error waiting for event
+[mpiexec@node187] main (./ui/mpich/mpiexec.c:405): process manager error waiting for completion

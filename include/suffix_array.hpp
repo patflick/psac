@@ -1555,6 +1555,9 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
      *
      */
 
+    SAC_TIMER_START();
+
+
     /*
      * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
      */
@@ -1582,6 +1585,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
             active_elements.push_back(j);
         }
     }
+    SAC_TIMER_END_SECTION("get active elements");
 
     bool right_bucket_crosses_proc = (rank < p-1 && local_B.back() == right_B);
 
@@ -1952,6 +1956,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         {
             local_ISA[it->first-prefix] = it->second;
         }
+	SAC_TIMER_END_SECTION("bucket-chaising iteration");
     }
 }
 

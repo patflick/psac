@@ -18,7 +18,7 @@
 #PBS  -o BATCH_OUTPUT 
 #PBS  -e BATCH_ERRORS 
 
-#PBS -lnodes=16:ppn=16:compute,walltime=1:00:00
+#PBS -lnodes=64:ppn=16:compute,walltime=0:30:00
 
 source /home/pflick/gcc48env.sh
 
@@ -30,8 +30,7 @@ cd $PBS_O_WORKDIR
 # define executable to run
 #EXE=./release/bin/test_sac
 #EXE=./release/bin/benchmark_sac
-#EXE=./release/bin/benchmark_k
-EXE=./release/bin/psac
+EXE=./release/bin/benchmark_k
 
 # prepare log folder
 OUT_FOLDER=runlog
@@ -43,28 +42,20 @@ ln -s $NOW $OUT_FOLDER/newest
 
 # input args for executable
 INFILE=/lustre/alurugroup/pflick/human_g1k_v37.actg
-#INFILE=/lustre/alurugroup/pflick/Pabies10.actg
-#INFILE=/lustre/alurugroup/pflick/human2g.actg
 
 #for p in 1 2 4 8 16 32 64 128 256 512 1024
 #for i in `seq 1 10`
 #do
 	#for p in # 64 128  #128 256 #512 1024
-# add log output!
-echo "$NOW: exe=$EXE, file=$INFILE, ppn=$PBS_NUM_PPN, jobid=$PBS_JOBID, nodes:" >> $OUT_FOLDER/jobs.log
-MY_NODES=$(cat $PBS_NODEFILE | tr '\n' ', ')
-echo "      $MY_NODES"
-
 for i in `seq 1 10`
 do
-	for p in 8 16 32 64 128 256 
-	#for p in 512 1024
-	#for p in 1024 512 256 128 64
-	#for p in 1280 1600
+	for p in 1024 512
+	#for p in 64 128 256
 	do
-		printf "### Running psac iteration $i with p = $p processors ###\n" 1>&2
-		/usr/bin/time $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-%r.log $EXE -f $INFILE
-		#$MPIRUN -np $p $EXE -f $INFILE
+		printf "### Running iteration $i with p = $p , k = $k processors ###" 1>&2
+		#printf "$p;" 1>&2
+		#/usr/bin/time -f "%E" $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-%r.log $EXE -f $INFILE -i 5
+		$MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-k1-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-k1-$i-%r.log $EXE -f $INFILE -k 1
 	done
 done
 #done
