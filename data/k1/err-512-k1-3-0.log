@@ -1,0 +1,275 @@
+Detecting sigma=4 => l=3, k=1
+TIMER	48.8513	51.9238	68.9491	1	initial-bucketing
+TIMER	42.2606	44.2424	45.7488	2	shift-buckets
+TIMER	129.946	133.151	135.895	3	isa2sa_tupleize
+TIMER	2354.65	2408.21	2470.48	3	isa2sa_samplesort
+TIMER	144.85	151.414	156.989	3	isa2sa_untupleize
+TIMER	2765.56	2765.92	2766.11	2	ISA-to-SA
+iteration 1: unfinished buckets = 16
+TIMER	63.7417	64.2575	65.7488	2	rebucket
+TIMER	161.287	273.149	304.018	3	sa2isa_bucketing
+TIMER	936.058	944.818	957.109	3	sa2isa_all2all
+TIMER	182.849	198.773	205.071	3	sa2isa_rearrange
+TIMER	1548.15	1548.52	1548.84	2	SA-to-ISA
+Starting Bucket chasing algorithm
+TIMER	87.2488	94.3548	97.5449	2	get active elements
+==== chaising iteration 2 unresolved = 2864785219
+==== chaising iteration 2 unfinished = 16
+TIMER	9673.06	9689.85	9714.47	2	bucket-chaising iteration
+==== chaising iteration 4 unresolved = 2864785217
+==== chaising iteration 4 unfinished = 256
+TIMER	7854.96	7871.26	7894.93	2	bucket-chaising iteration
+==== chaising iteration 8 unresolved = 2864785213
+==== chaising iteration 8 unfinished = 65536
+TIMER	5546.24	5563.17	5589.41	2	bucket-chaising iteration
+==== chaising iteration 16 unresolved = 2231009467
+==== chaising iteration 16 unfinished = 497590582
+TIMER	4353.38	4373.66	4395.45	2	bucket-chaising iteration
+==== chaising iteration 32 unresolved = 375212160
+==== chaising iteration 32 unfinished = 63243384
+TIMER	1436.75	1446.41	1495.62	2	bucket-chaising iteration
+==== chaising iteration 64 unresolved = 123963655
+==== chaising iteration 64 unfinished = 33034958
+TIMER	574.409	578.581	622.733	2	bucket-chaising iteration
+==== chaising iteration 128 unresolved = 51666977
+==== chaising iteration 128 unfinished = 17942148
+TIMER	529.942	531.775	563.924	2	bucket-chaising iteration
+==== chaising iteration 256 unresolved = 26532356
+==== chaising iteration 256 unfinished = 10976438
+TIMER	354.521	355.94	376.52	2	bucket-chaising iteration
+==== chaising iteration 512 unresolved = 15398534
+==== chaising iteration 512 unfinished = 6905719
+TIMER	237.472	361.096	383.909	2	bucket-chaising iteration
+==== chaising iteration 1024 unresolved = 8867476
+==== chaising iteration 1024 unfinished = 4160784
+TIMER	165.306	227.118	270.957	2	bucket-chaising iteration
+==== chaising iteration 2048 unresolved = 4893467
+==== chaising iteration 2048 unfinished = 2356338
+TIMER	55.2613	61.8771	74.8393	2	bucket-chaising iteration
+==== chaising iteration 4096 unresolved = 2528555
+==== chaising iteration 4096 unfinished = 1233904
+TIMER	31.8569	38.1032	46.5813	2	bucket-chaising iteration
+==== chaising iteration 8192 unresolved = 1205449
+==== chaising iteration 8192 unfinished = 587007
+TIMER	22.374	27.4871	39.5449	2	bucket-chaising iteration
+==== chaising iteration 16384 unresolved = 556533
+==== chaising iteration 16384 unfinished = 267766
+TIMER	9.51655	9.95435	11.4106	2	bucket-chaising iteration
+==== chaising iteration 32768 unresolved = 207623
+==== chaising iteration 32768 unfinished = 101503
+TIMER	12.7928	13.0552	14.0925	2	bucket-chaising iteration
+==== chaising iteration 65536 unresolved = 4192
+==== chaising iteration 65536 unfinished = 2096
+TIMER	1.86152	1.90811	2.38737	2	bucket-chaising iteration
+==== chaising iteration 131072 unresolved = 0
+==== chaising iteration 131072 unfinished = 0
+TIMER	36066.8	36067	36067.3	1	construct-msgs
+TIMER	18.1781	18.7533	19.7961	1	fix-isa
+Detecting sigma=4 => l=3, k=1
+TIMER	39.6498	50.7587	57.0193	1	initial-bucketing
+TIMER	42.1003	44.2076	45.7975	2	shift-buckets
+TIMER	130.218	133.234	135.883	3	isa2sa_tupleize
+TIMER	2352.84	2408.69	2490.8	3	isa2sa_samplesort
+TIMER	122.806	147.535	157.238	3	isa2sa_untupleize
+TIMER	2787.04	2787.45	2787.56	2	ISA-to-SA
+iteration 1: unfinished buckets = 16
+TIMER	78.0782	78.5989	79.5911	2	rebucket
+TIMER	161.345	275.235	318.257	3	sa2isa_bucketing
+TIMER	937.019	945.1	957.033	3	sa2isa_all2all
+TIMER	184.617	198.733	207.313	3	sa2isa_rearrange
+TIMER	1484.98	1485.29	1485.58	2	SA-to-ISA
+TIMER	0.000343	0.000584957	0.003864	2	sac-iteration
+TIMER	42.1094	44.222	45.3291	2	shift-buckets
+TIMER	129.825	132.897	135.214	3	isa2sa_tupleize
+TIMER	2461.58	2494.79	2562.09	3	isa2sa_samplesort
+TIMER	122.756	147.631	155.773	3	isa2sa_untupleize
+TIMER	2855.35	2855.71	2855.82	2	ISA-to-SA
+iteration 2: unfinished buckets = 256
+TIMER	64.0663	64.6992	65.5572	2	rebucket
+TIMER	161.655	256.053	310.812	3	sa2isa_bucketing
+TIMER	939.668	946.619	958.832	3	sa2isa_all2all
+TIMER	197.744	206.001	218.195	3	sa2isa_rearrange
+TIMER	1490.22	1490.53	1490.85	2	SA-to-ISA
+TIMER	0.000323	0.000605279	0.001773	2	sac-iteration
+TIMER	42.4505	44.3339	48.6072	2	shift-buckets
+TIMER	129.454	133.05	140.714	3	isa2sa_tupleize
+TIMER	2612	2627.52	2660.76	3	isa2sa_samplesort
+TIMER	122.004	147.847	157.747	3	isa2sa_untupleize
+TIMER	2963.18	2963.56	2963.65	2	ISA-to-SA
+iteration 4: unfinished buckets = 65536
+TIMER	71.0727	71.6352	72.8485	2	rebucket
+TIMER	269.465	281.083	306.605	3	sa2isa_bucketing
+TIMER	938.395	945.784	957.067	3	sa2isa_all2all
+TIMER	200.94	205.883	210.522	3	sa2isa_rearrange
+TIMER	1476.57	1476.83	1477.12	2	SA-to-ISA
+TIMER	0.000346	0.000576131	0.00396	2	sac-iteration
+TIMER	42.5299	44.3809	45.7631	2	shift-buckets
+TIMER	129.576	133.229	135.627	3	isa2sa_tupleize
+TIMER	3018.39	3033.57	3063.77	3	isa2sa_samplesort
+TIMER	122.107	147.939	165.636	3	isa2sa_untupleize
+TIMER	3367.31	3367.67	3367.78	2	ISA-to-SA
+iteration 8: unfinished buckets = 497590582
+TIMER	69.4189	80.8329	83.763	2	rebucket
+TIMER	300.092	315.458	349.032	3	sa2isa_bucketing
+TIMER	940.209	948.112	964.588	3	sa2isa_all2all
+TIMER	201.414	205.937	218.805	3	sa2isa_rearrange
+TIMER	1536.37	1536.66	1536.97	2	SA-to-ISA
+TIMER	0.000389	0.00062025	0.002186	2	sac-iteration
+TIMER	42.4644	44.2933	45.38	2	shift-buckets
+TIMER	129.181	133.218	135.816	3	isa2sa_tupleize
+TIMER	3157.86	3173.67	3204.97	3	isa2sa_samplesort
+TIMER	121.636	148.136	157.641	3	isa2sa_untupleize
+TIMER	3502.82	3503.18	3503.28	2	ISA-to-SA
+iteration 16: unfinished buckets = 63243384
+TIMER	55.8215	56.7214	58.6831	2	rebucket
+TIMER	314.218	320.148	368.396	3	sa2isa_bucketing
+TIMER	936.175	943.655	955.392	3	sa2isa_all2all
+TIMER	196.254	205.986	212.844	3	sa2isa_rearrange
+TIMER	1541.21	1541.51	1541.77	2	SA-to-ISA
+TIMER	0.000375	0.000615453	0.001571	2	sac-iteration
+TIMER	42.5906	44.4123	45.9563	2	shift-buckets
+TIMER	129.865	133.369	137.031	3	isa2sa_tupleize
+TIMER	3057.7	3072.21	3103.01	3	isa2sa_samplesort
+TIMER	122.89	147.471	154.444	3	isa2sa_untupleize
+TIMER	3398.86	3399.23	3399.35	2	ISA-to-SA
+iteration 32: unfinished buckets = 33034958
+TIMER	46.0786	46.5158	47.3025	2	rebucket
+TIMER	314.769	320.969	335.559	3	sa2isa_bucketing
+TIMER	937.412	944.412	956.057	3	sa2isa_all2all
+TIMER	200.12	205.843	210.969	3	sa2isa_rearrange
+TIMER	1507.11	1507.4	1507.7	2	SA-to-ISA
+TIMER	0.000397	0.000622201	0.00237	2	sac-iteration
+TIMER	42.3841	44.2465	45.7355	2	shift-buckets
+TIMER	128.62	133.193	135.865	3	isa2sa_tupleize
+TIMER	3017.23	3033.24	3063.92	3	isa2sa_samplesort
+TIMER	122.932	147.645	155.237	3	isa2sa_untupleize
+TIMER	3359.4	3359.76	3359.87	2	ISA-to-SA
+iteration 64: unfinished buckets = 17942148
+TIMER	42.8269	43.0553	43.503	2	rebucket
+TIMER	315.432	321.167	354.785	3	sa2isa_bucketing
+TIMER	935.153	942.702	954.273	3	sa2isa_all2all
+TIMER	199.206	205.88	223.474	3	sa2isa_rearrange
+TIMER	1537.08	1537.39	1537.75	2	SA-to-ISA
+TIMER	0.000373	0.000618047	0.001916	2	sac-iteration
+TIMER	42.0676	44.1615	45.6755	2	shift-buckets
+TIMER	128.651	133.2	135.621	3	isa2sa_tupleize
+TIMER	3011.25	3026.58	3057.72	3	isa2sa_samplesort
+TIMER	122.088	147.546	156.543	3	isa2sa_untupleize
+TIMER	3354.25	3354.63	3354.73	2	ISA-to-SA
+iteration 128: unfinished buckets = 10976438
+TIMER	41.5215	41.7288	42.216	2	rebucket
+TIMER	314.561	321.283	354.678	3	sa2isa_bucketing
+TIMER	934.053	942.011	953.699	3	sa2isa_all2all
+TIMER	202.107	205.971	211.41	3	sa2isa_rearrange
+TIMER	1524.38	1524.64	1524.94	2	SA-to-ISA
+TIMER	0.000377	0.000634832	0.002214	2	sac-iteration
+TIMER	42.2302	44.2174	45.6884	2	shift-buckets
+TIMER	129.547	133.166	136.158	3	isa2sa_tupleize
+TIMER	3012.2	3026.89	3058.02	3	isa2sa_samplesort
+TIMER	122.619	147.937	157.908	3	isa2sa_untupleize
+TIMER	3356.49	3356.85	3356.96	2	ISA-to-SA
+iteration 256: unfinished buckets = 6905719
+TIMER	40.7101	40.9097	41.3279	2	rebucket
+TIMER	314.339	321.215	350.241	3	sa2isa_bucketing
+TIMER	935.23	943.034	954.698	3	sa2isa_all2all
+TIMER	202.039	205.798	208.786	3	sa2isa_rearrange
+TIMER	1518.36	1518.63	1518.93	2	SA-to-ISA
+TIMER	0.00038	0.000615602	0.00254	2	sac-iteration
+TIMER	42.1202	44.4001	45.6643	2	shift-buckets
+TIMER	129.623	133.258	135.807	3	isa2sa_tupleize
+TIMER	3004.34	3019.73	3051.62	3	isa2sa_samplesort
+TIMER	122.618	147.6	155.55	3	isa2sa_untupleize
+TIMER	3347.39	3347.76	3347.87	2	ISA-to-SA
+iteration 512: unfinished buckets = 4160784
+TIMER	40.0151	40.1995	40.7251	2	rebucket
+TIMER	315.071	321.149	340.066	3	sa2isa_bucketing
+TIMER	940.161	948.387	959.961	3	sa2isa_all2all
+TIMER	201.571	205.904	209.558	3	sa2isa_rearrange
+TIMER	1514.2	1514.48	1514.75	2	SA-to-ISA
+TIMER	0.000378	0.000648139	0.002241	2	sac-iteration
+TIMER	42.405	44.4215	45.6412	2	shift-buckets
+TIMER	130.195	133.231	135.808	3	isa2sa_tupleize
+TIMER	3007.59	3021.59	3054.45	3	isa2sa_samplesort
+TIMER	123.314	147.428	157.257	3	isa2sa_untupleize
+TIMER	3351.92	3352.29	3352.39	2	ISA-to-SA
+iteration 1024: unfinished buckets = 2356338
+TIMER	39.2123	39.3918	39.8608	2	rebucket
+TIMER	315.184	321.224	339.317	3	sa2isa_bucketing
+TIMER	937.861	945.957	957.81	3	sa2isa_all2all
+TIMER	200.31	205.781	209.315	3	sa2isa_rearrange
+TIMER	1511	1511.27	1511.57	2	SA-to-ISA
+TIMER	0.000392	0.000631258	0.002198	2	sac-iteration
+TIMER	25.759	39.8657	58.5624	2	shift-buckets
+TIMER	129.542	133.268	135.713	3	isa2sa_tupleize
+TIMER	3006.97	3022.55	3054.75	3	isa2sa_samplesort
+TIMER	122.914	148.004	158.453	3	isa2sa_untupleize
+TIMER	3353.31	3353.68	3353.79	2	ISA-to-SA
+iteration 2048: unfinished buckets = 1233904
+TIMER	38.9144	39.0863	39.642	2	rebucket
+TIMER	315.667	321.146	339.232	3	sa2isa_bucketing
+TIMER	941.095	949.026	960.685	3	sa2isa_all2all
+TIMER	197.728	205.834	210.073	3	sa2isa_rearrange
+TIMER	1515.23	1515.5	1515.78	2	SA-to-ISA
+TIMER	0.000387	0.000638207	0.003549	2	sac-iteration
+TIMER	26.8655	40.6286	58.1301	2	shift-buckets
+TIMER	129.235	133.296	135.547	3	isa2sa_tupleize
+TIMER	3015.46	3030.14	3060.75	3	isa2sa_samplesort
+TIMER	120.779	147.949	154.67	3	isa2sa_untupleize
+TIMER	3355.34	3355.71	3355.82	2	ISA-to-SA
+iteration 4096: unfinished buckets = 587007
+TIMER	38.2995	38.4951	39.0044	2	rebucket
+TIMER	314.562	321.277	351.286	3	sa2isa_bucketing
+TIMER	944.001	952.739	964.482	3	sa2isa_all2all
+TIMER	201.258	205.827	209.403	3	sa2isa_rearrange
+TIMER	1529.76	1530.03	1530.26	2	SA-to-ISA
+TIMER	0.000383	0.000637615	0.002899	2	sac-iteration
+TIMER	26.702	40.077	55.2348	2	shift-buckets
+TIMER	129.438	133.102	135.385	3	isa2sa_tupleize
+TIMER	3009.44	3024.89	3055.62	3	isa2sa_samplesort
+TIMER	122.008	147.93	159.418	3	isa2sa_untupleize
+TIMER	3354.95	3355.31	3355.42	2	ISA-to-SA
+iteration 8192: unfinished buckets = 267766
+TIMER	38.3944	38.5856	39.1785	2	rebucket
+TIMER	314.743	321.098	348.851	3	sa2isa_bucketing
+TIMER	937.633	945.644	957.349	3	sa2isa_all2all
+TIMER	198.741	205.857	209.431	3	sa2isa_rearrange
+TIMER	1520.19	1520.47	1520.76	2	SA-to-ISA
+TIMER	0.000375	0.000611611	0.00196	2	sac-iteration
+TIMER	27.5952	40.5716	54.886	2	shift-buckets
+TIMER	130.113	133.127	139.66	3	isa2sa_tupleize
+TIMER	3029.37	3045.35	3075.21	3	isa2sa_samplesort
+TIMER	122.875	148.224	156.653	3	isa2sa_untupleize
+TIMER	3375.94	3376.31	3376.43	2	ISA-to-SA
+iteration 16384: unfinished buckets = 101503
+TIMER	38.5728	38.7733	39.3799	2	rebucket
+TIMER	315.437	321.168	352.422	3	sa2isa_bucketing
+TIMER	936.671	944.634	956.389	3	sa2isa_all2all
+TIMER	201.894	205.88	210.322	3	sa2isa_rearrange
+TIMER	1523.7	1524	1524.28	2	SA-to-ISA
+TIMER	0.000397	0.000637334	0.002124	2	sac-iteration
+TIMER	28.2268	41.2084	58.1483	2	shift-buckets
+TIMER	129.048	133.202	135.51	3	isa2sa_tupleize
+TIMER	2999.59	3014.51	3046.15	3	isa2sa_samplesort
+TIMER	122.664	147.756	157.421	3	isa2sa_untupleize
+TIMER	3344.25	3344.61	3344.75	2	ISA-to-SA
+iteration 32768: unfinished buckets = 2096
+TIMER	38.2216	38.395	38.9246	2	rebucket
+TIMER	315.051	321.091	335.924	3	sa2isa_bucketing
+TIMER	941.564	948.852	960.169	3	sa2isa_all2all
+TIMER	202.099	205.826	210.341	3	sa2isa_rearrange
+TIMER	1511.01	1511.29	1511.59	2	SA-to-ISA
+TIMER	0.000389	0.000630893	0.002303	2	sac-iteration
+TIMER	26.509	41.4656	58.8861	2	shift-buckets
+TIMER	129.664	133.188	136.025	3	isa2sa_tupleize
+TIMER	3002.58	3016.9	3049.77	3	isa2sa_samplesort
+TIMER	122.293	148.031	156.135	3	isa2sa_untupleize
+TIMER	3352.71	3353.07	3354.27	2	ISA-to-SA
+iteration 65536: unfinished buckets = 0
+TIMER	37.2429	38.5012	39.6114	2	rebucket
+TIMER	314.948	320.623	352.403	3	sa2isa_bucketing
+TIMER	937.428	945.266	956.582	3	sa2isa_all2all
+TIMER	200.638	205.865	209.383	3	sa2isa_rearrange
+TIMER	1563.2	1563.53	1563.86	2	SA-to-ISA
+TIMER	0.28477	0.499995	0.735866	2	sac-iteration
+TIMER	83434.3	83434.6	83435.1	1	construct-msgs
+TIMER	18.2184	18.8795	19.9015	1	fix-isa
