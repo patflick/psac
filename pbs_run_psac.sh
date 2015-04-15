@@ -18,7 +18,7 @@
 #PBS  -o BATCH_OUTPUT 
 #PBS  -e BATCH_ERRORS 
 
-#PBS -lnodes=16:ppn=16:compute,walltime=1:00:00
+#PBS -lnodes=2:ppn=16:compute,walltime=4:00:00
 
 source /home/pflick/gcc48env.sh
 
@@ -46,24 +46,26 @@ INFILE=/lustre/alurugroup/pflick/human_g1k_v37.actg
 #INFILE=/lustre/alurugroup/pflick/Pabies10.actg
 #INFILE=/lustre/alurugroup/pflick/human2g.actg
 
-#for p in 1 2 4 8 16 32 64 128 256 512 1024
-#for i in `seq 1 10`
-#do
-	#for p in # 64 128  #128 256 #512 1024
-# add log output!
-echo "$NOW: exe=$EXE, file=$INFILE, ppn=$PBS_NUM_PPN, jobid=$PBS_JOBID, nodes:" >> $OUT_FOLDER/jobs.log
-MY_NODES=$(cat $PBS_NODEFILE | tr '\n' ', ')
-echo "      $MY_NODES"
+NAME="psac-human-compare-lcp-small"
+
+echo "[$NOW]: $NAME, exe=$EXE, file=$INFILE, ppn=$PBS_NUM_PPN, jobid=$PBS_JOBID, nodes:" >> $OUT_FOLDER/jobs.log
+MY_NODES=$(cat $PBS_NODEFILE | sort -u | tr '\n' ', ')
+echo "      $MY_NODES" >> $OUT_FOLDER/jobs.log
+echo ""
 
 for i in `seq 1 10`
 do
-	for p in 8 16 32 64 128 256 
+	#for p in 8 16 32 64 128 256 
+	#for p in 256 128 64
+	for p in 32 16 1
 	#for p in 512 1024
 	#for p in 1024 512 256 128 64
-	#for p in 1280 1600
+	#for p in 1280 1600 1024
 	do
 		printf "### Running psac iteration $i with p = $p processors ###\n" 1>&2
 		/usr/bin/time $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-%r.log $EXE -f $INFILE
+		printf "### Running psac iteration $i with p = $p processors and LCP ###\n" 1>&2
+		/usr/bin/time $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-lcp-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-lcp-%r.log $EXE --lcp -f $INFILE
 		#$MPIRUN -np $p $EXE -f $INFILE
 	done
 done

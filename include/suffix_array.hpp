@@ -29,8 +29,8 @@
 #if SAC_ENABLE_TIMER
 #define SAC_TIMER_START() mxx::section_timer timer;
 #define SAC_TIMER_END_SECTION(str) timer.end_section(str);
-#define SAC_TIMER_LOOP_START() mxx::section_timer timer;
-#define SAC_TIMER_END_LOOP_SECTION(iter, str) timer.end_section(str);
+#define SAC_TIMER_LOOP_START() mxx::section_timer looptimer;
+#define SAC_TIMER_END_LOOP_SECTION(iter, str) looptimer.end_section(str);
 #else
 #define SAC_TIMER_START()
 #define SAC_TIMER_END_SECTION(str)
@@ -1921,6 +1921,8 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
          */
         if (_CONSTRUCT_LCP)
         {
+	    // time LCP separately!
+	    SAC_TIMER_START();
             // get parallel-distributed RMQ for all queries, results are in
             // `minqueries`
             // TODO: bulk updatable RMQs [such that we don't have to construct the
@@ -1932,6 +1934,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
             {
                 local_LCP[std::get<0>(min_lcp) - prefix] = shift_by + std::get<2>(min_lcp);
             }
+	    SAC_TIMER_END_SECTION("LCP update");
         }
 
         /*
