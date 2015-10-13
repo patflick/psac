@@ -1,0 +1,3 @@
+[submodule "ext/mxx"]
+	path = ext/mxx
+	url = https://github.com/patflick/mxx.git
