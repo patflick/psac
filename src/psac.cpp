@@ -26,6 +26,7 @@
 #include <alphabet.hpp>
 
 // parallel file block decompose
+#include <mxx/comm.hpp>
 #include <mxx/file.hpp>
 // Timer
 #include <mxx/timer.hpp>
@@ -80,7 +81,7 @@ int main(int argc, char *argv[])
         if (rank == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
-            gl_check_correct(sa, local_str.begin(), local_str.end());
+            gl_check_correct(sa, local_str.begin(), local_str.end(), MPI_COMM_WORLD);
         }
     } else {
         // construct without LCP
@@ -91,7 +92,7 @@ int main(int argc, char *argv[])
         if (rank == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
-            gl_check_correct(sa, local_str.begin(), local_str.end());
+            gl_check_correct(sa, local_str.begin(), local_str.end(), MPI_COMM_WORLD);
         }
     }
 

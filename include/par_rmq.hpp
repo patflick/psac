@@ -11,7 +11,6 @@
 #ifndef PARALLEL_BULK_RMQ_HPP
 #define PARALLEL_BULK_RMQ_HPP
 
-#include <mpi.h>
 #include <vector>
 #include <cstdint>
 
@@ -26,7 +25,7 @@
 template <typename index_t>
 void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
               std::vector<std::tuple<index_t, index_t, index_t>>& ranges,
-              MPI_Comm comm) {
+              const mxx::comm& comm) {
     // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
     //     a.) allgather per processor minimum lcp
     //     b.) create messages to left-most and right-most processor (i, B2[i])
@@ -41,14 +40,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     //     f.) for each range: get RMQ of intermediary processors
     //                         min(min_p_left, RMQ(p_left+1,p_right-1), min_p_right)
 
-    // get comm parameters
-    int p, rank;
-    MPI_Comm_size(comm, &p);
-    MPI_Comm_rank(comm, &rank);
-    // get MPI type
-    mxx::datatype<index_t> dt;
-    MPI_Datatype mpi_index_t = dt.type();
-    mxx::partition::block_decomposition_buffered<index_t> part(n, p, rank);
+    mxx::partition::block_decomposition_buffered<index_t> part(n, comm.size(), comm.rank());
 
     // get size parameters
     std::size_t local_size = local_els.size();
@@ -62,10 +54,8 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     index_t min_pos = (local_min_it - local_els.begin()) + prefix_size;
     index_t local_min = *local_min_it;
     //assert(local_min == *std::min_element(local_els.begin(), local_els.end()));
-    std::vector<index_t> proc_mins(p);
-    std::vector<index_t> proc_min_pos(p);
-    MPI_Allgather(&local_min, 1, mpi_index_t, &proc_mins[0], 1, mpi_index_t, comm);
-    MPI_Allgather(&min_pos, 1, mpi_index_t, &proc_min_pos[0], 1, mpi_index_t, comm);
+    std::vector<index_t> proc_mins = mxx::allgather(local_min, comm);
+    std::vector<index_t> proc_min_pos = mxx::allgather(min_pos, comm);
 
     // create range-minimum-query datastructure for the processor minimums
     rmq::RMQ<typename std::vector<index_t>::iterator> proc_mins_rmq(proc_mins.begin(), proc_mins.end());
@@ -89,7 +79,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     std::vector<std::tuple<index_t, index_t, index_t> > ranges_right(ranges);
 
     // first communication
-    mxx::msgs_all2all(
+    mxx::all2all_func(
         ranges,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
             return part.target_processor(std::get<1>(x));
@@ -109,14 +99,14 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
         std::get<2>(*it) = *range_min;
     }
     // send results back to originator
-    mxx::msgs_all2all(
+    mxx::all2all_func(
         ranges,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
             return part.target_processor(std::get<0>(x));
         }, comm);
 
     // second communication
-    mxx::msgs_all2all(
+    mxx::all2all_func(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
             return part.target_processor(std::get<2>(x)-1);
@@ -136,7 +126,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
         std::get<2>(*it) = *range_min;
     }
     // send results back to originator
-    mxx::msgs_all2all(
+    mxx::all2all_func(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
             return part.target_processor(std::get<0>(x));

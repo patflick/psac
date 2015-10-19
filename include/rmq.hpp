@@ -129,7 +129,7 @@ public:
         : _begin(begin), _end(end), superblock_size(superblock_size), block_size(block_size)
     {
         // get size
-        assert(std::distance(begin, end) < std::numeric_limits<index_t>::max());
+        assert((index_t)std::distance(begin, end) < std::numeric_limits<index_t>::max());
         n = std::distance(begin, end);
 
 

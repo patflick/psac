@@ -135,24 +135,20 @@ bool check_lcp(const std::string& str, const std::vector<index_t>& SA, const std
 template <typename InputIterator, typename index_t, bool test_lcp>
 void gl_check_correct(const suffix_array<InputIterator, index_t, test_lcp>& sa,
                       InputIterator str_begin, InputIterator str_end,
-                      // TODO: get the communicator from the distirbuted suffix
-                      // array?
-                      MPI_Comm comm = MPI_COMM_WORLD)
+                      const mxx::comm& comm)
 {
     // gather all the data to rank 0
-    std::vector<index_t> global_SA = mxx::gather_vectors(sa.local_SA, comm);
-    std::vector<index_t> global_ISA = mxx::gather_vectors(sa.local_B, comm);
+    std::vector<index_t> global_SA = mxx::gatherv(sa.local_SA, 0, comm);
+    std::vector<index_t> global_ISA = mxx::gatherv(sa.local_B, 0, comm);
     std::vector<index_t> global_LCP;
     if (test_lcp)
-        global_LCP = mxx::gather_vectors(sa.local_LCP, comm);
+        global_LCP = mxx::gatherv(sa.local_LCP, 0, comm);
     // gather string
-    std::vector<char> global_str_vec = mxx::gather_range(str_begin, str_end, comm);
+    // TODO: use iterator or std::string version for mxx?
+    std::vector<char> global_str_vec = mxx::gatherv(&(*str_begin), std::distance(str_begin, str_end), 0, comm);
     std::string global_str(global_str_vec.begin(), global_str_vec.end());
 
-    int rank;
-    MPI_Comm_rank(comm, &rank);
-
-    if (rank == 0)
+    if (comm.rank() == 0)
     {
         if (!check_SA(global_SA, global_ISA, global_str))
         {

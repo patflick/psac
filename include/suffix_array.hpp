@@ -13,6 +13,7 @@
 #include <mxx/partition.hpp>
 #include <mxx/sort.hpp>
 #include <mxx/collective.hpp>
+#include <mxx/timer.hpp>
 
 #include <prettyprint.hpp>
 
@@ -129,7 +130,9 @@ private:
     std::size_t local_size;
 
     /// The MPI communicator to use for the parallel suffix array construction
-    MPI_Comm comm;
+    //MPI_Comm comm;
+    // TODO: replace with copy of comm
+    const mxx::comm& comm;
     /// The number of processors in the communicator
     int p;
     /// The local processors rank among the processors in the MPI communicator
@@ -566,8 +569,8 @@ std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
     }
 
     // send first kmer to left processor
-    index_t last_kmer = 0;
-    mxx::request req = mxx::i_left_shift(kmer, last_kmer, comm);
+    // TODO: use async left shift!
+    index_t last_kmer = mxx::left_shift(kmer, comm);
 
     // init output
     if (local_B.size() != local_size)
@@ -592,14 +595,16 @@ std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
     // processor to the right
     if (rank < p-1) // if not last processor
     {
+        // TODO: use mxx::future to handle this async left shift
         // wait for the async receive to finish
         //MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-        req.wait();
+        //req.wait();
     }
     else
     {
         // in this case the last k-mers contains shifting `$` signs
         // we assume this to be the `\0` value
+        last_kmer = 0;
     }
 
 
@@ -1441,37 +1446,28 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, MPI_Comm comm, std::
 /*********************************************************************
  *                       SA->ISA (~bucketsort)                       *
  *********************************************************************/
-void reorder_sa_to_isa(std::vector<index_t>& SA)
-{
+void reorder_sa_to_isa(std::vector<index_t>& SA) {
     assert(SA.size() == local_B.size());
 
     SAC_TIMER_START();
     // 1.) local bucketing for each processor
     //
     // counting the number of elements for each processor
-    std::vector<int> send_counts(p, 0);
-    for (index_t sa : SA)
-    {
+    std::vector<size_t> send_counts(p, 0);
+    for (index_t sa : SA) {
         int target_p = part.target_processor(sa);
         assert(0 <= target_p && target_p < p);
         ++send_counts[target_p];
     }
     // get exclusive prefix sum
-    std::vector<int> send_displs = mxx::get_displacements(send_counts);
-    std::vector<int> upper_bound(send_displs.begin(), send_displs.end());
-    // create inclusive prefix sum
-    for (int i = 0; i < p; ++i)
-    {
-        upper_bound[i] += send_counts[i];
-    }
+    std::vector<size_t> send_displs = mxx::local_exscan(send_counts);
+    std::vector<size_t> upper_bound = mxx::local_scan(send_counts);
 
     // in-place bucketing
     int cur_p = 0;
-    for (std::size_t i = 0; i < SA.size();)
-    {
+    for (std::size_t i = 0; i < SA.size();) {
         // skip full buckets
-        while (cur_p < p-1 && send_displs[cur_p] >= upper_bound[cur_p])
-        {
+        while (cur_p < p-1 && send_displs[cur_p] >= upper_bound[cur_p]) {
             // skip over full buckets
             i = send_displs[++cur_p];
         }
@@ -1480,13 +1476,10 @@ void reorder_sa_to_isa(std::vector<index_t>& SA)
             break;
         int target_p = part.target_processor(SA[i]);
         assert(target_p < p && target_p >= 0);
-        if (target_p == cur_p)
-        {
+        if (target_p == cur_p) {
             // item correctly placed
             ++i;
-        }
-        else
-        {
+        } else {
             // swap to correct bucket
             assert(target_p > cur_p);
             std::swap(SA[i], SA[send_displs[target_p]]);
@@ -1498,13 +1491,12 @@ void reorder_sa_to_isa(std::vector<index_t>& SA)
     SAC_TIMER_END_SECTION("sa2isa_bucketing");
 
     // get displacements again (since they were modified above)
-    std::vector<index_t> recv_SA = mxx::all2all(SA, send_counts);
-    std::vector<index_t> recv_B = mxx::all2all(local_B, send_counts);
+    std::vector<index_t> recv_SA = mxx::all2allv(SA, send_counts, comm);
+    std::vector<index_t> recv_B = mxx::all2allv(local_B, send_counts, comm);
     SAC_TIMER_END_SECTION("sa2isa_all2all");
 
     // rearrange locally
-    for (std::size_t i = 0; i < SA.size(); ++i)
-    {
+    for (std::size_t i = 0; i < SA.size(); ++i) {
         index_t out_idx = recv_SA[i] - part.excl_prefix_size();
         assert(0 <= out_idx && out_idx < recv_SA.size());
         local_B[out_idx] = recv_B[i];
@@ -1512,8 +1504,7 @@ void reorder_sa_to_isa(std::vector<index_t>& SA)
 
     // reassign the SA
     std::size_t global_offset = part.excl_prefix_size();
-    for (std::size_t i = 0; i < SA.size(); ++i)
-    {
+    for (std::size_t i = 0; i < SA.size(); ++i) {
         SA[i] = global_offset + i;
     }
     SAC_TIMER_END_SECTION("sa2isa_rearrange");
@@ -1619,15 +1610,9 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         }
 
         // check if all resolved
-        std::size_t gl_unresolved;
-        std::size_t gl_unfinished;
-        // get MPI type
-        mxx::datatype<std::size_t> size_dt;
-        MPI_Datatype mpi_size_t = size_dt.type();
-        MPI_Allreduce(&unresolved_els, &gl_unresolved, 1, mpi_size_t, MPI_SUM, comm);
-        MPI_Allreduce(&unfinished_b, &gl_unfinished, 1, mpi_size_t, MPI_SUM, comm);
-        if (rank == 0)
-        {
+        std::size_t gl_unresolved = mxx::allreduce(unresolved_els, comm);
+        std::size_t gl_unfinished = mxx::allreduce(unfinished_b, comm);
+        if (rank == 0) {
             INFO("==== chaising iteration " << shift_by << " unresolved = " << gl_unresolved);
             INFO("==== chaising iteration " << shift_by << " unfinished = " << gl_unfinished);
         }
@@ -1637,7 +1622,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 
         // message exchange to processor which contains first index
         //msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.first);}, comm);
-        mxx::msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
+        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
 
         // for each message, add the bucket no. into the `first` field
         for (auto it = msgs.begin(); it != msgs.end(); ++it)
@@ -1651,7 +1636,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
          */
         // send messages back to originator
         //msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.second);}, comm);
-        mxx::msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.second);}, comm);
+        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.second);}, comm);
 
         // append the previous out-of-bounds messages (since they all have B2 = 0)
         if (out_of_bounds_msgs.size() > 0)
@@ -1855,7 +1840,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
                 MPI_Comm_rank(subcomm, &subrank);
 
                 // sample sort the bucket with arbitrary distribution
-                mxx::sort(border_bucket.begin(), border_bucket.end(), std::less<TwoBSA<index_t> >(), subcomm, false);
+                mxx::sort(border_bucket.begin(), border_bucket.end(), std::less<TwoBSA<index_t> >(), subcomm);
 
 #ifndef NDEBUG
                 index_t first_bucket = border_bucket[0].B1;
@@ -1945,14 +1930,13 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         // since the message array is still available with the indices of unfinished
         // buckets -> reuse that information => no need to rescan the whole
         // local array
-        for (auto it = msgs.begin(); it != msgs.end(); ++it)
-        {
+        for (auto it = msgs.begin(); it != msgs.end(); ++it) {
             it->first = local_SA[it->second - prefix]; // SA[i]
             it->second = local_B[it->second - prefix]; // B[i]
         }
 
         // message exchange to processor which contains first index
-        mxx::msgs_all2all(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
+        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
 
         // update local ISA with new bucket numbers
         for (auto it = msgs.begin(); it != msgs.end(); ++it)

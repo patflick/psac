@@ -29,6 +29,7 @@
 
 // gather/scatter
 #include <mxx/collective.hpp>
+#include <mxx/distribution.hpp>
 // Timer
 #include <mxx/timer.hpp>
 
@@ -71,7 +72,7 @@ int main(int argc, char *argv[])
     // TODO differentiate between index types
 
     // run our distributed suffix array construction
-    std::string local_str = mxx::scatter_string_block_decomp(input_str);
+    std::string local_str = mxx::stable_distribute(input_str, MPI_COMM_WORLD);
     mxx::timer t;
     double start = t.elapsed();
     suffix_array<std::string::iterator, index_t, false> sa(local_str.begin(), local_str.end(), MPI_COMM_WORLD);
@@ -81,7 +82,7 @@ int main(int argc, char *argv[])
     double end = t.elapsed() - start;
     if (rank == 0)
         std::cerr << "PSAC time: " << end << " ms" << std::endl;
-    std::vector<index_t> glSA = mxx::gather_vectors(sa.local_SA);
+    std::vector<index_t> glSA = mxx::gatherv(sa.local_SA, 0);
 
 
     // run construction with divsufsort locally on rank 0
