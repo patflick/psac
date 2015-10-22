@@ -48,8 +48,7 @@ inline unsigned int trailing_zeros(uint64_t x) {
  * @return  The log base 2.
  */
 // source: https://stackoverflow.com/questions/11376288/fast-computing-of-log2-for-64-bit-integers
-inline unsigned int log2_64(uint64_t value)
-{
+inline unsigned int log2_64(uint64_t value) {
     static const unsigned int tab64[64] = {
         63,  0, 58,  1, 59, 47, 53,  2,
         60, 39, 48, 27, 54, 33, 42,  3,
@@ -69,23 +68,20 @@ inline unsigned int log2_64(uint64_t value)
     return tab64[((uint64_t)((value - (value >> 1))*0x07EDD5E59A4E28C2ull)) >> 58];
 }
 
-inline unsigned int leading_zeros_64(uint64_t x)
-{
+inline unsigned int leading_zeros_64(uint64_t x) {
     if (x == 0)
         return 64;
     unsigned int log2 = log2_64(x);
     return 64 - log2 - 1;
 }
 
-inline unsigned int leading_zeros_32(uint32_t x)
-{
+inline unsigned int leading_zeros_32(uint32_t x) {
     // TODO implement faster version for 32 bits
     return leading_zeros_64(static_cast<uint64_t>(x)) - 32;
 }
 
 template<typename T>
-inline unsigned int leading_zeros(T x)
-{
+inline unsigned int leading_zeros(T x) {
     if (sizeof(T)*8 == 64)
         return leading_zeros_64(x);
     else if (sizeof(T)*8 == 32)
@@ -98,8 +94,7 @@ inline unsigned int leading_zeros(T x)
     }
 }
 
-unsigned int reference_trailing_zeros(uint64_t x)
-{
+unsigned int reference_trailing_zeros(uint64_t x) {
     unsigned int n = 0;
     while (!(x & 0x1)) {
         x >>= 1;
@@ -108,8 +103,7 @@ unsigned int reference_trailing_zeros(uint64_t x)
     return n;
 }
 
-unsigned int reference_leading_zeros(uint64_t x)
-{
+unsigned int reference_leading_zeros(uint64_t x) {
     unsigned int n = 0;
     while (!(x & (static_cast<uint64_t>(0x1) << (sizeof(x)*8-1))))
     {
@@ -119,9 +113,8 @@ unsigned int reference_leading_zeros(uint64_t x)
     return n;
 }
 
-// TODO: make this faster!
-unsigned int ceillog2(unsigned int x)
-{
+
+unsigned int reference_ceillog2(unsigned int x) {
     unsigned int log_floor = 0;
     unsigned int n = x;
     for (;n != 0; n >>= 1)
@@ -133,6 +126,19 @@ unsigned int ceillog2(unsigned int x)
     return log_floor + (((x&(x-1)) != 0) ? 1 : 0);
 }
 
+
+template <typename IntType>
+inline unsigned int floorlog2(IntType n) {
+    //return log2_64(n);
+    return ((unsigned) (8*sizeof (unsigned long long) - __builtin_clzll((n)) - 1));
+}
+
+template <typename IntType>
+inline unsigned int ceillog2(IntType n) {
+    unsigned int log_floor = floorlog2(n);
+    // add one if not power of 2
+    return log_floor + (((n&(n-1)) != 0) ? 1 : 0);
+}
 
 /**
  * @brief   Returns the number identical characters of two strings in k-mer
@@ -150,8 +156,7 @@ unsigned int ceillog2(unsigned int x)
  *          equal in the two values `x` and `y`.
  */
 template <typename T>
-unsigned int lcp_bitwise(T x, T y, unsigned int k, unsigned int bits_per_char)
-{
+unsigned int lcp_bitwise(T x, T y, unsigned int k, unsigned int bits_per_char) {
     if (x == y)
         return k;
     // XOR the two values and then find the MSB that isn't zero (since

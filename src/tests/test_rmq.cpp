@@ -12,12 +12,12 @@ class rmq_tester
 {
     std::size_t size;
     std::vector<int> els;
-    rmq::RMQ<std::vector<int>::iterator>* minquery;
+    rmq<std::vector<int>::iterator>* minquery;
 public:
     rmq_tester(std::size_t size) : size(size), els(size)
     {
         std::generate(els.begin(), els.end(), [](){return std::rand();});
-        minquery = new rmq::RMQ<std::vector<int>::iterator>(els.begin(), els.end(), 8, 4);
+        minquery = new rmq<std::vector<int>::iterator>(els.begin(), els.end(), 8, 4);
     }
 
     bool test(int start, int end)
@@ -62,7 +62,7 @@ void timing_comp(std::size_t size)
     start_time = now;
     std::cerr << "Generate input: " << duration_ms << std::endl;
 
-    rmq::RMQ<std::vector<int>::iterator> rmq(els.begin(), els.end());
+    rmq<std::vector<int>::iterator> rmq(els.begin(), els.end());
 
     now = std::chrono::high_resolution_clock::now();
     duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();

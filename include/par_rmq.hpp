@@ -47,7 +47,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     std::size_t prefix_size = part.excl_prefix_size();
 
     // create RMQ for local elements
-    rmq::RMQ<typename std::vector<index_t>::const_iterator> local_rmq(local_els.begin(), local_els.end());
+    rmq<typename std::vector<index_t>::const_iterator> local_rmq(local_els.begin(), local_els.end());
 
     // get per processor minimum and it's position
     auto local_min_it = local_rmq.query(local_els.begin(), local_els.end());
@@ -58,7 +58,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     std::vector<index_t> proc_min_pos = mxx::allgather(min_pos, comm);
 
     // create range-minimum-query datastructure for the processor minimums
-    rmq::RMQ<typename std::vector<index_t>::iterator> proc_mins_rmq(proc_mins.begin(), proc_mins.end());
+    rmq<typename std::vector<index_t>::iterator> proc_mins_rmq(proc_mins.begin(), proc_mins.end());
 
     // 1.) duplicate vector of triplets
     // 2.) (asserting that t[1] < t[2]) send to target processor for t[1]

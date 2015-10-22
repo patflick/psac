@@ -36,8 +36,7 @@ void lcp_from_sa(const std::string& S, const std::vector<index_t>& SA, const std
     assert(SA.size() == ISA.size());
 
     // init LCP array if not yet of correct size
-    if (LCP.size() != S.size())
-    {
+    if (LCP.size() != S.size()) {
         LCP.resize(S.size());
     }
 
@@ -47,8 +46,7 @@ void lcp_from_sa(const std::string& S, const std::vector<index_t>& SA, const std
     std::size_t h = 0;
 
     // in string order!
-    for (std::size_t i = 0; i < S.size(); ++i)
-    {
+    for (std::size_t i = 0; i < S.size(); ++i) {
         // length of currently equal characters (in string order, next LCP value
         // is always >= current lcp - 1)
         std::size_t k = 0;

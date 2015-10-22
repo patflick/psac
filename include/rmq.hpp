@@ -21,38 +21,10 @@
 
 #include "bitops.hpp"
 
-namespace rmq {
-
-// TODO: move these into the bitops header
-template <typename IntType>
-inline unsigned int floorlog2(IntType n)
-{
-    /*
-    assert(n != 0);
-    unsigned int log_floor = 0;
-    for (;n != 0; n >>= 1)
-    {
-        ++log_floor;
-    }
-    --log_floor;
-    return log_floor;
-    */
-    //return log2_64(n);
-    return ((unsigned) (8*sizeof (unsigned long long) - __builtin_clzll((n)) - 1));
-}
-
-template <typename IntType>
-inline unsigned int ceillog2(IntType n)
-{
-    unsigned int log_floor = floorlog2(n);
-    // add one if not power of 2
-    return log_floor + (((n&(n-1)) != 0) ? 1 : 0);
-}
 
 template<typename Iterator, typename index_t = std::size_t>
-class RMQ
-{
-private:
+class rmq {
+public:
     // superblock size is log^(2+epsilon)(n)
     // we choose it as bitsize*2:
     //  - 64 bits -> 4096
@@ -62,7 +34,7 @@ private:
     const static int DEFAULT_BLOCK_SIZE = 64/sizeof(index_t);
     // cache line of blocks per superblock
     const static int DEFAULT_SUPERBLOCK_SIZE = 64/sizeof(uint16_t) * 64/sizeof(index_t);
-private:
+protected:
     index_t n;
 
     // the original sequence
@@ -84,46 +56,10 @@ private:
     // index
     std::vector<std::vector<uint16_t> > block_mins;
 
-    bool check_superblock_correctness()
-    {
-        for (index_t d = 0; d < superblock_mins.size(); ++d)
-        {
-            std::cerr << "checking superblock correctness for d=" << d << std::endl;
-            index_t dist = 1<<d;
-            assert(superblock_mins[d].size() == n_superblocks - dist/2);
-            for (index_t i = 0; i < superblock_mins[d].size(); ++i)
-            {
-                Iterator minel_pos = std::min_element(_begin + i*superblock_size, std::min(_begin + (i+dist)*superblock_size, _end));
-                assert(*minel_pos == *(_begin + superblock_mins[d][i]));
-            }
-        }
-        return true;
-    }
 
-    bool check_block_correctness()
-    {
-        for (index_t d = 0; d < block_mins.size(); ++d)
-        {
-            std::cerr << "checking block correctness for d=" << d << std::endl;
-            index_t dist = 1<<d;
-            //assert(block_mins[d].size() == n_blocks - (n_superblocks)dist/2);
-            for (index_t i = 0; i < block_mins[d].size(); ++i)
-            {
-                index_t n_sb = i / (n_blocks_per_superblock - dist/2);
-                index_t block_sb_idx = i % (n_blocks_per_superblock - dist/2);
-                index_t block_idx = n_blocks_per_superblock*n_sb + block_sb_idx;
-                index_t sb_end = superblock_size*(n_sb+1);
-                Iterator minel_pos = std::min_element(_begin + block_idx*block_size, std::min(_begin + (block_idx+dist)*block_size, std::min(_begin+sb_end,_end)));
-                index_t minel_idx = minel_pos - _begin;
-                index_t rmq_idx = superblock_size*n_sb + block_mins[d][i];
-                assert(*minel_pos == *(_begin + superblock_size*n_sb + block_mins[d][i]));
-            }
-        }
-        return true;
-    }
 
 public:
-    RMQ(Iterator begin, Iterator end,
+    rmq(Iterator begin, Iterator end,
         index_t superblock_size = DEFAULT_SUPERBLOCK_SIZE,
         index_t block_size = DEFAULT_BLOCK_SIZE)
         : _begin(begin), _end(end), superblock_size(superblock_size), block_size(block_size)
@@ -431,8 +367,6 @@ public:
         // return the minimum found
         return min_pos;
     }
-}; // class RMQ
-
-} // namespace rmq
+}; // class rmq
 
 #endif // RMQ_HPP
