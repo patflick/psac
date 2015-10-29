@@ -54,10 +54,17 @@ struct TwoBSA
     }
 };
 
+template <typename T1, typename T2>
+struct pair_sum {
+    std::pair<T1,T2> operator()(const std::pair<T1,T2>& x, const std::pair<T1,T2>& y) {
+        return std::pair<T1,T2>(x.first+y.first,x.second+y.second);
+    }
+};
+
 // specialize MPI datatype (mxx)
 namespace mxx {
 template <typename T>
-class datatype<TwoBSA<T> > : public datatype_contiguous<T, 3> {};
+class datatype_builder<TwoBSA<T> > : public datatype_contiguous<T, 3> {};
 }
 
 
@@ -72,7 +79,7 @@ struct mypair
 // partial template specialization for mypair
 namespace mxx {
 template <typename T>
-class datatype<mypair<T> > : public datatype_contiguous<T, 2> {};
+class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 }
 
 template <typename InputIterator, typename index_t>
@@ -104,7 +111,7 @@ public:
             throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
 
         // get MPI type
-        mpi_index_t = index_mpi_dt.type();
+        //mpi_index_t = index_mpi_dt.type();
     }
     virtual ~suffix_array() {}
 private:
@@ -122,8 +129,8 @@ private:
     int p;
 
     /// The MPI datatype for the templated type `index_t`.
-    mxx::datatype<index_t> index_mpi_dt;
-    MPI_Datatype mpi_index_t;
+    //mxx::datatype<index_t> index_mpi_dt;
+    //MPI_Datatype mpi_index_t;
 
 
     /// Iterators over the local input string
@@ -171,6 +178,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
 
     std::vector<index_t> local_B_SA;
     std::size_t unfinished_buckets = 1<<k;
+    std::size_t unfinished_elements = n;
     std::size_t shift_by;
 
     /*******************************
@@ -210,18 +218,17 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
         /*******************************
          *  Assign new bucket numbers  *
          *******************************/
-        unfinished_buckets = rebucket(local_B2, true);
-        if (comm.rank() == 0)
-            INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets);
+        std::tie(unfinished_buckets, unfinished_elements) = rebucket(local_B2, true);
+        if (comm.rank() == 0) {
+            INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << ", unfinished elements = " << unfinished_elements);
+        }
         SAC_TIMER_END_LOOP_SECTION(shift_by, "rebucket");
 
         /*************
          *  SA->ISA  *
          *************/
         // by bucketing to correct target processor using the `SA` array
-        // // TODO by number of unresolved elements rather than buckets!!
-        //if (true)
-        if (fast_resolval && unfinished_buckets < n/10) {
+        if (fast_resolval && unfinished_elements < n/10) {
             // prepare for bucket chaising (needs SA, and bucket arrays in both
             // SA and ISA order)
             std::vector<index_t> cpy_SA(local_SA);
@@ -290,6 +297,7 @@ void construct_arr(bool fast_resolval = true) {
 
     std::vector<index_t> local_B_SA;
     std::size_t unfinished_buckets = 1<<k;
+    std::size_t unfinished_elements = n;
     std::size_t shift_by;
 
     /*******************************
@@ -346,9 +354,10 @@ void construct_arr(bool fast_resolval = true) {
         /*******************************
          *  Assign new bucket numbers  *
          *******************************/
-        unfinished_buckets = rebucket_arr<L>(tuples, true);
-        if (comm.rank() == 0)
-            INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets);
+        std::tie(unfinished_buckets,unfinished_elements) = rebucket_arr<L>(tuples, true);
+        if (comm.rank() == 0) {
+            INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << ", unfinished elements = " << unfinished_elements);
+        }
         SAC_TIMER_END_LOOP_SECTION(shift_by, "rebucket");
 
 
@@ -369,10 +378,8 @@ void construct_arr(bool fast_resolval = true) {
          *  SA->ISA  *
          *************/
         // by bucketing to correct target processor using the `SA` array
-        // // TODO by number of unresolved elements rather than buckets!!
-        if (true)
-        //if (fast_resolval && unfinished_buckets < n/10)
-        {
+
+        if (fast_resolval && unfinished_elements < n/10) {
             // prepare for bucket chaising (needs SA, and bucket arrays in both
             // SA and ISA order)
             std::vector<index_t> cpy_SA(local_SA);
@@ -380,17 +387,13 @@ void construct_arr(bool fast_resolval = true) {
             reorder_sa_to_isa(cpy_SA);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
             break;
-        }
-        else if ((shift_by *= L) >= n || unfinished_buckets == 0)
-        {
+        } else if ((shift_by * L) >= n || unfinished_buckets == 0) {
             // if last iteration, use copy of local_SA for reorder and keep
             // original SA
             std::vector<index_t> cpy_SA(local_SA);
             reorder_sa_to_isa(cpy_SA);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
-        }
-        else
-        {
+        } else {
             reorder_sa_to_isa();
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
@@ -399,12 +402,11 @@ void construct_arr(bool fast_resolval = true) {
         SAC_TIMER_END_SECTION("sac-iteration");
 
         // check for termination condition
-//        if (unfinished_buckets == 0)
-//            break;
+        if (unfinished_buckets == 0)
+            break;
     }
 
-//>    if (unfinished_buckets > 0)
-    if (true) {
+    if (unfinished_buckets > 0) {
         if (comm.rank() == 0)
             INFO("Starting Bucket chasing algorithm");
         construct_msgs(local_B_SA, local_B, L*shift_by);
@@ -598,6 +600,9 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2) {
         local_B2.resize(local_size, 0);
     }
 
+    mxx::datatype mxxindex_t = mxx::get_datatype<index_t>();
+    MPI_Datatype mpi_index_t = mxxindex_t.type();
+
     MPI_Request recv_reqs[2];
     int n_irecvs = 0;
     // receive elements from the right
@@ -685,6 +690,8 @@ void shift_buckets(std::size_t k, std::vector<std::array<index_t, 1+L> >& tuples
     // get # elements to the left
     std::size_t prev_size = part.excl_prefix_size();
 
+    mxx::datatype mxxindex_t = mxx::get_datatype<index_t>();
+    MPI_Datatype mpi_index_t = mxxindex_t.type();
     // start receiving into second bucket and then continue with greater
     int bi = 2;
     for (std::size_t dist = k; dist < L*k; dist += k) {
@@ -801,6 +808,9 @@ void isa_2b_to_sa(std::vector<index_t>& local_B2) {
     assert(local_B2.size() == local_size);
     SAC_TIMER_START();
 
+    // convert the struct of arrays (local_SA, local_B, etc) into
+    // array of structs (TwoBSA {.B1, .B2, .SA}) for sorting purposes
+
     // initialize tuple array
     std::vector<TwoBSA<index_t> > tuple_vec(local_size);
 
@@ -831,6 +841,8 @@ void isa_2b_to_sa(std::vector<index_t>& local_B2) {
     local_B.resize(local_size);
     local_B2.resize(local_size);
     local_SA.resize(local_size);
+
+    // back convert array of structs into struct of arrays
 
     // read back into input vectors
     for (std::size_t i = 0; i < local_size; ++i) {
@@ -908,10 +920,10 @@ void kmer_sorting() {
 /*********************************************************************
  *              Rebucket tuples into new bucket numbers              *
  *********************************************************************/
+
 // assumed sorted order (globally) by local_B
 // this reassigns new, unique bucket numbers in {1,...,n} globally
-void rebucket_kmer()
-{
+void rebucket_kmer() {
     /*
      * NOTE: buckets are indexed by the global index of the first element in
      *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
@@ -919,41 +931,27 @@ void rebucket_kmer()
      */
 
 
-    /*
-     * send right-most element to one processor to the right
-     * so that that processor can determine whether the same bucket continues
-     * or a new bucket starts with it's first element
-     */
-    index_t prevRight = mxx::right_shift(local_B.back(), comm);
-
     // get my global starting index
-    std::size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.excl_prefix_size();
+    size_t local_max = 0;
 
     /*
      * assign local zero or one, depending on whether the bucket is the same
      * as the previous one
      */
-    bool firstDiff = false;
-    if (comm.rank() == 0)
-    {
-        firstDiff = true;
+    foreach_pair(local_B.begin(), local_B.end(), [&](index_t prev, index_t& cur, size_t i) {
+        if (prev == cur) {
+            cur = prefix + i + 1;
+            local_max = cur;
+        } else {
+            cur = 0;
+        }
+    }, comm);
+    if (comm.rank() == 0) {
+        local_B[0] = 1;
+        if (local_max == 0)
+            local_max = 1;
     }
-    else if (prevRight != local_B[0])
-    {
-        firstDiff = true;
-    }
-
-    // set local_B1 to `1` if previous entry is different:
-    // i.e., mark start of buckets
-    bool nextDiff = firstDiff;
-    for (std::size_t i = 0; i+1 < local_B.size(); ++i)
-    {
-        bool setOne = nextDiff;
-        nextDiff = (local_B[i] != local_B[i+1]);
-        local_B[i] = setOne ? prefix+i+1 : 0;
-    }
-
-    local_B.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
 
     /*
      * Global prefix MAX:
@@ -962,26 +960,12 @@ void rebucket_kmer()
      *    this way buckets who are finished, will never receive a new
      *    number.
      */
-    // 1.) find the max in the local sequence. since the max is the last index
-    //     of a bucket, this should be somewhere at the end -> start scanning
-    //     from the end
-    auto rev_it = local_B.rbegin();
-    std::size_t local_max = 0;
-    while (rev_it != local_B.rend() && (local_max = *rev_it) == 0)
-        ++rev_it;
 
     // 2.) distributed scan with max() to get starting max for each sequence
-    std::size_t pre_max;
-    // get MPI type
-    mxx::datatype<std::size_t> size_dt;
-    MPI_Datatype mpi_size_t = size_dt.type();
-    MPI_Exscan(&local_max, &pre_max, 1, mpi_size_t, MPI_MAX, comm);
-    if (comm.rank() == 0)
-        pre_max = 0;
+    size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
 
     // 3.) linear scan and assign bucket numbers
-    for (std::size_t i = 0; i < local_B.size(); ++i)
-    {
+    for (std::size_t i = 0; i < local_B.size(); ++i) {
         if (local_B[i] == 0)
             local_B[i] = pre_max;
         else
@@ -991,9 +975,10 @@ void rebucket_kmer()
         assert(i == 0 || (local_B[i-1] ==  local_B[i] || local_B[i] == i+prefix+1));
     }
 }
+
 // assumed sorted order (globally) by tuple (B1[i], B2[i])
 // this reassigns new, unique bucket numbers in {1,...,n} globally
-std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished) {
+std::pair<size_t,size_t> rebucket(std::vector<index_t>& local_B2, bool count_unfinished) {
     /*
      * NOTE: buckets are indexed by the global index of the first element in
      *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
@@ -1003,23 +988,18 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished) {
     assert(local_B.size() == local_B2.size() && local_B.size() > 0);
 
     // init result
-    std::size_t result = 0;
-
-    /*
-     * send right-most element to one processor to the right
-     * so that that processor can determine whether the same bucket continues
-     * or a new bucket starts with it's first element
-     */
-    std::pair<index_t, index_t> last_element = std::make_pair(local_B.back(), local_B2.back());
-    std::pair<index_t, index_t> prevRight = mxx::right_shift(last_element, comm);
+    std::pair<size_t,size_t> result;
 
     // get my global starting index
-    std::size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.excl_prefix_size();
 
     /*
      * assign local zero or one, depending on whether the bucket is the same
      * as the previous one
      */
+
+    std::pair<index_t, index_t> last_element = std::make_pair(local_B.back(), local_B2.back());
+    std::pair<index_t, index_t> prevRight = mxx::right_shift(last_element, comm);
     bool firstDiff = false;
     if (comm.rank() == 0) {
         firstDiff = true;
@@ -1038,22 +1018,28 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished) {
 
     local_B.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
 
-    // count unfinished buckets
     if (count_unfinished) {
-        // mark 1->0 transitions with 1, if i am the zero and previous is 1
-        // (i.e. identical)
-        // (i.e. `i` is the second equal element in a bucket)
-        // which means counting unfinished buckets, then allreduce
+        // count the number of unfinished elements and buckets
         index_t prev_right = mxx::right_shift(local_B.back(), comm);
         index_t local_unfinished_buckets = 0;
-        if (comm.rank() != 0)
+        index_t local_unfinished_els = 0;
+        if (comm.rank() != 0) {
             local_unfinished_buckets = (prev_right > 0 && local_B[0] == 0) ? 1 : 0;
-        for (std::size_t i = 1; i < local_B.size(); ++i) {
-            if(local_B[i-1] > 0 && local_B[i] == 0)
-                ++local_unfinished_buckets;
+            local_unfinished_els = local_unfinished_buckets;
         }
-        result = mxx::allreduce(local_unfinished_buckets, comm);
+        for (size_t i = 1; i < local_B.size(); ++i) {
+            if(local_B[i-1] > 0 && local_B[i] == 0) {
+                ++local_unfinished_buckets;
+                ++local_unfinished_els;
+            }
+            if (local_B[i] == 0) {
+                ++local_unfinished_els;
+            }
+        }
+        std::pair<size_t,size_t> local_result(local_unfinished_buckets, local_unfinished_els);
+        result = mxx::allreduce(local_result, pair_sum<size_t,size_t>(), comm);
     }
+
 
     /*
      * Global prefix MAX:
@@ -1066,17 +1052,17 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished) {
     //     of a bucket, this should be somewhere at the end -> start scanning
     //     from the end
     auto rev_it = local_B.rbegin();
-    std::size_t local_max = 0;
+    size_t local_max = 0;
     while (rev_it != local_B.rend() && (local_max = *rev_it) == 0)
         ++rev_it;
 
     // 2.) distributed scan with max() to get starting max for each sequence
-    std::size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
+    size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
     if (comm.rank() == 0)
         pre_max = 0;
 
     // 3.) linear scan and assign bucket numbers
-    for (std::size_t i = 0; i < local_B.size(); ++i) {
+    for (size_t i = 0; i < local_B.size(); ++i) {
         if (local_B[i] == 0)
             local_B[i] = pre_max;
         else
@@ -1090,8 +1076,8 @@ std::size_t rebucket(std::vector<index_t>& local_B2, bool count_unfinished) {
 }
 // assumed sorted order (globally) by tuple (B1[i], B2[i])
 // this reassigns new, unique bucket numbers in {1,...,n} globally
-template <std::size_t L>
-std::size_t rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool count_unfinished) {
+template <size_t L>
+std::pair<size_t,size_t> rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool count_unfinished) {
     /*
      * NOTE: buckets are indexed by the global index of the first element in
      *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
@@ -1099,93 +1085,49 @@ std::size_t rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool co
      */
 
     // init result
-    std::size_t result = 0;
+    std::pair<size_t,size_t> result;
     // get my global starting index
-    std::size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.excl_prefix_size();
+    size_t local_max = 0;
 
     foreach_pair(tuples.begin(), tuples.end(), [&](const std::array<index_t, L+1>& prev, std::array<index_t, L+1>& cur, size_t i) {
         if (!std::equal(&prev[1], &prev[1]+L, &cur[1])) {
             local_B[i] = prefix + i + 1;
+            local_max = prefix + i + 1;
         } else {
             local_B[i] = 0;
         }
     }, comm);
 
     // specially handle first element of first process
-    if (comm.rank() == 0)
-        local_B[0] = 1;
-
-    // send right-most element to one processor to the right
-    //std::array<index_t, L+1> prevRight = mxx::right_shift(tuples.back(), comm);
-
-    /*
-     * assign local zero or one, depending on whether the bucket is the same
-     * as the previous one
-     */
-    /*
-    bool firstDiff = false;
     if (comm.rank() == 0) {
-        firstDiff = true;
-    } else if (!std::equal(&prevRight[1], &prevRight[1]+L, &tuples[0][1])) {
-        firstDiff = true;
+        local_B[0] = 1;
+        if (local_max == 0)
+            local_max = 1;
     }
 
 
-    // set local_B1 to `1` if previous entry is different:
-    // i.e., mark start of buckets
-    bool nextDiff = firstDiff;
-    for (std::size_t i = 0; i+1 < local_B.size(); ++i) {
-        bool setOne = nextDiff;
-        nextDiff = !std::equal(&tuples[i][1], &tuples[i][1]+L, &tuples[i+1][1]);
-        local_B[i] = setOne ? prefix+i+1 : 0;
-    }
-
-    local_B.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
-    */
-
-// TODO: implement the unfinished counting for arrays
-#if 0
-    // count unfinished buckets
-    if (count_unfinished)
-    {
-        // mark 1->0 transitions with 1, if i am the zero and previous is 1
-        // (i.e. identical)
-        // (i.e. `i` is the second equal element in a bucket)
-        // which means counting unfinished buckets, then allreduce
-        index_t local_unfinished_buckets;
-        index_t prev_right;
-        // TODO: replace by a common shift communcation function!
-        if (comm.rank() > 0) // if not last processor
-        {
-            MPI_Irecv(&prev_right, 1, mpi_index_t, comm.rank()-1, PSAC_TAG_EDGE_KMER,
-                      comm, &recv_req);
-        }
-        if (comm.rank() < p-1) // if not first processor
-        {
-            // send my most right element to the right
-            MPI_Send(&local_B.back(), 1, mpi_index_t, comm.rank()+1, PSAC_TAG_EDGE_KMER, comm);
-        }
-        if (comm.rank() > 0)
-        {
-            // wait for the async receive to finish
-            MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-        }
-        if (comm.rank() == 0)
-            local_unfinished_buckets = 0;
-        else
+    if (count_unfinished) {
+        // count the number of unfinished elements and buckets
+        index_t prev_right = mxx::right_shift(local_B.back(), comm);
+        index_t local_unfinished_buckets = 0;
+        index_t local_unfinished_els = 0;
+        if (comm.rank() != 0) {
             local_unfinished_buckets = (prev_right > 0 && local_B[0] == 0) ? 1 : 0;
-        for (std::size_t i = 1; i < local_B.size(); ++i)
-        {
-            if(local_B[i-1] > 0 && local_B[i] == 0)
-                ++local_unfinished_buckets;
+            local_unfinished_els = local_unfinished_buckets;
         }
-
-        index_t total_unfinished;
-        MPI_Allreduce(&local_unfinished_buckets, &total_unfinished, 1,
-                      mpi_index_t, MPI_SUM, comm);
-        result = total_unfinished;
+        for (size_t i = 1; i < local_B.size(); ++i) {
+            if(local_B[i-1] > 0 && local_B[i] == 0) {
+                ++local_unfinished_buckets;
+                ++local_unfinished_els;
+            }
+            if (local_B[i] == 0) {
+                ++local_unfinished_els;
+            }
+        }
+        std::pair<size_t,size_t> local_result(local_unfinished_buckets, local_unfinished_els);
+        result = mxx::allreduce(local_result, pair_sum<size_t,size_t>(), comm);
     }
-#endif
 
     /*
      * Global prefix MAX:
@@ -1194,21 +1136,14 @@ std::size_t rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool co
      *    this way buckets who are finished, will never receive a new
      *    number.
      */
-    // 1.) find the max in the local sequence. since the max is the last index
-    //     of a bucket, this should be somewhere at the end -> start scanning
-    //     from the end
-    auto rev_it = local_B.rbegin();
-    std::size_t local_max = 0;
-    while (rev_it != local_B.rend() && (local_max = *rev_it) == 0)
-        ++rev_it;
 
     // 2.) distributed scan with max() to get starting max for each sequence
-    std::size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
+    size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
     if (comm.rank() == 0)
         pre_max = 0;
 
     // 3.) linear scan and assign bucket numbers
-    for (std::size_t i = 0; i < local_B.size(); ++i) {
+    for (size_t i = 0; i < local_B.size(); ++i) {
         if (local_B[i] == 0)
             local_B[i] = pre_max;
         else
@@ -1259,6 +1194,7 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, const mxx::comm& com
     // inputs can be of different size, since buckets can span bucket boundaries
     std::size_t local_size = tuples.size();
     std::size_t prefix = mxx::exscan(local_size, std::plus<size_t>(), comm);
+    size_t local_max = 0;
     prefix += gl_offset;
 
     // iterate through all pairs of elements (spanning across processors)
@@ -1269,6 +1205,7 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, const mxx::comm& com
             // 0, a following max-scan will then distribute this bucket index among
             // its elements
             cur.B1 = prefix+i+1;
+            local_max = cur.B1;
             if (_CONSTRUCT_LCP) {
                 index_t left_b  = std::min(prev.B2, cur.B2);
                 index_t right_b = std::max(prev.B2, cur.B2);
@@ -1287,8 +1224,11 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, const mxx::comm& com
     }, comm);
 
     // specially handle first element of first process
-    if (comm.rank() == 0)
+    if (comm.rank() == 0) {
         tuples[0].B1 = prefix + 1;
+        if (local_max == 0)
+            local_max = prefix + 1;
+    }
 
     /*
      * Global prefix MAX:
@@ -1297,14 +1237,6 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, const mxx::comm& com
      *    this way buckets who are finished, will never receive a new
      *    number.
      */
-    // 1.) find the max in the local sequence. since the max is the last index
-    //     of a bucket, this should be somewhere at the end -> start scanning
-    //     from the end
-    auto rev_it = tuples.rbegin();
-    std::size_t local_max = 0;
-    while (rev_it != tuples.rend() && (local_max = rev_it->B1) == 0)
-        ++rev_it;
-
     // 2.) distributed scan with max() to get starting max for each sequence
     std::size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
     if (comm.rank() == 0)
@@ -1701,7 +1633,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
                 mxx::comm subcomm = sc.split(left_p);
 
                 // sample sort the bucket with arbitrary distribution
-                mxx::sort(border_bucket.begin(), border_bucket.end(), std::less<TwoBSA<index_t> >(), subcomm);
+                mxx::sort(border_bucket.begin(), border_bucket.end(), subcomm);
 
 #ifndef NDEBUG
                 index_t first_bucket = border_bucket[0].B1;
@@ -1723,8 +1655,9 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
                 assert(subcomm.rank() != 0 || local_B[bucket_offset] == bucket_offset+prefix+1);
 
                 /*
-                 * TODO: create queries for LCP resolval for each new bucket boundary
+                 * LCP update
                  */
+                // LCP is updated in the custom `rebucket_tuples` function
             });
 
             comm.barrier();

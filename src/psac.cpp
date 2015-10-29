@@ -26,6 +26,7 @@
 #include <alphabet.hpp>
 
 // parallel file block decompose
+#include <mxx/env.hpp>
 #include <mxx/comm.hpp>
 #include <mxx/file.hpp>
 // Timer
@@ -35,13 +36,15 @@
 // size!)
 typedef uint64_t index_t;
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     // set up MPI
-    MPI_Init(&argc, &argv);
-    int rank, p;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &p);
+    //MPI_Init(&argc, &argv);
+    //int rank, p;
+    //MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    //MPI_Comm_size(MPI_COMM_WORLD, &p);
+    mxx::env e(argc, argv);
+    mxx::env::set_exception_on_error();
+    mxx::comm comm = mxx::comm();
 
     try {
     // define commandline usage
@@ -64,7 +67,7 @@ int main(int argc, char *argv[])
         local_str = mxx::file_block_decompose(fileArg.getValue().c_str(), MPI_COMM_WORLD);
     } else {
         // TODO proper distributed random!
-        local_str = rand_dna(randArg.getValue()/p, seedArg.getValue() * rank);
+        local_str = rand_dna(randArg.getValue()/comm.size(), seedArg.getValue() * comm.rank());
     }
 
     // TODO differentiate between index types
@@ -78,7 +81,7 @@ int main(int argc, char *argv[])
         // TODO choose construction method
         sa.construct(true);
         double end = t.elapsed() - start;
-        if (rank == 0)
+        if (comm.rank() == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
             gl_check_correct(sa, local_str.begin(), local_str.end(), MPI_COMM_WORLD);
@@ -89,7 +92,7 @@ int main(int argc, char *argv[])
         // TODO choose construction method
         sa.construct_arr<2>(true);
         double end = t.elapsed() - start;
-        if (rank == 0)
+        if (comm.rank() == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
             gl_check_correct(sa, local_str.begin(), local_str.end(), MPI_COMM_WORLD);
@@ -103,7 +106,7 @@ int main(int argc, char *argv[])
     }
 
     // finalize MPI
-    MPI_Finalize();
+    //MPI_Finalize();
 
     return 0;
 }
