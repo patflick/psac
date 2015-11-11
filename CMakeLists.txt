@@ -116,8 +116,9 @@ include_directories("${PROJECT_SOURCE_DIR}/ext/cxx-prettyprint")
 # load mxx and its gtest wrapper
 add_subdirectory("${PROJECT_SOURCE_DIR}/ext/mxx")
 
-# include libdivsufsort
-set(BUILD_DIVSUFSORT64 ON)
+# include libdivsufsort (with 64bit support but without examples)
+set(BUILD_DIVSUFSORT64 ON CACHE BOOL "enables divsufsort 64bit functions" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "enables divsufsort 64bit functions" FORCE)
 add_subdirectory("${PROJECT_SOURCE_DIR}/ext/libdivsufsort")
 include_directories(${libdivsufsort_BINARY_DIR}/include)
 include_directories(${libdivsufsort_SOURCE_DIR}/include)
