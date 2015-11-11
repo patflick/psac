@@ -115,6 +115,21 @@ TEST(PsacRMQ, rmq2) {
     }
 }
 
+
+TEST(PsacRMQ, rmqsmallblocks) {
+    for (size_t size : {123, 73, 88, 1024, 1033}) {
+        std::vector<unsigned int> vec(size);
+        std::generate(vec.begin(), vec.end(), [](){return std::rand() % 100;});
+        // construct rmq
+        rmq_tester<std::vector<unsigned int>::iterator> r(vec.begin(), vec.end(), 16, 4);
+
+        // check correctness
+        r.check_block_correctness();
+        r.check_superblock_correctness();
+        r.check_all_subranges();
+    }
+}
+
 TEST(PsacRMQ, rmqbig) {
     std::vector<size_t> vec(1235);
     std::generate(vec.begin(), vec.end(), [](){return std::rand() % 1000;});

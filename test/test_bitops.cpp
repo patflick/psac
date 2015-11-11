@@ -86,13 +86,17 @@ TEST(PsacBitops, LCPbitwise) {
 TEST(PsacBitops, CeilFloorlog2) {
     ASSERT_EQ(9u, floorlog2(0x00000321u));
     ASSERT_EQ(10u, ceillog2(0x00000321u));
+    ASSERT_EQ(10u, reference_ceillog2(0x00000321u));
 
     ASSERT_EQ(0u, floorlog2(0x1));
     ASSERT_EQ(0u, ceillog2(0x1));
+    ASSERT_EQ(0u, reference_ceillog2(0x1));
     ASSERT_EQ(1u, floorlog2(0x2));
     ASSERT_EQ(1u, ceillog2(0x2));
+    ASSERT_EQ(1u, reference_ceillog2(0x2));
     ASSERT_EQ(1u, floorlog2(0x3u));
     ASSERT_EQ(2u, ceillog2(0x3u));
+    ASSERT_EQ(2u, reference_ceillog2(0x3u));
 
     ASSERT_EQ(0u, floorlog2(0x1ull));
     ASSERT_EQ(0u, ceillog2(0x1ull));
