@@ -1,0 +1,83 @@
+# copy from github.com/patflick/mxx/.travis.yml
+# modifications:
+# - and remove fakebig
+# - run our tests
+# TODO:
+# - have a test-all executable (one for sequential, one for parallel)
+
+language: cpp
+
+sudo: false
+
+compiler:
+    - gcc
+    - clang
+
+# TODO: mpich 2, OpenMPI 1.10
+env:
+    - MPI=mpich2     # MPI 2.2
+    - MPI=mpich3     # MPI 3.0
+    - MPI=openmpi16  # MPI 2.2
+    - MPI=openmpi18  # MPI 3.0
+
+# clang fails to compile mpich 3.1.4:
+matrix:
+    exclude:
+      - compiler: clang
+        env: MPI=mpich3
+
+before_install:
+    - pip install --user codecov
+
+addons:
+  apt:
+    sources:
+    - ubuntu-toolchain-r-test
+    - llvm-toolchain-precise-3.7
+    packages:
+    - gcc-4.8
+    - g++-4.8
+    - clang-3.7
+
+# caching of the whole `local` directory. Can't cache only the one for this
+# `env`, because otherwise the different instances will overwrite the cache.
+# For the first test-run, the build has to be run sequentially (limit parallel
+# workers to 1) so that the cache can be correctly initialized. Once the cache
+# is build, parallel workers can be re-enabled.
+cache:
+  directories:
+    - $HOME/local
+
+before_script:
+    # set compiler to newer versions
+    - if [ "$CXX" = "g++" ]; then export CXX="g++-4.8" CC="gcc-4.8"; fi
+    - if [ "$CXX" = "clang++" ]; then export CXX="clang++-3.7" CC="clang-3.7"; fi
+    # install MPI
+    - mkdir -p $HOME/local
+    - sh ./conf/travis-install-mpi.sh $MPI
+    - ls -r $HOME/local
+    # set up MPI location
+    - export PATH=$PATH:$HOME/local/$MPI/bin
+    - export LIBRARY_PATH=$LIBRARY_PATH:$HOME/local/$MPI/lib
+    - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/local/$MPI/lib
+    # print out version information
+    - $CXX --version
+    - mpiexec --version
+    # prepare build mxx
+    - mkdir build
+    - cd build
+    # build with coverage reporting
+    - cmake -DENABLE_COVERAGE=ON -DMPI_C_COMPILER=$HOME/local/$MPI/bin/mpicc -DMPI_CXX_COMPILER=$HOME/local/$MPI/bin/mpicxx ../
+
+script:
+    # build mxx and run tests
+    - make
+    - ./bin/test-rmq 
+    - ./bin/test-bitops
+    - ./bin/test-psac
+    - mpiexec -np 4 ./bin/test-psac
+    - mpiexec -np 13 ./bin/test-psac
+
+after_success:
+  # only collect coverage if compiled with gcc
+  - if [ "$CXX" = "g++-4.8" ]; then codecov --gcov-exec gcov-4.8; fi

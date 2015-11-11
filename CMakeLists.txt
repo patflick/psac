@@ -96,7 +96,11 @@ if(ENABLE_PROFILING_SCOREP)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "scorep")
 endif(ENABLE_PROFILING_SCOREP)
 
-
+### Test Coverage
+OPTION(ENABLE_COVERAGE "Enable code coverage reporting" OFF)
+if(ENABLE_COVERAGE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
+endif(ENABLE_COVERAGE)
 
 ###### Executable and Libraries
 # Save libs and executables in the same place
