@@ -1,6 +1,6 @@
 Parallel Suffix Array and LCP Construction
 ==========================================
-[![Build Status](https://img.shields.io/travis/patflick/.svg)](https://travis-ci.org/patflick/psac)
+[![Build Status](https://img.shields.io/travis/patflick/psac.svg)](https://travis-ci.org/patflick/psac)
 [![Build Status](https://travis-ci.org/patflick/psac.svg?branch=master)](https://travis-ci.org/patflick/psac)
 [![Test Coverage](https://img.shields.io/codecov/c/github/patflick/psac.svg)](http://codecov.io/github/patflick/psac?branch=master)
 [![Apache 2.0 License](https://img.shields.io/badge/license-Apache%20v2.0-blue.svg)](LICENSE)
