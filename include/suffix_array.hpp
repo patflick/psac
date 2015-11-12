@@ -44,9 +44,9 @@
 
 #define SAC_ENABLE_TIMER 1
 #if SAC_ENABLE_TIMER
-#define SAC_TIMER_START() mxx::section_timer timer;
+#define SAC_TIMER_START() mxx::section_timer timer(std::cerr, this->comm);
 #define SAC_TIMER_END_SECTION(str) timer.end_section(str);
-#define SAC_TIMER_LOOP_START() mxx::section_timer looptimer;
+#define SAC_TIMER_LOOP_START() mxx::section_timer looptimer(std::cerr, this->comm);
 #define SAC_TIMER_END_LOOP_SECTION(iter, str) looptimer.end_section(str);
 #else
 #define SAC_TIMER_START()

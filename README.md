@@ -51,8 +51,8 @@ Here's a short overview over the different binaries and their function:
 - `psac` is our main executable. This will construct the suffix and LCP array of
   a given input file. Run with `mpirun` for parallel execution.
 - `benchmark_sac` benchmarks multiple of our methods. Run with `mpirun`.
-  usage as our other binaries. This is a sequential program. No *mpirun* needed.
 - `dss` is a wrapper around `libdivsufsort` that follows the same command line
+  usage as our other binaries. This is a sequential program. No *mpirun* needed.
 - `psac-vs-dss` runs both our suffix array construction and `libdivsufsort`,
   verifies the results against each other and outputs run-times of both.
 - `test_*` various test executables, testing a variety of our internal methods.

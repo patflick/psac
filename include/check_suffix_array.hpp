@@ -160,27 +160,18 @@ void gl_check_correct(const suffix_array<InputIterator, index_t, test_lcp>& sa,
     std::vector<char> global_str_vec = mxx::gatherv(&(*str_begin), std::distance(str_begin, str_end), 0, comm);
     std::string global_str(global_str_vec.begin(), global_str_vec.end());
 
-    if (comm.rank() == 0)
-    {
-        if (!check_SA(global_SA, global_ISA, global_str))
-        {
+    if (comm.rank() == 0) {
+        if (!check_SA(global_SA, global_ISA, global_str)) {
             std::cerr << "[ERROR] Test unsuccessful" << std::endl;
-            exit(1);
-        }
-        else
-        {
+        } else {
             std::cerr << "[SUCCESS] Suffix Array is correct" << std::endl;
         }
 
-        if (test_lcp)
-        {
-            if (!check_lcp(global_str, global_SA, global_ISA, global_LCP))
-            {
+        if (test_lcp) {
+            if (!check_lcp(global_str, global_SA, global_ISA, global_LCP)) {
                 std::cerr << "[ERROR] Test unsuccessful" << std::endl;
                 exit(1);
-            }
-            else
-            {
+            } else {
                 std::cerr << "[SUCCESS] LCP Array is correct" << std::endl;
             }
         }

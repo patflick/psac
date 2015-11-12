@@ -18,10 +18,15 @@
 #include <mxx/comm.hpp>
 #include <mxx/distribution.hpp>
 
+// disable timer output during testing
+#define MXX_DISABLE_TIMER 1
+
 #include <alphabet.hpp>
 #include <suffix_array.hpp>
 #include <divsufsort_wrapper.hpp>
 #include <check_suffix_array.hpp>
+#include <lcp.hpp>
+
 
 template <typename Iterator, typename index_t, bool _LCP>
 bool check_sa_dss(suffix_array<Iterator, index_t, _LCP>& sa, const std::string& str, const mxx::comm& c) {
@@ -33,11 +38,39 @@ bool check_sa_dss(suffix_array<Iterator, index_t, _LCP>& sa, const std::string& 
     if (c.rank() == 0) {
         dss_correct = dss::check(str.begin(), str.end(), gsa);
     }
-    return mxx::all_of(dss_correct);
+
+    return mxx::all_of(dss_correct, c);
 
     // check correctness using own method
     // TODO return bool value instead of exit(FAILURE) in that function
     //bool correct = gl_check_correct(sa, local_str.begin(), local_str.end(), c);
+}
+
+template <typename Iterator, typename index_t, bool _LCP>
+bool check_lcp_eq(suffix_array<Iterator, index_t, _LCP>& sa, const std::string& local_str, const mxx::comm& c) {
+    // gather LCP back to root process
+    std::vector<index_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
+    std::vector<index_t> gisa = mxx::gatherv(sa.local_B, 0, c);
+    std::vector<index_t> glcp;
+    if (_LCP)
+        glcp = mxx::gatherv(sa.local_LCP, 0, c);
+    // gather string
+    // TODO: use iterator or std::string version for mxx?
+    std::vector<char> global_str_vec = mxx::gatherv(&(*local_str.begin()), local_str.size(), 0, c);
+    std::string gstr(global_str_vec.begin(), global_str_vec.end());
+    bool sa_correct = true;
+    if (c.rank() == 0) {
+        sa_correct = dss::check(gstr.begin(), gstr.end(), gsa);
+    }
+
+    // check LCP
+    bool lcp_correct = true;
+    if (_LCP) {
+        if (c.rank() == 0) {
+            lcp_correct = check_lcp(gstr, gsa, gisa, glcp);
+        }
+    }
+    return sa_correct && lcp_correct;
 }
 
 template <typename Iterator, typename index_t, bool _LCP>
@@ -159,3 +192,54 @@ TEST(PSAC, RepeatsAll) {
     sa.construct_arr<3>(false);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 }
+
+TEST(PSAC, SmallStrings) {
+    mxx::comm c;
+
+    size_t size = 3;
+
+    std::string str;
+    if (c.rank() == 0) {
+        // generate some random input string
+        str = rand_dna(size, 13);
+    }
+    bool correct = true;
+    c.with_subset((size_t)c.rank() < size, [&](const mxx::comm& subcomm) {
+        // distribute string equally
+        std::string local_str = mxx::stable_distribute(str, subcomm);
+
+        // create suffix array w/o LCP
+        suffix_array<std::string::iterator, uint32_t, false> sa(local_str.begin(), local_str.end(), subcomm);
+        sa.construct();
+
+        correct = check_sa_dss(sa, str, subcomm);
+    });
+    ASSERT_TRUE(mxx::all_of(correct, c));
+}
+
+TEST(PSAC, Lcp1) {
+    mxx::comm c;
+
+    size_t size = 66763;
+
+    std::string str;
+    if (c.rank() == 0) {
+        // generate some random input string
+        str = rand_dna(size, 23);
+    }
+    // distribute string equally
+    std::string local_str = mxx::stable_distribute(str, c);
+
+    // create suffix array w/o LCP
+    suffix_array<std::string::iterator, uint64_t, true> sa(local_str.begin(), local_str.end(), c);
+
+    // construct suffix  and LCP array
+    sa.construct();
+    EXPECT_TRUE(check_sa_dss(sa, str, c));
+    EXPECT_TRUE(check_lcp_eq(sa, local_str, c));
+    // construct suffix and LCP array using artificial small `k` to force bucket chaising
+    sa.construct(true, 3);
+    EXPECT_TRUE(check_sa_dss(sa, str, c));
+    EXPECT_TRUE(check_lcp_eq(sa, local_str, c));
+}
+
