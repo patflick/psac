@@ -522,8 +522,10 @@ std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
         k = opt_k;
     }
     // if the input is too small for `k`, choose a smaller `k`
-    if (k > min_local_size) {
+    if (k >= min_local_size) {
         k = min_local_size;
+        if (comm.size() == 1 && k > 1)
+            k--;
     }
 
     if (comm.rank() == 0)

@@ -196,7 +196,7 @@ TEST(PSAC, RepeatsAll) {
 TEST(PSAC, SmallStrings) {
     mxx::comm c;
 
-    size_t size = 3;
+    size_t size = 9;
 
     std::string str;
     if (c.rank() == 0) {
