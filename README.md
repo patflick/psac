@@ -1,5 +1,9 @@
 Parallel Suffix Array and LCP Construction
-------------------------------------------
+==========================================
+[![Build Status](https://img.shields.io/travis/patflick/.svg)](https://travis-ci.org/patflick/psac)
+[![Build Status](https://travis-ci.org/patflick/psac.svg?branch=master)](https://travis-ci.org/patflick/psac)
+[![Test Coverage](https://img.shields.io/codecov/c/github/patflick/psac.svg)](http://codecov.io/github/patflick/psac?branch=master)
+[![Apache 2.0 License](https://img.shields.io/badge/license-Apache%20v2.0-blue.svg)](LICENSE)
 
 This library implements a distributed-memory parallel algorithm for the
 construction of suffix and LCP arrays. The algorithm is implemented in `C++11`
@@ -13,15 +17,9 @@ and `MPI`.
 
 - [`include/`](include/) contains the implementation of our algorithms in form
   of C++ template header files (a header-only library).
-- [`include/mxx/`](include/mxx/) contains the `mxx` library, which is a header
-  C++ template library with C++ bindings and algorithms for MPI. We intend to
-  release `mxx` as a separate library eventually. Please see the
-  [README](include/mxx/README.md) in that folder for further information on the
-  `mxx` library.
 - [`src/`](src/) contains the sources for binaries, which make use of the
   implementations in [`include/`](include/).
-- [`src/tests`](src/tests/) contains tests for some of the components of the
-  library.
+- [`test`](test/) contains unit tests for the components of the library.
 - [`ext/`](ext/) contains external, third-party dependencies/libraries. See the
   [README](ext/README.md) for details on the third-party libraries used.
 
@@ -29,15 +27,13 @@ and `MPI`.
 ### Dependencies
 
 - `cmake` version >= 2.6
-- `gcc` version >= 4.7 (maybe 4.8)
+- C++11 compatible compiler (tested with gcc and clang)
 - an `MPI` implementation supporting `MPI-2` or `MPI-3`.
-- *(planned)* Google Test framework for unit tests
-- and whatever comes along in the `ext` directory
+- external (third-party) dependencies are included in the [`ext/`](`ext/`) directory
 
 ### Compiling
 
-Compiling all binaries and tests is easy thanks to `cmake`. Simply follow the
-following steps:
+To compile the executables and tests via cmake run the following:
 
 ```sh
 mkdir build
@@ -63,4 +59,7 @@ Here's a short overview over the different binaries and their function:
 
 ## Licensing
 
-TBD
+Our code is licensed under the
+**Apache License 2.0** (see [`LICENSE`](LICENSE)).
+The licensing does not apply to the `ext` folder, which contains external
+dependencies which are under their own licensing terms.
