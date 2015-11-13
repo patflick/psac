@@ -9,9 +9,8 @@ This library implements a distributed-memory parallel algorithm for the
 construction of suffix and LCP arrays. The algorithm is implemented in `C++11`
 and `MPI`.
 
-## Authors
-
-- Patrick Flick
+The algorithm implemented by this codebase is described in the following peer-reviewed publication. Please cite this paper, when using our code for academic purposes:
+> **Flick, Patrick, and Srinivas Aluru.** "Parallel distributed memory construction of suffix and longest common prefix arrays." *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis*, ACM, 2015. [![dx.doi.org/10.1145/2807591.2807609](https://img.shields.io/badge/doi-10.1145%2F2807591.2807609-blue.svg)](http://dx.doi.org/10.1145/2807591.2807609)
 
 ## Code organization
 
