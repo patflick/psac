@@ -50,9 +50,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                 // no other element can be smaller than `in[i]` after `in[s]`
                 if (s+1 < i) {
                     T m = *minquery.query(in.cbegin()+s+1, in.cbegin()+i);
-                    // TODO:this accounts for the case that the "nearest" min
-                    // is actually a further away equal value to the "nearest" min
-                    EXPECT_TRUE(in[i] <= m || in[s] == m) << " for range [" << s+1 << "," << i << "]";
+                    EXPECT_TRUE(in[i] <= m && in[s] < m) << " for range [" << s+1 << "," << i << "]";
                 }
                 // element at `s` is smaller than `in[i]`
                 EXPECT_LT(in[s], in[i]);
@@ -61,7 +59,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                 // no other element can be smaller than `in[i]` before `in[s]`
                 if (i < s-1) {
                     T m = *minquery.query(in.cbegin()+i, in.cbegin()+s-1);
-                    EXPECT_TRUE(in[i] <= m || in[s] == m);
+                    EXPECT_TRUE(in[i] <= m && in[s] < m) << " for range [" << i << "," << s-1 << "]";
                 }
                 // element at `s` is smaller than in[i]
                 EXPECT_LT(in[s], in[i]);

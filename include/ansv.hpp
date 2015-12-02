@@ -39,7 +39,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
     // backwards direction (left mins)
     for (size_t i = in.size(); i > 0; --i) {
-        while (!q.empty() && in[i-1] < q.back().first)
+        while (!q.empty() && in[i-1] <= q.back().first)
             q.pop_back();
         if (q.empty() || q.back().first < in[i-1]) // add only if not equal
             q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
@@ -52,7 +52,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
     // forward direction (right mins)
     for (size_t i = 0; i < in.size(); ++i) {
-        while (!q.empty() && in[i] < q.back().first)
+        while (!q.empty() && in[i] <= q.back().first)
             q.pop_back();
         if (q.empty() || q.back().first < in[i]) // add only if not equal
             q.push_back(std::pair<T, size_t>(in[i], prefix+i));
