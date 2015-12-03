@@ -23,11 +23,42 @@
 
 #include <cxx-prettyprint/prettyprint.hpp>
 
+constexpr int nearest_sm = 0;
+constexpr int nearest_eq = 1;
+constexpr int furthest_eq = 2;
+
+template <typename T, int type = nearest_sm>
+inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,size_t>>& q, const T& next_value, size_t idx, size_t prefix) {
+    while (!q.empty() && next_value < q.back().first) {
+        // current element is the min for in[i-1]
+        nsv[q.back().second-prefix] = idx;
+        if (type == furthest_eq) {
+            // if that element is followed in the queue by equal elements,
+            // set them to the furthest
+            std::pair<T,size_t> furthest = q.back();
+            q.pop_back();
+            while (!q.empty() && furthest.first == q.back().first) {
+                nsv[q.back().second-prefix] = furthest.second;
+                q.pop_back();
+            }
+        } else {
+            q.pop_back();
+        }
+    }
+    if (type == nearest_eq) {
+        if (!q.empty() && next_value == q.back().first) {
+            // replace the equal element
+            nsv[q.back().second-prefix] = idx;
+            q.pop_back();
+        }
+    }
+}
+
 // parallel all nearest smallest value
 // TODO: iterator version??
 // TODO: comparator type
 // TODO: more compact via index_t template instead of size_t
-template <typename T>
+template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
 void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, const mxx::comm& comm) {
     // first run ANSV left
     // then right, save all non-matched elements into vector as left_mins and right_mins
@@ -39,10 +70,18 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
     // backwards direction (left mins)
     for (size_t i = in.size(); i > 0; --i) {
-        while (!q.empty() && in[i-1] <= q.back().first)
+        while (!q.empty() && in[i-1] < q.back().first)
             q.pop_back();
-        if (q.empty() || q.back().first < in[i-1]) // add only if not equal
-            q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
+        if (left_type == furthest_eq) { // TODO: distinguish between variants on a templated basis
+            // remove all equal elements but the last
+            while (q.size() >= 2 && in[i-1] == q.back().first && in[i-1] == (q.rbegin()+1)->first) {
+                q.pop_back();
+            }
+        } else {
+            while (!q.empty() && in[i-1] == q.back().first)
+                q.pop_back();
+        }
+        q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
     }
     // add results to left_mins
     std::vector<std::pair<T,size_t>> lr_mins(q.rbegin(), q.rend());
@@ -52,10 +91,18 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
     // forward direction (right mins)
     for (size_t i = 0; i < in.size(); ++i) {
-        while (!q.empty() && in[i] <= q.back().first)
+        while (!q.empty() && in[i] < q.back().first)
             q.pop_back();
-        if (q.empty() || q.back().first < in[i]) // add only if not equal
-            q.push_back(std::pair<T, size_t>(in[i], prefix+i));
+        if (right_type == furthest_eq) {
+            while (q.size() >= 2 && in[i] == q.back().first && in[i] == (q.rbegin()+1)->first) {
+                // remove all but the last one that is equal, TODO: can be `if` instead
+                q.pop_back();
+            }
+        } else {
+            while (!q.empty() && in[i] == q.back().first)
+                q.pop_back();
+        }
+        q.push_back(std::pair<T, size_t>(in[i], prefix+i));
     }
     // add results to right_mins
     size_t n_right_mins = q.size();
@@ -79,6 +126,12 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
         T prev_mins_min = allmins[comm.rank()-1];
         for (int i = comm.rank()-1; i >= 0; --i) {
             size_t start_idx = left_idx;
+            // move start back to other `equal` elements (there can be at most 2)
+            if (right_type == furthest_eq && i < comm.rank()-1) {
+                if (start_idx > 0 && lr_mins[start_idx-1].first <= allmins[i+1]) {
+                    --start_idx;
+                }
+            }
             while (left_idx+1 < n_left_mins && lr_mins[left_idx].first >= allmins[i]) {
                 ++left_idx;
             }
@@ -107,6 +160,12 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
         for (int i = comm.rank()+1; i < comm.size(); ++i) {
             // find the range which should be send
             size_t end_idx = right_idx;
+            if (left_type == furthest_eq && i > comm.rank()+1) {
+                // move start back to other `equal` elements
+                while (end_idx+1 < lr_mins.size() && lr_mins[end_idx+1].first <= allmins[i-1]) {
+                    ++end_idx;
+                }
+            }
             while (right_idx > n_left_mins && lr_mins[right_idx].first >= allmins[i]) {
                 --right_idx;
             }
@@ -149,22 +208,14 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     // iterate backwards to get the nearest smaller element to left for each element
     // TODO: this doesn't really require pairs in the queue (index suffices)
     for (size_t i = in.size(); i > 0; --i) {
-        while (!q.empty() && in[i-1] < q.back().first) {
-            // current element is the min for in[i-1]
-            left_nsv[q.back().second-prefix] = prefix+i-1;
-            q.pop_back();
-        }
-        // TODO: potentially handle `equal` elements differently
+        update_nsv_queue<T,left_type>(left_nsv, q, in[i-1], prefix+i-1, prefix);
         q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
     }
 
     // now go backwards through the right-mins from the previous processors,
     // in order to resolve all local elements
     for (size_t i = 0; i < n_left_recv; ++i) {
-        while (!q.empty() && recved[n_left_recv - i - 1].first < q.back().first) {
-            left_nsv[q.back().second-prefix] = recved[n_left_recv - i - 1].second;
-            q.pop_back();
-        }
+        update_nsv_queue<T,left_type>(left_nsv, q, recved[n_left_recv - i - 1].first, recved[n_left_recv - i - 1].second, prefix);
     }
     // TODO: elements still in the queue do not have a smaller value to the left
     //       -> set these to a special value?
@@ -172,21 +223,13 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     // iterate forwards to get the nearest smaller value to the right for each element
     q.clear();
     for (size_t i = 0; i < in.size(); ++i) {
-        while (!q.empty() && in[i] < q.back().first) {
-            // current element is the min for in[i-1]
-            right_nsv[q.back().second-prefix] = prefix+i;
-            q.pop_back();
-        }
-        // TODO: potentially handle `equal` elements differently
+        update_nsv_queue<T,right_type>(right_nsv, q, in[i], prefix+i, prefix);
         q.push_back(std::pair<T, size_t>(in[i], prefix+i));
     }
 
     // now go forwards through left-mins of succeeding processors
     for (size_t i = 0; i < n_right_recv; ++i) {
-        while (!q.empty() && recved[n_left_recv + i].first < q.back().first) {
-            right_nsv[q.back().second-prefix] = recved[n_left_recv+i].second;
-            q.pop_back();
-        }
+        update_nsv_queue<T,right_type>(right_nsv, q, recved[n_left_recv + i].first, recved[n_left_recv+i].second, prefix);
     }
     // TODO: elements still in the queue do not have a smaller value to the right
     //       -> set these to a special value?
@@ -195,12 +238,12 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
 template <typename T>
 void ansv_sequential(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv) {
+    // resize outputs
     left_nsv.resize(in.size());
     right_nsv.resize(in.size());
 
     std::deque<size_t> q;
     // iterate backwards to get the nearest smaller element to left for each element
-    // TODO: this doesn't really require pairs in the queue (index suffices)
     for (size_t i = in.size(); i > 0; --i) {
         while (!q.empty() && in[i-1] < in[q.back()]) {
             // current element is the min for in[i-1]
