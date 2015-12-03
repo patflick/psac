@@ -70,14 +70,14 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                 EXPECT_GT(s, i);
                 // no other element can be smaller than `in[i]` before `in[s]`
                 if (i < s-1) {
-                    T m = *minquery.query(in.cbegin()+i, in.cbegin()+s-1);
+                    T m = *minquery.query(in.cbegin()+i+1, in.cbegin()+s);
                     if (type == nearest_sm) {
                         EXPECT_TRUE(in[i] <= m && in[s] < m) << " for range [" << i << "," << s-1 << "]";
                     } else if (type == furthest_eq) {
-                        EXPECT_TRUE(in[i] <= m && in[s] <= m);
+                        EXPECT_TRUE(in[i] <= m && in[s] <= m) << " for range [" << i << "," << s-1 << "]";
                         // TODO: this requires testing wether this is actually the furthest
                     } else { // type == nearest_eq
-                        EXPECT_TRUE(in[i] < m && in[s] < m);
+                        EXPECT_TRUE(in[i] < m && in[s] < m) << " for range [" << i << "," << s-1 << "]";
                     }
                 }
                 // element at `s` is smaller than in[i]
@@ -130,24 +130,24 @@ TEST(PsacANSV, ParallelANSVrand) {
     mxx::comm c;
 
     for (size_t n : {13, 137, 1000, 66666, 137900}) {
+    //size_t n = 12;
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 10;});
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 1000;});
         }
 
         par_test_ansv<size_t, nearest_sm, nearest_sm>(in, c);
         par_test_ansv<size_t, nearest_eq, nearest_sm>(in, c);
-        par_test_ansv<size_t, nearest_eq, furthest_eq>(in, c);
-        par_test_ansv<size_t, nearest_sm, furthest_eq>(in, c);
         par_test_ansv<size_t, furthest_eq, nearest_sm>(in, c);
+
+        par_test_ansv<size_t, nearest_sm, nearest_eq>(in, c);
+        par_test_ansv<size_t, nearest_eq, nearest_eq>(in, c);
+        par_test_ansv<size_t, furthest_eq, nearest_eq>(in, c);
+
+        par_test_ansv<size_t, nearest_sm, furthest_eq>(in, c);
+        par_test_ansv<size_t, nearest_eq, furthest_eq>(in, c);
         par_test_ansv<size_t, furthest_eq, furthest_eq>(in, c);
-
-        // TODO: nearest_eq doesn't work for right_type !! why??
-        //par_test_ansv<size_t, furthest_eq, nearest_eq>(in, c);
-
-        //par_test_ansv<size_t, nearest_sm, nearest_eq>(in, c);
-        //par_test_ansv<size_t, nearest_eq, nearest_eq>(in, c);
     }
 }
