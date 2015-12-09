@@ -19,13 +19,15 @@
 
 #include <vector>
 #include <deque>
-#include <mxx/comm.hpp>
-
 #include <cxx-prettyprint/prettyprint.hpp>
+
+#include <mxx/comm.hpp>
+#include <suffix_array.hpp>
 
 constexpr int nearest_sm = 0;
 constexpr int nearest_eq = 1;
 constexpr int furthest_eq = 2;
+
 
 template <typename T, int type = nearest_sm>
 inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,size_t>>& q, const T& next_value, size_t idx, size_t prefix) {
@@ -54,16 +56,13 @@ inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,si
     }
 }
 
+
 // parallel all nearest smallest value
 // TODO: iterator version??
 // TODO: comparator type
 // TODO: more compact via index_t template instead of size_t
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
-void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, const mxx::comm& comm) {
-    // first run ANSV left
-    // then right, save all non-matched elements into vector as left_mins and right_mins
-
-    // TODO: use deque or vector? -> check performance difference!!
+void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t>>& lr_mins, const mxx::comm& comm) 
     std::deque<std::pair<T,size_t> > q;
     size_t local_size = in.size();
     size_t prefix = mxx::exscan(local_size, comm);
@@ -72,7 +71,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     for (size_t i = in.size(); i > 0; --i) {
         while (!q.empty() && in[i-1] < q.back().first)
             q.pop_back();
-        if (left_type == furthest_eq) { // TODO: distinguish between variants on a templated basis
+        if (left_type == furthest_eq) {
             // remove all equal elements but the last
             while (q.size() >= 2 && in[i-1] == q.back().first && in[i-1] == (q.rbegin()+1)->first) {
                 q.pop_back();
@@ -84,7 +83,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
         q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
     }
     // add results to left_mins
-    std::vector<std::pair<T,size_t>> lr_mins(q.rbegin(), q.rend());
+    lr_mins = std::vector<std::pair<T,size_t>>(q.rbegin(), q.rend());
     size_t n_left_mins = q.size();
     assert(n_left_mins >= 1);
     q.clear();
@@ -234,6 +233,34 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     // TODO: elements still in the queue do not have a smaller value to the right
     //       -> set these to a special value?
 
+    lr_mins = recved;
+}
+
+template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
+void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, const mxx::comm& comm) {
+    std::vector<std::pair<T, size_t>> lr_mins;
+    ansv<T, left_type, right_type>(in, left_nsv, right_nsv, lr_mins, comm);
+}
+
+template <typename InputIterator, typename index_t = std::size_t>
+void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+    // ansv of lcp!
+    // TODO: use index_t instead of size_t
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<index_t, size_t>> lr_mins;
+
+    // ANSV with furthest eq for left and smallest for right
+    // TODO: also return the lr_mins
+    // TODO: different indexing for lr_mins !!!
+    ansv<index_t, furthest_eq, nearest_sm>(sa.LCP, left_nsv, right_nsv, lr_mins, comm);
+
+    // TODO:
+    // - get max of ansvs as the `parent` node (requires lr_mins for non local values)
+    // - get character for internal nodes (first character of suffix starting at
+    //   the node S[SA[i]+LCP[i]]) [i.e. requesting a full permutation] needed for
+    //   all edges, i.e. up to 2n-1 (SA and LCP aligned)
+    // - TODO: howto efficiently represent edges while string remains distributed??
 }
 
 template <typename T>
