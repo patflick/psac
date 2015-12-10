@@ -62,7 +62,7 @@ inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,si
 // TODO: comparator type
 // TODO: more compact via index_t template instead of size_t
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
-void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t>>& lr_mins, const mxx::comm& comm) 
+void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm) {
     std::deque<std::pair<T,size_t> > q;
     size_t local_size = in.size();
     size_t prefix = mxx::exscan(local_size, comm);
