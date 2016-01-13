@@ -51,10 +51,27 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                 if (s+1 < i) {
                     T m = *minquery.query(in.cbegin()+s+1, in.cbegin()+i);
                     if (type == nearest_sm) {
+                        // check that there is nothing smaller than in[i] in the range
                         EXPECT_TRUE(in[i] <= m && in[s] < m) << " for range [" << s+1 << "," << i << "]";
                     } else if (type == furthest_eq) {
+                        // test that no smaller values lay in between
                         EXPECT_TRUE(in[i] <= m && in[s] <= m);
-                        // TODO: this requires testing wether this is actually the furthest
+
+                        // test if the nsv is actually the furthest
+                        if (in[i] == in[s]) {
+                            // if equal, then s has to be the furthest
+                            // we check that the nsv for s is smaller, not equal
+                            if (nsv[s] != 0) {
+                                EXPECT_LT(in[nsv[s]], in[i]) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s << ", nsv[s]=" << nsv[s] << ", in.size()=" << in.size();
+                                if (nsv[s]+1 < s) {
+                                    T m2 = *minquery.query(in.cbegin()+nsv[s]+1, in.cbegin()+s);
+                                    EXPECT_GT(m2, in[i]);
+                                }
+                            }
+                        } else {
+                            // if not equal, there can't be any equal ones in between
+                            EXPECT_LT(in[i], m) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s;
+                        }
                     } else { // type == nearest_eq
                         EXPECT_TRUE(in[i] < m && in[s] < m);
                     }
@@ -75,7 +92,22 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                         EXPECT_TRUE(in[i] <= m && in[s] < m) << " for range [" << i << "," << s-1 << "]";
                     } else if (type == furthest_eq) {
                         EXPECT_TRUE(in[i] <= m && in[s] <= m) << " for range [" << i << "," << s-1 << "]";
-                        // TODO: this requires testing wether this is actually the furthest
+                        // test if the nsv is actually the furthest
+                        if (in[i] == in[s]) {
+                            // if equal, then s has to be the furthest
+                            // we check that the nsv for s is smaller, not equal
+                            if (nsv[s] != 0) {
+                                EXPECT_LT(in[nsv[s]], in[i]) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s << ", nsv[s]=" << nsv[s] << ", in.size()=" << in.size();
+                                if (s+1 < nsv[s]) {
+                                    T m2 = *minquery.query(in.cbegin()+s+1, in.cbegin()+nsv[s]);
+                                    EXPECT_GT(m2, in[i]) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s << ", nsv[s]=" << nsv[s] << ", in.size()=" << in.size();
+
+                                }
+                            }
+                        } else {
+                            // if not equal, there can't be any equal ones in between
+                            EXPECT_LT(in[i], m) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s << ", nsv[s]=" << nsv[s] << ", in.size()=" << in.size();
+                        }
                     } else { // type == nearest_eq
                         EXPECT_TRUE(in[i] < m && in[s] < m) << " for range [" << i << "," << s-1 << "]";
                     }
@@ -95,11 +127,16 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
 void par_test_ansv(const std::vector<T>& in, const mxx::comm& c) {
     std::vector<size_t> vec = mxx::stable_distribute(in, c);
+    
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << vec << std::endl;
 
     // calc ansv
     std::vector<size_t> left_nsv;
     std::vector<size_t> right_nsv;
     ansv<T,left_type,right_type>(vec, left_nsv, right_nsv, c);
+
+
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << left_nsv << std::endl;
 
     left_nsv = mxx::gatherv(left_nsv, 0, c);
     right_nsv = mxx::gatherv(right_nsv, 0, c);
@@ -130,12 +167,12 @@ TEST(PsacANSV, ParallelANSVrand) {
     mxx::comm c;
 
     for (size_t n : {13, 137, 1000, 66666, 137900}) {
-    //size_t n = 12;
+    //size_t n = 137;
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 1000;});
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
         }
 
         par_test_ansv<size_t, nearest_sm, nearest_sm>(in, c);

@@ -61,17 +61,22 @@ inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,si
 // TODO: iterator version??
 // TODO: comparator type
 // TODO: more compact via index_t template instead of size_t
+// TODO: different version to return local indices or higher values for lr_mins, not directly global indeces
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
 void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm) {
     std::deque<std::pair<T,size_t> > q;
     size_t local_size = in.size();
     size_t prefix = mxx::exscan(local_size, comm);
 
+    /*****************************************************************
+     *  Step 1: Locally calculate ANSV and save un-matched elements  *
+     *****************************************************************/
+
     // backwards direction (left mins)
     for (size_t i = in.size(); i > 0; --i) {
         while (!q.empty() && in[i-1] < q.back().first)
             q.pop_back();
-        if (left_type == furthest_eq) {
+        if (right_type == furthest_eq) {
             // remove all equal elements but the last
             while (q.size() >= 2 && in[i-1] == q.back().first && in[i-1] == (q.rbegin()+1)->first) {
                 q.pop_back();
@@ -92,7 +97,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     for (size_t i = 0; i < in.size(); ++i) {
         while (!q.empty() && in[i] < q.back().first)
             q.pop_back();
-        if (right_type == furthest_eq) {
+        if (left_type == furthest_eq) {
             while (q.size() >= 2 && in[i] == q.back().first && in[i] == (q.rbegin()+1)->first) {
                 // remove all but the last one that is equal, TODO: can be `if` instead
                 q.pop_back();
@@ -112,6 +117,10 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     assert(n_right_mins + n_left_mins == lr_mins.size());
 
 
+    /***************************************************************
+     *  Step 2: communicate un-matched elements to correct target  *
+     ***************************************************************/
+
     // allgather min and max of all left and right mins
     //assert(local_min == lr_mins.front().first);
     std::vector<T> allmins = mxx::allgather(local_min, comm);
@@ -127,7 +136,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
             size_t start_idx = left_idx;
             // move start back to other `equal` elements (there can be at most 2)
             if (right_type == furthest_eq && i < comm.rank()-1) {
-                if (start_idx > 0 && lr_mins[start_idx-1].first <= allmins[i+1]) {
+                if (start_idx > 0 && lr_mins[start_idx-1].first <= prev_mins_min) {
                     --start_idx;
                 }
             }
@@ -161,7 +170,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
             size_t end_idx = right_idx;
             if (left_type == furthest_eq && i > comm.rank()+1) {
                 // move start back to other `equal` elements
-                while (end_idx+1 < lr_mins.size() && lr_mins[end_idx+1].first <= allmins[i-1]) {
+                while (end_idx+1 < lr_mins.size() && lr_mins[end_idx+1].first <= prev_mins_min) {
                     ++end_idx;
                 }
             }
@@ -195,10 +204,14 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     std::vector<std::pair<T, size_t>> recved(recv_size);
     mxx::all2allv(&lr_mins[0], send_counts, send_displs, &recved[0], recv_counts, recv_displs, comm);
 
-
     // solve locally given the exchanged values (by prefilling min-queue before running locally)
     size_t n_left_recv = recv_displs[comm.rank()];
     size_t n_right_recv = recv_size - n_left_recv;
+
+
+    /***************************************************************
+     *  Step 3: Again solve ANSV locally and use lr_mins as tails  *
+     ***************************************************************/
 
     left_nsv.resize(local_size);
     right_nsv.resize(local_size);
@@ -214,10 +227,32 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     // now go backwards through the right-mins from the previous processors,
     // in order to resolve all local elements
     for (size_t i = 0; i < n_left_recv; ++i) {
-        update_nsv_queue<T,left_type>(left_nsv, q, recved[n_left_recv - i - 1].first, recved[n_left_recv - i - 1].second, prefix);
+        if (q.empty()) {
+            break;
+        }
+        size_t rcv_idx = n_left_recv - i - 1;
+
+        // set nsv for all larger elements in the queue
+        update_nsv_queue<T,left_type>(left_nsv, q, recved[rcv_idx].first, recved[rcv_idx].second, prefix);
+
+        if (left_type == furthest_eq) {
+            if (!q.empty() && recved[rcv_idx].first == q.back().first) {
+                // skip till furthest of an equal range
+                while (rcv_idx != 0 && recved[rcv_idx].first == recved[rcv_idx-1].first) {
+                    i++;
+                    rcv_idx = n_left_recv - i - 1;
+                }
+                // setting this as the furthest_eq for all equal elements in the queue
+                // and removing all equal elements from the queue
+                while (!q.empty() && q.back().first == recved[rcv_idx].first) {
+                    left_nsv[q.back().second - prefix] = recved[rcv_idx].second;
+                    q.pop_back();
+                }
+            }
+        }
     }
     // TODO: elements still in the queue do not have a smaller value to the left
-    //       -> set these to a special value?
+    //       -> set these to a special value and handle case if furthest_eq elements are still waiting in queue
 
     // iterate forwards to get the nearest smaller value to the right for each element
     q.clear();
@@ -228,10 +263,31 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
     // now go forwards through left-mins of succeeding processors
     for (size_t i = 0; i < n_right_recv; ++i) {
+        size_t rcv_idx = n_left_recv + i;
+        if (q.empty()) {
+            break;
+        }
+        // set nsv for all larger elements in the queue
         update_nsv_queue<T,right_type>(right_nsv, q, recved[n_left_recv + i].first, recved[n_left_recv+i].second, prefix);
+
+        if (right_type == furthest_eq) {
+            if (!q.empty() && recved[rcv_idx].first == q.back().first) {
+                // skip till furthest of an equal range
+                while (i+1 < n_right_recv  && recved[rcv_idx].first == recved[rcv_idx+1].first) {
+                    i++;
+                    rcv_idx = n_left_recv + i;
+                }
+                // setting this as the furthest_eq for all equal elements in the queue
+                // and removing all equal elements from the queue
+                while (!q.empty() && q.back().first == recved[rcv_idx].first) {
+                    right_nsv[q.back().second - prefix] = recved[rcv_idx].second;
+                    q.pop_back();
+                }
+            }
+        }
     }
-    // TODO: elements still in the queue do not have a smaller value to the right
-    //       -> set these to a special value?
+    // TODO: elements still in the queue do not have a smaller value to the left
+    //       -> set these to a special value and handle case if furthest_eq elements are still waiting in queue
 
     lr_mins = recved;
 }
