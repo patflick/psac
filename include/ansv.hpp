@@ -28,6 +28,9 @@ constexpr int nearest_sm = 0;
 constexpr int nearest_eq = 1;
 constexpr int furthest_eq = 2;
 
+constexpr int global_indexing = 0;
+constexpr int local_indexing = 1;
+
 
 template <typename T, int type = nearest_sm>
 inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,size_t>>& q, const T& next_value, size_t idx, size_t prefix) {
@@ -62,8 +65,8 @@ inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,si
 // TODO: comparator type
 // TODO: more compact via index_t template instead of size_t
 // TODO: different version to return local indices or higher values for lr_mins, not directly global indeces
-template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
-void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm) {
+template <typename T, int left_type = nearest_sm, int right_type = nearest_sm, int indexing_type = global_indexing>
+void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
     std::deque<std::pair<T,size_t> > q;
     size_t local_size = in.size();
     size_t prefix = mxx::exscan(local_size, comm);
@@ -115,7 +118,6 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     assert(n_right_mins >= 1);
     q.clear();
     assert(n_right_mins + n_left_mins == lr_mins.size());
-
 
     /***************************************************************
      *  Step 2: communicate un-matched elements to correct target  *
@@ -220,8 +222,14 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     // iterate backwards to get the nearest smaller element to left for each element
     // TODO: this doesn't really require pairs in the queue (index suffices)
     for (size_t i = in.size(); i > 0; --i) {
-        update_nsv_queue<T,left_type>(left_nsv, q, in[i-1], prefix+i-1, prefix);
-        q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
+        if (indexing_type == global_indexing) {
+            update_nsv_queue<T,left_type>(left_nsv, q, in[i-1], prefix+i-1, prefix);
+            q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
+        } else { // indexing_type == local_indexing
+            // prefix=0 for local indexing
+            update_nsv_queue<T,left_type>(left_nsv, q, in[i-1], i-1, 0);
+            q.push_back(std::pair<T, size_t>(in[i-1], i-1));
+        }
     }
 
     // now go backwards through the right-mins from the previous processors,
@@ -233,7 +241,12 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
         size_t rcv_idx = n_left_recv - i - 1;
 
         // set nsv for all larger elements in the queue
-        update_nsv_queue<T,left_type>(left_nsv, q, recved[rcv_idx].first, recved[rcv_idx].second, prefix);
+        if (indexing_type == global_indexing) {
+            update_nsv_queue<T,left_type>(left_nsv, q, recved[rcv_idx].first, recved[rcv_idx].second, prefix);
+        } else { // indexing_type == local_indexing
+            // prefix = 0, recv.2nd = local_size+rcv_idx,
+            update_nsv_queue<T,left_type>(left_nsv, q, recved[rcv_idx].first, local_size + rcv_idx, 0);
+        }
 
         if (left_type == furthest_eq) {
             if (!q.empty() && recved[rcv_idx].first == q.back().first) {
@@ -245,20 +258,47 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
                 // setting this as the furthest_eq for all equal elements in the queue
                 // and removing all equal elements from the queue
                 while (!q.empty() && q.back().first == recved[rcv_idx].first) {
-                    left_nsv[q.back().second - prefix] = recved[rcv_idx].second;
+                    if (indexing_type == global_indexing) {
+                        left_nsv[q.back().second - prefix] = recved[rcv_idx].second;
+                    } else { // indexing_type == local_indexing
+                        left_nsv[q.back().second] = local_size + rcv_idx;
+                    }
                     q.pop_back();
                 }
             }
         }
     }
-    // TODO: elements still in the queue do not have a smaller value to the left
-    //       -> set these to a special value and handle case if furthest_eq elements are still waiting in queue
+
+    // elements still in the queue do not have a smaller value to the left
+    //  -> set these to a special value and handle case if furthest_eq
+    //     elements are still waiting in queue
+    const size_t iprefix = (indexing_type == global_indexing) ? prefix : 0;
+    for (auto it = q.rbegin(); it != q.rend(); ++it) {
+        if (left_type == furthest_eq) {
+                auto it2 = it;
+                // set left most as furthest_eq for all equal elements
+                while(it2+1 != q.rend() && it->first == (it2+1)->first) {
+                    ++it2;
+                    left_nsv[it2->second - iprefix] = it->second;
+                }
+                left_nsv[it->second - iprefix] = nonsv;
+                it = it2;
+        } else {
+            left_nsv[it->second - iprefix] = nonsv;
+        }
+    }
 
     // iterate forwards to get the nearest smaller value to the right for each element
     q.clear();
     for (size_t i = 0; i < in.size(); ++i) {
-        update_nsv_queue<T,right_type>(right_nsv, q, in[i], prefix+i, prefix);
-        q.push_back(std::pair<T, size_t>(in[i], prefix+i));
+        if (indexing_type == global_indexing) {
+            update_nsv_queue<T,right_type>(right_nsv, q, in[i], prefix+i, prefix);
+            q.push_back(std::pair<T, size_t>(in[i], prefix+i));
+        } else { // indexing_type == local_indexing
+            // handle as if prefix = 0
+            update_nsv_queue<T,right_type>(right_nsv, q, in[i], i, 0);
+            q.push_back(std::pair<T, size_t>(in[i], i));
+        }
     }
 
     // now go forwards through left-mins of succeeding processors
@@ -268,7 +308,11 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
             break;
         }
         // set nsv for all larger elements in the queue
-        update_nsv_queue<T,right_type>(right_nsv, q, recved[n_left_recv + i].first, recved[n_left_recv+i].second, prefix);
+        if (indexing_type == global_indexing) {
+            update_nsv_queue<T,right_type>(right_nsv, q, recved[rcv_idx].first, recved[rcv_idx].second, prefix);
+        } else { // indexing_type == local_indexing
+            update_nsv_queue<T,right_type>(right_nsv, q, recved[rcv_idx].first, local_size+rcv_idx, 0);
+        }
 
         if (right_type == furthest_eq) {
             if (!q.empty() && recved[rcv_idx].first == q.back().first) {
@@ -280,14 +324,34 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
                 // setting this as the furthest_eq for all equal elements in the queue
                 // and removing all equal elements from the queue
                 while (!q.empty() && q.back().first == recved[rcv_idx].first) {
-                    right_nsv[q.back().second - prefix] = recved[rcv_idx].second;
+                    if (indexing_type == global_indexing) {
+                        right_nsv[q.back().second - prefix] = recved[rcv_idx].second;
+                    } else { // indexing_type == local_indexing
+                        right_nsv[q.back().second] = local_size+rcv_idx;
+                    }
                     q.pop_back();
                 }
             }
         }
     }
-    // TODO: elements still in the queue do not have a smaller value to the left
-    //       -> set these to a special value and handle case if furthest_eq elements are still waiting in queue
+
+    // elements still in the queue do not have a smaller value to the left
+    // -> set these to a special value and handle case if furthest_eq elements
+    // are still waiting in queue
+    for (auto it = q.rbegin(); it != q.rend(); ++it) {
+        if (right_type == furthest_eq) {
+                auto it2 = it;
+                // set left most as furthest_eq for all equal elements
+                while(it2+1 != q.rend() && it->first == (it2+1)->first) {
+                    ++it2;
+                    right_nsv[it2->second - iprefix] = it->second;
+                }
+                right_nsv[it->second - iprefix] = nonsv;
+                it = it2;
+        } else {
+            right_nsv[it->second - iprefix] = nonsv;
+        }
+    }
 
     lr_mins = recved;
 }
@@ -295,7 +359,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
 void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, const mxx::comm& comm) {
     std::vector<std::pair<T, size_t>> lr_mins;
-    ansv<T, left_type, right_type>(in, left_nsv, right_nsv, lr_mins, comm);
+    ansv<T, left_type, right_type, global_indexing>(in, left_nsv, right_nsv, lr_mins, comm);
 }
 
 template <typename InputIterator, typename index_t = std::size_t>
@@ -309,7 +373,7 @@ void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa,
     // ANSV with furthest eq for left and smallest for right
     // TODO: also return the lr_mins
     // TODO: different indexing for lr_mins !!!
-    ansv<index_t, furthest_eq, nearest_sm>(sa.LCP, left_nsv, right_nsv, lr_mins, comm);
+    ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.LCP, left_nsv, right_nsv, lr_mins, comm);
 
     // TODO:
     // - get max of ansvs as the `parent` node (requires lr_mins for non local values)

@@ -28,13 +28,13 @@
 
 // check ansv via a rmq
 template <typename T, int type = nearest_sm>
-void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool left) {
+void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool left, size_t nonsv) {
     // construct RMQ
     rmq<typename std::vector<T>::const_iterator> minquery(in.cbegin(), in.cend());
 
     // for each position check the nsv and direction
     for (size_t i = 0; i < in.size(); ++i) {
-        if (nsv[i] == 0) {
+        if (nsv[i] == nonsv) {
             if (left && i > 0) {
                 // expect this is an overall minimum of the range [0, i]
                 T m = *minquery.query(in.cbegin(), in.cbegin()+i+1);
@@ -61,7 +61,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                         if (in[i] == in[s]) {
                             // if equal, then s has to be the furthest
                             // we check that the nsv for s is smaller, not equal
-                            if (nsv[s] != 0) {
+                            if (nsv[s] != nonsv) {
                                 EXPECT_LT(in[nsv[s]], in[i]) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s << ", nsv[s]=" << nsv[s] << ", in.size()=" << in.size();
                                 if (nsv[s]+1 < s) {
                                     T m2 = *minquery.query(in.cbegin()+nsv[s]+1, in.cbegin()+s);
@@ -96,7 +96,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                         if (in[i] == in[s]) {
                             // if equal, then s has to be the furthest
                             // we check that the nsv for s is smaller, not equal
-                            if (nsv[s] != 0) {
+                            if (nsv[s] != nonsv) {
                                 EXPECT_LT(in[nsv[s]], in[i]) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s << ", nsv[s]=" << nsv[s] << ", in.size()=" << in.size();
                                 if (s+1 < nsv[s]) {
                                     T m2 = *minquery.query(in.cbegin()+s+1, in.cbegin()+nsv[s]);
@@ -142,8 +142,64 @@ void par_test_ansv(const std::vector<T>& in, const mxx::comm& c) {
     right_nsv = mxx::gatherv(right_nsv, 0, c);
 
     if (c.rank() == 0) {
-        check_ansv<T,left_type>(in, left_nsv, true);
-        check_ansv<T,right_type>(in, right_nsv, false);
+        check_ansv<T,left_type>(in, left_nsv, true, 0);
+        check_ansv<T,right_type>(in, right_nsv, false, 0);
+    }
+}
+
+template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
+void par_test_ansv_localidx(const std::vector<T>& in, const mxx::comm& c) {
+    std::vector<size_t> vec = mxx::stable_distribute(in, c);
+
+    size_t prefix = mxx::exscan(vec.size(), c);
+
+    // calc ansv
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<T, size_t>> lr_mins;
+
+    const size_t nonsv = std::numeric_limits<size_t>::max();
+    ansv<T,left_type,right_type,local_indexing>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+    ASSERT_TRUE(mxx::all_of(vec.size() == left_nsv.size() && vec.size() == right_nsv.size(), c));
+
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: in=" << in << std::endl;
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: vec=" << vec << std::endl;
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: left=" << left_nsv << std::endl;
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: right=" << right_nsv << std::endl;
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: lrmin=" << lr_mins << std::endl;
+
+    // resolve local indexing into global indexing
+    // FIXME: now we actually have to use a special value for non-matched
+    for (size_t i = 0; i < vec.size(); ++i) {
+        // resolve left
+        if (left_nsv[i] != nonsv) {
+            if (left_nsv[i] < vec.size()) {
+                // this is a local element, add prefix
+                left_nsv[i] += prefix;
+            } else {
+                EXPECT_TRUE(left_nsv[i] >= vec.size() && left_nsv[i] < vec.size()+lr_mins.size());
+                left_nsv[i] = lr_mins[left_nsv[i]-vec.size()].second;
+            }
+        }
+        // resolve right
+        if (right_nsv[i] != nonsv) {
+            if (right_nsv[i] < vec.size()) {
+                // this is a local element, add prefix
+                right_nsv[i] += prefix;
+            } else {
+                EXPECT_TRUE(right_nsv[i] >= vec.size() && right_nsv[i] < vec.size()+lr_mins.size());
+                right_nsv[i] = lr_mins[right_nsv[i]-vec.size()].second;
+            }
+        }
+    }
+
+
+    left_nsv = mxx::gatherv(left_nsv, 0, c);
+    right_nsv = mxx::gatherv(right_nsv, 0, c);
+
+    if (c.rank() == 0) {
+        check_ansv<T,left_type>(in, left_nsv, true, nonsv);
+        check_ansv<T,right_type>(in, right_nsv, false, nonsv);
     }
 }
 
@@ -158,8 +214,8 @@ TEST(PsacANSV, SeqANSVrand) {
         std::vector<size_t> right_nsv;
         ansv_sequential(vec, left_nsv, right_nsv);
 
-        check_ansv(vec, left_nsv, true);
-        check_ansv(vec, right_nsv, false);
+        check_ansv(vec, left_nsv, true, 0);
+        check_ansv(vec, right_nsv, false, 0);
     }
 }
 
@@ -167,7 +223,7 @@ TEST(PsacANSV, ParallelANSVrand) {
     mxx::comm c;
 
     for (size_t n : {13, 137, 1000, 66666, 137900}) {
-    //size_t n = 137;
+    //size_t n = 25;
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);
@@ -186,5 +242,18 @@ TEST(PsacANSV, ParallelANSVrand) {
         par_test_ansv<size_t, nearest_sm, furthest_eq>(in, c);
         par_test_ansv<size_t, nearest_eq, furthest_eq>(in, c);
         par_test_ansv<size_t, furthest_eq, furthest_eq>(in, c);
+
+        // test local_indexing
+        par_test_ansv_localidx<size_t, nearest_sm, nearest_sm>(in, c);
+        par_test_ansv_localidx<size_t, nearest_eq, nearest_sm>(in, c);
+        par_test_ansv_localidx<size_t, furthest_eq, nearest_sm>(in, c);
+
+        par_test_ansv_localidx<size_t, nearest_sm, nearest_eq>(in, c);
+        par_test_ansv_localidx<size_t, nearest_eq, nearest_eq>(in, c);
+        par_test_ansv_localidx<size_t, furthest_eq, nearest_eq>(in, c);
+
+        par_test_ansv_localidx<size_t, nearest_sm, furthest_eq>(in, c);
+        par_test_ansv_localidx<size_t, nearest_eq, furthest_eq>(in, c);
+        par_test_ansv_localidx<size_t, furthest_eq, furthest_eq>(in, c);
     }
 }
