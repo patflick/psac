@@ -64,7 +64,6 @@ inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,si
 // TODO: iterator version??
 // TODO: comparator type
 // TODO: more compact via index_t template instead of size_t
-// TODO: different version to return local indices or higher values for lr_mins, not directly global indeces
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm, int indexing_type = global_indexing>
 void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
     std::deque<std::pair<T,size_t> > q;
@@ -370,17 +369,161 @@ void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa,
     std::vector<size_t> right_nsv;
     std::vector<std::pair<index_t, size_t>> lr_mins;
 
+    const size_t nonsv = std::numeric_limits<size_t>::max();
+
     // ANSV with furthest eq for left and smallest for right
-    // TODO: also return the lr_mins
-    // TODO: different indexing for lr_mins !!!
-    ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.LCP, left_nsv, right_nsv, lr_mins, comm);
+    ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.LCP, left_nsv, right_nsv, lr_mins, comm, nonsv);
+
+    size_t local_size = sa.SA.size();
+    size_t prefix = mxx::exscan(local_size, comm);
+    const size_t sigma = 4; // TODO determine sigma or use local hashing
+    // at most `n` internal nodes?
+    // we represent only internal nodes. if a child pointer points to {total-size + X}, its a leaf
+    // leafs are not represented as tree nodes inside the suffix tree structure
+    // edges contain starting character? and/or length?
+    std::vector<size_t> tree_nodes(sigma*local_size); // TODO: determine real size
+
+    // each SA[i] lies between two LCP values
+    // LCP[i] = lcp(S[SA[i-1]], S[SA[i]])
+    // leaf nodes are the suffix array positions. Their parent is the either their left or their right
+    // LCP, depending on which one is larger
+
+    // get the first LCP value of the next processor
+    index_t next_first_lcp = mxx::left_shift(sa.LCP[0], comm);
+    for (size_t i = 0; i < local_size; ++i) {
+        // for each suffix array position SA[i], we check the longest-common-prefix
+        // with the neighboring suffixes SA[i-1] and SA[i+1]. Whichever one it
+        // shares the larger common prefix with, is its sibling in the ST and
+        // they share a parent at the depth given by the larger LCP value. The
+        // index of the LCP that has that value will be the index of the parent
+        // node.
+        //
+        // This means for every `i`, we need argmax_i {LCP[i], LCP[i+1]}, where
+        // `i+1` might be on the next processor.
+        // Special cases are for globally the first element and the last element
+
+        // parent will be an index into LCP
+        size_t parent = std::numeric_limits<size_t>::max();
+        // distinguish certain special cases (SA[0], SA[global_last], and last on processor)
+        if (comm.rank() == 0 && i == 0) {
+            // globally first leaf: SA[0]
+            // -> parent = 1, since it is the common prefix between SA[0] and SA[1]
+            parent = 1;
+        } else if (comm.rank() == comm.size()-1 && i == local_size-1) {
+            // globally last leaf: SA[global_size-1]
+            // -> parent = global-size-1, since it is the common prefix between
+            //                            this and the previous leaf
+            // TODO: furthest-equal for last LCP instead
+            parent = global_size - 1;
+        } else if (i == local_size-1) {
+            // use max of `next_first_lcp` and local LCP[local_size-1] to determine parent
+            // for SA[i]
+            if (sa.LCP[local_size-1] >= next_first_lcp) {
+                // TODO: use left furthest eq of LCP[local_size-1] as the definite parent
+            } else {
+                // left LCP is smaller -> right LCP is parent (which in this case is the next processor)
+                parent = prefix + local_size;
+            }
+        } else {
+            if (sa.LCP[i] >= sa.LCP[i+1]) {
+                // use left furthest equal of [i] as the parent
+                // TODO
+            } else {
+                // SA[i] shares a longer prefix with its right neighbor SA[i+1]
+                // they converge at internal node prefix+i+1
+                parent = prefix + i + 1;
+            }
+        }
+
+        // TODO: save parent or set pointer FROM parent: tree_nodes[parent] = prefix+i
+        // if parent not local: send?
+        //
+    }
+    // TODO: probably best to send a character S[SA[i]+maxLCP[i]] along for edge labeling
+
+    // get parents of internal nodes (via LCP)
+    for (size_t i = 0; i < local_size; ++i) {
+        size_t parent = std::numeric_limits<size_t>::max();
+        // for each LCP position, get ANSV left-furthest-eq and right-nearest-sm
+        // and the max of the two is the parent
+        // Special cases: first (LCP[0]) and globally last LCP
+        if (comm.rank() == 0 && i == 0) {
+            // globally first position in LCP
+            parent = 0; // TODO: this is the root, no parent!
+
+        //} else if (comm.rank() == comm.size() - 1 && i == local_size - 1) {
+            // globally last element (no right ansv)
+            // this case is identical to the regular case, since for the right
+            // most element, right_nsv[i] will be == nonsv
+            // and as such is handled in the corresponding case below
+        } else {
+            if (sa.LCP[i] == 0) {
+                parent = 0; // root is parent if LCP is 0
+            } else {
+                // left NSV can't be non-existant because LCP[0] = 0
+                assert(left_nsv[i] != nonsv);
+                if (right_nsv[i] == nonsv) {
+                    // use left one
+                    size_t nsv;
+                    index_t lcp_val;
+                    if (left_nsv[i] < local_size) {
+                        nsv = prefix + left_nsv[i];
+                        lcp_val = sa.LCP[left_nsv[i]];
+                    } else {
+                        nsv = lr_mins[left_nsv[i] - local_size].second;
+                        lcp_val = lr_mins[left_nsv[i] - local_size].first;
+                    }
+                    parent = nsv;
+                } else {
+                    // get left NSV index and value
+                    size_t lnsv;
+                    index_t left_lcp_val;
+                    if (left_nsv[i] < local_size) {
+                        lnsv = prefix + left_nsv[i];
+                        left_lcp_val = sa.LCP[left_nsv[i]];
+                    } else {
+                        lnsv = lr_mins[left_nsv[i] - local_size].second;
+                        left_lcp_val = lr_mins[left_nsv[i] - local_size].first;
+                    }
+                    // get right NSV index and value
+                    size_t rnsv;
+                    index_t right_lcp_val;
+                    if (right_nsv[i] < local_size) {
+                        rnsv = prefix + right_nsv[i];
+                        right_lcp_val = sa.LCP[right_nsv[i]];
+                    } else {
+                        rnsv = lr_mins[right_nsv[i] - local_size].second;
+                        right_lcp_val = lr_mins[right_nsv[i] - local_size].first;
+                    }
+                    // parent is the NSV for which LCP is larger.
+                    // if same, use left furthest_eq
+                    if (left_lcp_val >= right_lcp_val) {
+                        parent = lnsv;
+                    } else {
+                        parent = rnsv;
+                    }
+                }
+            }
+        }
+    }
+
+    // each leaf node (SA position) determines its parent via max of two ajacent LCP values
+    // each internal node (LCP position) determiens its parent via ANSV
+    // each node "hangs" itself underneath its parent node
+    // what's the likelyhood of the parent node to be on another processor??
+    // since both the LCP and SA are equally distributed, and the ANSV likely to be close by
+    // its likely they are "close" as well
+    // ?? communication is basically similar the ANSV communication?
+    // at most n/p on each processor anyway (can't be parent to more than sigma * n/p)
+    // even the "heavy" (low LCP) nodes are distributed equally?
+
+
 
     // TODO:
     // - get max of ansvs as the `parent` node (requires lr_mins for non local values)
     // - get character for internal nodes (first character of suffix starting at
     //   the node S[SA[i]+LCP[i]]) [i.e. requesting a full permutation] needed for
     //   all edges, i.e. up to 2n-1 (SA and LCP aligned)
-    // - TODO: howto efficiently represent edges while string remains distributed??
 }
 
 template <typename T>

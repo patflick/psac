@@ -19,6 +19,9 @@
  * @ingroup group
  * @author  Patrick Flick <patrick.flick@gmail.com>
  * @brief   Implements LCP construction (from suffix array) sequentially.
+ *
+ * Note, this function is used only as a reference for testing of the parallel
+ * LCP construction algorithm implemented inside of suffix_array.hpp.
  */
 
 #ifndef LCP_HPP
