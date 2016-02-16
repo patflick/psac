@@ -227,7 +227,7 @@ TEST(PsacANSV, ParallelANSVrand) {
     mxx::comm c;
 
     for (size_t n : {13, 137, 1000, 66666, 137900}) {
-    //size_t n = 40;
+    //size_t n = 1000;
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);

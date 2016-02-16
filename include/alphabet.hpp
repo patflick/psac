@@ -26,7 +26,7 @@
  *  create random DNA input  *
  *****************************/
 inline char rand_dna_char() {
-    char DNA[4] = {'A', 'C', 'G', 'T'};
+    const static char DNA[4] = {'A', 'C', 'G', 'T'};
     return DNA[rand() % 4];
 }
 

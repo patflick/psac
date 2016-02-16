@@ -142,19 +142,30 @@ private:
 
     /// number of processes = size of the communicator
     int p;
-
     /// The MPI datatype for the templated type `index_t`.
     //mxx::datatype<index_t> index_mpi_dt;
     //MPI_Datatype mpi_index_t;
 
+    // The block decomposition for the suffix array
+    mxx::partition::block_decomposition_buffered<index_t> part;
 
+public:
     /// Iterators over the local input string
     InputIterator input_begin;
     /// End iterator for local input string
     InputIterator input_end;
 
-    // The block decomposition for the suffix array
-    mxx::partition::block_decomposition_buffered<index_t> part;
+public:
+    /// mapping the ascii char to a "compressed" integer
+    /// uses only ceillog(sigma+1) bits
+    std::vector<uint16_t> alphabet_mapping;
+
+    /// the number of unique characters in the input string
+    /// (does not account for the special `0` character)
+    unsigned int sigma;
+
+    /// "compressed" integer to ascii
+
 
 public: // TODO: make private again and provide some iterator and query access
     /// The local suffix array
@@ -510,8 +521,8 @@ std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
     // get global alphabet histogram
     std::vector<index_t> alphabet_hist = alphabet_histogram<InputIterator, index_t>(input_begin, input_end, comm);
     // get mapping table and alphabet sizes
-    std::vector<uint16_t> alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
-    unsigned int sigma = alphabet_unique_chars(alphabet_hist);
+    alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
+    sigma = alphabet_unique_chars(alphabet_hist);
     // bits per character: set l=ceil(log(sigma))
     unsigned int l = alphabet_bits_per_char(sigma);
     // number of characters per word => the `k` in `k-mer`
