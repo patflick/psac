@@ -138,3 +138,28 @@ TEST(PsacRMQ, rmqbig) {
     // check all queries
     r.check_all_subranges();
 }
+
+TEST(PsacRMQ, rmqmultimin) {
+
+    std::vector<size_t> vec(1000);
+    std::generate(vec.begin(), vec.end(), [](){return (8 + std::rand() % 10)/10;});
+    rmq<std::vector<size_t>::const_iterator> minquery(vec.cbegin(), vec.cend());
+
+    // check whether the min is the first min in the range
+    // TODO: test for all partial ranges
+    auto begin = vec.cbegin();
+    auto min_it = minquery.query(vec.cbegin(), vec.cend());
+    while (*min_it == 0) {
+        if (min_it - begin > 0) {
+            // assert the minimum of the range prior to the found min is larger
+            auto min_it2 = minquery.query(begin, min_it);
+            EXPECT_LT(*min_it, *min_it2) << " min for range [" << (begin-vec.cbegin()) << ",end] at pos " << (min_it - vec.cbegin()) << ", but there is a previous min of same value at pos " << (min_it2 - vec.cbegin());
+        }
+        // continue in remaining range:
+        begin = min_it+1;
+        if (begin == vec.cend())
+            break;
+        min_it = minquery.query(begin, vec.cend());
+    }
+    //std::cout << min_it - vec.cbegin() << std::endl;
+}

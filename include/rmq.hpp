@@ -38,7 +38,7 @@ template<typename Iterator, typename index_t = std::size_t>
 class rmq {
 public:
     // superblock size is log^(2+epsilon)(n)
-    // we choose it as bitsize*2:
+    // we choose it as bitsize^2:
     //  - 64 bits -> 4096
     //  - 32 bits -> 1024
     //  - both bound by 2^16 -> uint16_t
@@ -126,15 +126,15 @@ public:
             superblock_mins.push_back(std::vector<index_t>(n_superblocks - dist/2));
             for (index_t i = 0; i+dist/2 < n_superblocks; ++i) {
                 index_t right_idx = std::min(i+dist/2, n_superblocks-dist/4-1);
-                if (*(begin + superblock_mins[level-1][i]) < *(begin + superblock_mins[level-1][right_idx])) {
-                    assert(i < superblock_mins.back().size());
-                    assert(superblock_mins.size() == level+1);
-                    superblock_mins.back()[i] = superblock_mins[level-1][i];
-                } else {
+                if (*(begin + superblock_mins[level-1][right_idx]) < *(begin + superblock_mins[level-1][i])) {
                     assert(i < superblock_mins.back().size());
                     assert(superblock_mins.size() == level+1);
                     assert(superblock_mins[level-1].size() > right_idx);
                     superblock_mins.back()[i] = superblock_mins[level-1][right_idx];
+                } else {
+                    assert(i < superblock_mins.back().size());
+                    assert(superblock_mins.size() == level+1);
+                    superblock_mins.back()[i] = superblock_mins[level-1][i];
                 }
             }
             level++;
@@ -158,12 +158,12 @@ public:
                 for (index_t i = 0; i+dist/2 < blocks_in_sb; ++i) {
                     // TODO: right_idx might become negative for last superblock??
                     index_t right_idx = std::min(i + dist/2, blocks_in_sb-dist/4-1);
-                    if (*(begin + block_mins[level-1][i        +pre_sb_offset] + sb*superblock_size)
-                      < *(begin + block_mins[level-1][right_idx+pre_sb_offset] + sb*superblock_size))
+                    if (*(begin + block_mins[level-1][right_idx+pre_sb_offset] + sb*superblock_size)
+                      < *(begin + block_mins[level-1][i        +pre_sb_offset] + sb*superblock_size))
                     {
-                        block_mins.back()[i+sb_offset] = block_mins[level-1][i+pre_sb_offset];
-                    } else {
                         block_mins.back()[i+sb_offset] = block_mins[level-1][right_idx+pre_sb_offset];
+                    } else {
+                        block_mins.back()[i+sb_offset] = block_mins[level-1][i+pre_sb_offset];
                     }
                 }
             }
@@ -202,7 +202,7 @@ public:
             min_pos = _begin + superblock_mins[dist][left_sb];
             assert(dist < superblock_mins.size() && right_sb - (1<<dist) < superblock_mins[dist].size());
             Iterator right_sb_min = _begin + superblock_mins[dist][right_sb - (1 << dist)];
-            if (*min_pos > *right_sb_min) {
+            if (*right_sb_min < *min_pos) {
                 min_pos = right_sb_min;
             }
         }
@@ -217,7 +217,8 @@ public:
                 unsigned int level = ceillog2(n_b);
                 index_t sb_offset = (left_sb-1)*(n_blocks_per_superblock - (1<<level)/2);
                 Iterator block_min_it = _begin + block_mins[level][left_b + sb_offset] + (left_sb-1)*superblock_size;
-                if (*block_min_it < *min_pos)
+                // return this new min if its the same or smaller
+                if (!(*min_pos < *block_min_it))
                     min_pos = block_min_it;
             }
 
@@ -225,7 +226,7 @@ public:
             if (left_b_gidx > begin_idx) {
                 // linearly search (at most block_size elements)
                 Iterator inblock_min_it = std::min_element(range_begin, _begin + left_b_gidx);
-                if (*inblock_min_it < *min_pos) {
+                if (!(*min_pos < *inblock_min_it)) {
                     min_pos = inblock_min_it;
                 }
             }
@@ -292,7 +293,7 @@ public:
                 // remaining inblock
                 if (begin_idx < left_b*block_size) {
                     Iterator inblock_min_it = std::min_element(range_begin, _begin + left_b*block_size);
-                    if (*inblock_min_it < *min_pos) {
+                    if (!(*min_pos < *inblock_min_it)) {
                         min_pos = inblock_min_it;
                     }
                 }
