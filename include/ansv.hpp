@@ -122,6 +122,8 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
      *  Step 2: communicate un-matched elements to correct target  *
      ***************************************************************/
 
+    mxx::sync_cout(comm) << "right mins: " << n_right_mins << ", left mins: " << n_left_mins << std::endl;
+
     // allgather min and max of all left and right mins
     //assert(local_min == lr_mins.front().first);
     std::vector<T> allmins = mxx::allgather(local_min, comm);
@@ -143,6 +145,11 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
             }
             while (left_idx+1 < n_left_mins && lr_mins[left_idx].first >= allmins[i]) {
                 ++left_idx;
+            }
+            if (right_type == furthest_eq) {
+                while (left_idx+1 < n_left_mins && lr_mins[left_idx].first == lr_mins[left_idx+1].first) {
+                    ++left_idx;
+                }
             }
             // don't send anything if min is dominated by previous
             if (allmins[i] > prev_mins_min) {
@@ -178,6 +185,11 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
             while (right_idx > n_left_mins && lr_mins[right_idx].first >= allmins[i]) {
                 --right_idx;
             }
+            if (left_type == furthest_eq) {
+                while (right_idx > n_left_mins && lr_mins[right_idx].first == lr_mins[right_idx-1].first) {
+                    --right_idx;
+                }
+            }
 
             // don't send if the minimum of `i` is dominated by a prev min right of me
             if (prev_mins_min < allmins[i]) {
@@ -198,6 +210,8 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
         }
     }
 
+    mxx::sync_cout(comm) << "send_counts = " << send_counts << std::endl;
+
     // exchange lr_mins via all2all
     std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
     std::vector<size_t> recv_displs = mxx::impl::get_displacements(recv_counts);
@@ -209,6 +223,8 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     size_t n_left_recv = recv_displs[comm.rank()];
     size_t n_right_recv = recv_size - n_left_recv;
 
+    mxx::sync_cout(comm) << "n_left_recv = " << n_left_recv << std::endl;
+
 
     /***************************************************************
      *  Step 3: Again solve ANSV locally and use lr_mins as tails  *
@@ -218,136 +234,195 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     right_nsv.resize(local_size);
 
     q.clear();
-    // iterate backwards to get the nearest smaller element to left for each element
-    // TODO: this doesn't really require pairs in the queue (index suffices)
-    for (size_t i = in.size(); i > 0; --i) {
-        if (indexing_type == global_indexing) {
-            update_nsv_queue<T,left_type>(left_nsv, q, in[i-1], prefix+i-1, prefix);
-            q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
-        } else { // indexing_type == local_indexing
-            // prefix=0 for local indexing
-            update_nsv_queue<T,left_type>(left_nsv, q, in[i-1], i-1, 0);
-            q.push_back(std::pair<T, size_t>(in[i-1], i-1));
-        }
-    }
+    const size_t iprefix = (indexing_type == global_indexing) ? prefix : 0;
 
-    // now go backwards through the right-mins from the previous processors,
-    // in order to resolve all local elements
-    for (size_t i = 0; i < n_left_recv; ++i) {
-        if (q.empty()) {
-            break;
-        }
-        size_t rcv_idx = n_left_recv - i - 1;
+    mxx::sync_cout(comm) << "lrmins=" << lr_mins << std::endl;
+    mxx::sync_cout(comm) << "recved=" << recved << std::endl;
 
-        // set nsv for all larger elements in the queue
-        if (indexing_type == global_indexing) {
-            update_nsv_queue<T,left_type>(left_nsv, q, recved[rcv_idx].first, recved[rcv_idx].second, prefix);
-        } else { // indexing_type == local_indexing
-            // prefix = 0, recv.2nd = local_size+rcv_idx,
-            update_nsv_queue<T,left_type>(left_nsv, q, recved[rcv_idx].first, local_size + rcv_idx, 0);
-        }
-
-        if (left_type == furthest_eq) {
-            if (!q.empty() && recved[rcv_idx].first == q.back().first) {
-                // skip till furthest of an equal range
-                while (rcv_idx != 0 && recved[rcv_idx].first == recved[rcv_idx-1].first) {
-                    i++;
-                    rcv_idx = n_left_recv - i - 1;
-                }
-                // setting this as the furthest_eq for all equal elements in the queue
-                // and removing all equal elements from the queue
-                while (!q.empty() && q.back().first == recved[rcv_idx].first) {
-                    if (indexing_type == global_indexing) {
-                        left_nsv[q.back().second - prefix] = recved[rcv_idx].second;
-                    } else { // indexing_type == local_indexing
-                        left_nsv[q.back().second] = local_size + rcv_idx;
-                    }
-                    q.pop_back();
+    if (left_type == furthest_eq) {
+        // iterate forwards through the received elements to fill the queue
+        for (size_t i = 0; i < n_left_recv; ++i) {
+            //size_t rcv_idx = n_left_recv - i - 1;
+            size_t rcv_idx = i;
+            while (!q.empty() && recved[rcv_idx].first < q.back().first) {
+                std::cout << "NOT" << std::endl;
+                q.pop_back();
+            }
+            if (q.empty() || recved[rcv_idx].first > q.back().first) {
+                // push only if this element is larger (not equal)
+                if (indexing_type == global_indexing) {
+                    q.push_back(recved[rcv_idx]);
+                } else {
+                    q.push_back(std::pair<T, size_t>(recved[rcv_idx].first, local_size + rcv_idx));
                 }
             }
         }
-    }
+        mxx::sync_cout(comm) << "queue = " << q << std::endl;
 
-    // elements still in the queue do not have a smaller value to the left
-    //  -> set these to a special value and handle case if furthest_eq
-    //     elements are still waiting in queue
-    const size_t iprefix = (indexing_type == global_indexing) ? prefix : 0;
-    for (auto it = q.rbegin(); it != q.rend(); ++it) {
-        if (left_type == furthest_eq) {
-                auto it2 = it;
-                // set left most as furthest_eq for all equal elements
-                while(it2+1 != q.rend() && it->first == (it2+1)->first) {
-                    ++it2;
-                    left_nsv[it2->second - iprefix] = it->second;
+        // iterate forward through the local items and set their nsv
+        // to the first equal or smaller element in the queue
+        for (size_t i = 0; i < in.size(); ++i) {
+            while (!q.empty() && in[i] < q.back().first) {
+                q.pop_back();
+            }
+            if (q.empty()) {
+                left_nsv[i] = nonsv;
+            } else {
+                left_nsv[i] = q.back().second;
+            }
+            if (q.empty() || in[i] > q.back().first) {
+                q.push_back(std::pair<T, size_t>(in[i], iprefix+i));
+            }
+        }
+    } else {
+
+        // iterate backwards to get the nearest smaller element to left for each element
+        for (size_t i = in.size(); i > 0; --i) {
+            if (indexing_type == global_indexing) {
+                update_nsv_queue<T,left_type>(left_nsv, q, in[i-1], prefix+i-1, prefix);
+                q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
+            } else { // indexing_type == local_indexing
+                // prefix=0 for local indexing
+                update_nsv_queue<T,left_type>(left_nsv, q, in[i-1], i-1, 0);
+                q.push_back(std::pair<T, size_t>(in[i-1], i-1));
+            }
+        }
+
+        // now go backwards through the right-mins from the previous processors,
+        // in order to resolve all local elements
+        for (size_t i = 0; i < n_left_recv; ++i) {
+            if (q.empty()) {
+                break;
+            }
+            size_t rcv_idx = n_left_recv - i - 1;
+
+            // set nsv for all larger elements in the queue
+            if (indexing_type == global_indexing) {
+                update_nsv_queue<T,left_type>(left_nsv, q, recved[rcv_idx].first, recved[rcv_idx].second, prefix);
+            } else { // indexing_type == local_indexing
+                // prefix = 0, recv.2nd = local_size+rcv_idx,
+                update_nsv_queue<T,left_type>(left_nsv, q, recved[rcv_idx].first, local_size + rcv_idx, 0);
+            }
+
+            /*
+            if (left_type == furthest_eq) {
+                if (!q.empty() && recved[rcv_idx].first == q.back().first) {
+                    // skip till furthest of an equal range
+                    while (rcv_idx != 0 && recved[rcv_idx].first == recved[rcv_idx-1].first) {
+                        i++;
+                        rcv_idx = n_left_recv - i - 1;
+                    }
+                    // setting this as the furthest_eq for all equal elements in the queue
+                    // and removing all equal elements from the queue
+                    while (!q.empty() && q.back().first == recved[rcv_idx].first) {
+                        if (indexing_type == global_indexing) {
+                            left_nsv[q.back().second - prefix] = recved[rcv_idx].second;
+                        } else { // indexing_type == local_indexing
+                            left_nsv[q.back().second] = local_size + rcv_idx;
+                        }
+                        q.pop_back();
+                    }
                 }
-                left_nsv[it->second - iprefix] = nonsv;
-                it = it2;
-        } else {
+            }
+            */
+        }
+
+        // elements still in the queue do not have a smaller value to the left
+        //  -> set these to a special value and handle case if furthest_eq
+        //     elements are still waiting in queue
+        for (auto it = q.rbegin(); it != q.rend(); ++it) {
             left_nsv[it->second - iprefix] = nonsv;
         }
+
     }
 
     // iterate forwards to get the nearest smaller value to the right for each element
     q.clear();
-    for (size_t i = 0; i < in.size(); ++i) {
-        if (indexing_type == global_indexing) {
-            update_nsv_queue<T,right_type>(right_nsv, q, in[i], prefix+i, prefix);
-            q.push_back(std::pair<T, size_t>(in[i], prefix+i));
-        } else { // indexing_type == local_indexing
-            // handle as if prefix = 0
-            update_nsv_queue<T,right_type>(right_nsv, q, in[i], i, 0);
-            q.push_back(std::pair<T, size_t>(in[i], i));
-        }
-    }
 
-    // now go forwards through left-mins of succeeding processors
-    for (size_t i = 0; i < n_right_recv; ++i) {
-        size_t rcv_idx = n_left_recv + i;
-        if (q.empty()) {
-            break;
-        }
-        // set nsv for all larger elements in the queue
-        if (indexing_type == global_indexing) {
-            update_nsv_queue<T,right_type>(right_nsv, q, recved[rcv_idx].first, recved[rcv_idx].second, prefix);
-        } else { // indexing_type == local_indexing
-            update_nsv_queue<T,right_type>(right_nsv, q, recved[rcv_idx].first, local_size+rcv_idx, 0);
-        }
-
-        if (right_type == furthest_eq) {
-            if (!q.empty() && recved[rcv_idx].first == q.back().first) {
-                // skip till furthest of an equal range
-                while (i+1 < n_right_recv  && recved[rcv_idx].first == recved[rcv_idx+1].first) {
-                    i++;
-                    rcv_idx = n_left_recv + i;
-                }
-                // setting this as the furthest_eq for all equal elements in the queue
-                // and removing all equal elements from the queue
-                while (!q.empty() && q.back().first == recved[rcv_idx].first) {
-                    if (indexing_type == global_indexing) {
-                        right_nsv[q.back().second - prefix] = recved[rcv_idx].second;
-                    } else { // indexing_type == local_indexing
-                        right_nsv[q.back().second] = local_size+rcv_idx;
-                    }
-                    q.pop_back();
+    if (right_type == furthest_eq) {
+        // iterate backwards through the received elements to fill the queue
+        for (size_t i = 0; i < n_right_recv; ++i) {
+            //size_t rcv_idx = n_left_recv - i - 1;
+            size_t rcv_idx = recved.size() - i - 1;
+            while (!q.empty() && recved[rcv_idx].first < q.back().first) {
+                std::cout << "NOT" << std::endl;
+                q.pop_back();
+            }
+            if (q.empty() || recved[rcv_idx].first > q.back().first) {
+                // push only if this element is larger (not equal)
+                if (indexing_type == global_indexing) {
+                    q.push_back(recved[rcv_idx]);
+                } else {
+                    q.push_back(std::pair<T, size_t>(recved[rcv_idx].first, local_size + rcv_idx));
                 }
             }
         }
-    }
+        // iterate backwards through the local items and set their nsv
+        // to the first equal or smaller element in the queue
+        for (size_t idx = 0; idx < in.size(); ++idx) {
+            size_t i = in.size() - idx - 1;
+            while (!q.empty() && in[i] < q.back().first) {
+                q.pop_back();
+            }
+            if (q.empty()) {
+                right_nsv[i] = nonsv;
+            } else {
+                right_nsv[i] = q.back().second;
+            }
+            if (q.empty() || in[i] > q.back().first) {
+                q.push_back(std::pair<T, size_t>(in[i], iprefix+i));
+            }
+        }
+    } else {
+        for (size_t i = 0; i < in.size(); ++i) {
+            if (indexing_type == global_indexing) {
+                update_nsv_queue<T,right_type>(right_nsv, q, in[i], prefix+i, prefix);
+                q.push_back(std::pair<T, size_t>(in[i], prefix+i));
+            } else { // indexing_type == local_indexing
+                // handle as if prefix = 0
+                update_nsv_queue<T,right_type>(right_nsv, q, in[i], i, 0);
+                q.push_back(std::pair<T, size_t>(in[i], i));
+            }
+        }
 
-    // elements still in the queue do not have a smaller value to the left
-    // -> set these to a special value and handle case if furthest_eq elements
-    // are still waiting in queue
-    for (auto it = q.rbegin(); it != q.rend(); ++it) {
-        if (right_type == furthest_eq) {
-                auto it2 = it;
-                // set left most as furthest_eq for all equal elements
-                while(it2+1 != q.rend() && it->first == (it2+1)->first) {
-                    ++it2;
-                    right_nsv[it2->second - iprefix] = it->second;
+        // now go forwards through left-mins of succeeding processors
+        for (size_t i = 0; i < n_right_recv; ++i) {
+            size_t rcv_idx = n_left_recv + i;
+            if (q.empty()) {
+                break;
+            }
+            // set nsv for all larger elements in the queue
+            if (indexing_type == global_indexing) {
+                update_nsv_queue<T,right_type>(right_nsv, q, recved[rcv_idx].first, recved[rcv_idx].second, prefix);
+            } else { // indexing_type == local_indexing
+                update_nsv_queue<T,right_type>(right_nsv, q, recved[rcv_idx].first, local_size+rcv_idx, 0);
+            }
+
+            if (right_type == furthest_eq) {
+                if (!q.empty() && recved[rcv_idx].first == q.back().first) {
+                    // skip till furthest of an equal range
+                    while (i+1 < n_right_recv  && recved[rcv_idx].first == recved[rcv_idx+1].first) {
+                        i++;
+                        rcv_idx = n_left_recv + i;
+                    }
+                    // setting this as the furthest_eq for all equal elements in the queue
+                    // and removing all equal elements from the queue
+                    while (!q.empty() && q.back().first == recved[rcv_idx].first) {
+                        if (indexing_type == global_indexing) {
+                            right_nsv[q.back().second - prefix] = recved[rcv_idx].second;
+                        } else { // indexing_type == local_indexing
+                            right_nsv[q.back().second] = local_size+rcv_idx;
+                        }
+                        q.pop_back();
+                    }
                 }
-                right_nsv[it->second - iprefix] = nonsv;
-                it = it2;
-        } else {
+            }
+        }
+
+        // elements still in the queue do not have a smaller value to the left
+        // -> set these to a special value and handle case if furthest_eq elements
+        // are still waiting in queue
+        for (auto it = q.rbegin(); it != q.rend(); ++it) {
             right_nsv[it->second - iprefix] = nonsv;
         }
     }
@@ -362,7 +437,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 }
 
 template <typename InputIterator, typename index_t = std::size_t>
-void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
     // ansv of lcp!
     // TODO: use index_t instead of size_t
     std::vector<size_t> left_nsv;
@@ -372,24 +447,32 @@ void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa,
     const size_t nonsv = std::numeric_limits<size_t>::max();
 
     // ANSV with furthest eq for left and smallest for right
-    ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.LCP, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.local_LCP, left_nsv, right_nsv, lr_mins, comm, nonsv);
 
-    size_t local_size = sa.SA.size();
+    size_t local_size = sa.local_SA.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
     size_t prefix = mxx::exscan(local_size, comm);
-    const size_t sigma = 4; // TODO determine sigma or use local hashing
+
+    //const size_t sigma = 4; // TODO determine sigma or use local hashing
     // at most `n` internal nodes?
     // we represent only internal nodes. if a child pointer points to {total-size + X}, its a leaf
     // leafs are not represented as tree nodes inside the suffix tree structure
     // edges contain starting character? and/or length?
-    std::vector<size_t> tree_nodes(sigma*local_size); // TODO: determine real size
+    //std::vector<size_t> tree_nodes(sigma*local_size); // TODO: determine real size
 
     // each SA[i] lies between two LCP values
     // LCP[i] = lcp(S[SA[i-1]], S[SA[i]])
     // leaf nodes are the suffix array positions. Their parent is the either their left or their right
     // LCP, depending on which one is larger
 
+    std::vector<std::tuple<size_t, size_t, size_t>> parent_reqs;
+    parent_reqs.reserve(2*local_size);
+    // parent request where the character is the last `$`/`0` character
+    // these don't have to be requested, but are locally fulfilled
+    std::vector<std::tuple<size_t, size_t, size_t>> dollar_reqs;
+
     // get the first LCP value of the next processor
-    index_t next_first_lcp = mxx::left_shift(sa.LCP[0], comm);
+    index_t next_first_lcp = mxx::left_shift(sa.local_LCP[0], comm);
     for (size_t i = 0; i < local_size; ++i) {
         // for each suffix array position SA[i], we check the longest-common-prefix
         // with the neighboring suffixes SA[i-1] and SA[i+1]. Whichever one it
@@ -400,56 +483,77 @@ void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa,
         //
         // This means for every `i`, we need argmax_i {LCP[i], LCP[i+1]}, where
         // `i+1` might be on the next processor.
-        // Special cases are for globally the first element and the last element
+        //
+        // If there are multiple leafs > 2 for an internal node, the parent
+        // will be the index of the furthest equal element. We thus need
+        // to use the NSV for determining the left parent.
+        // If the right LCP is larger, then that one is the direct parent,
+        // since there can't be any equal elements to the left (since the
+        // right one was larger).
 
         // parent will be an index into LCP
         size_t parent = std::numeric_limits<size_t>::max();
-        // distinguish certain special cases (SA[0], SA[global_last], and last on processor)
+        index_t lcp_val;
+
+        // the globally first element has parent 1
         if (comm.rank() == 0 && i == 0) {
             // globally first leaf: SA[0]
             // -> parent = 1, since it is the common prefix between SA[0] and SA[1]
             parent = 1;
-        } else if (comm.rank() == comm.size()-1 && i == local_size-1) {
-            // globally last leaf: SA[global_size-1]
-            // -> parent = global-size-1, since it is the common prefix between
-            //                            this and the previous leaf
-            // TODO: furthest-equal for last LCP instead
-            parent = global_size - 1;
-        } else if (i == local_size-1) {
-            // use max of `next_first_lcp` and local LCP[local_size-1] to determine parent
-            // for SA[i]
-            if (sa.LCP[local_size-1] >= next_first_lcp) {
-                // TODO: use left furthest eq of LCP[local_size-1] as the definite parent
-            } else {
-                // left LCP is smaller -> right LCP is parent (which in this case is the next processor)
-                parent = prefix + local_size;
-            }
+            lcp_val = sa.local_LCP[1]; // FIXME: this assumes local_size >= 2
         } else {
-            if (sa.LCP[i] >= sa.LCP[i+1]) {
-                // use left furthest equal of [i] as the parent
-                // TODO
+            // To determine whether the left or right LCP is the parent,
+            // we take the max of LCP[i]=lcp(SA[i-1],SA[i]) and LCP[i+1]=lcp(SA[i], SA[i+1])
+            // There are two special cases to handle:
+            // 1) locally last element: we need to use the first LCP value of the next processor
+            //    in place of LCP[i+1]
+            // 2) globally last element: parent is always the left furthest eq nsv
+            if ((i == local_size-1
+                 && (comm.rank() == comm.size() || sa.local_LCP[local_size-1] >= next_first_lcp))
+                || sa.local_LCP[i] >= sa.local_LCP[i+1]) {
+                // the parent is the left furthest eq or nearest sm
+                size_t nsv;
+                if (left_nsv[i] < local_size) {
+                    nsv = prefix + left_nsv[i];
+                    lcp_val = sa.local_LCP[left_nsv[i]];
+                } else {
+                    nsv = lr_mins[left_nsv[i] - local_size].second;
+                    lcp_val = lr_mins[left_nsv[i] - local_size].first;
+                }
+                parent = nsv;
             } else {
                 // SA[i] shares a longer prefix with its right neighbor SA[i+1]
                 // they converge at internal node prefix+i+1
                 parent = prefix + i + 1;
+                if (i == local_size - 1)
+                    lcp_val = next_first_lcp;
+                else
+                    lcp_val = sa.local_LCP[i+1];
             }
+        }
+        if (sa.local_SA[i] + lcp_val >= global_size) {
+            MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
+            dollar_reqs.emplace_back(parent, global_size + prefix + i, 0);
+        } else {
+            parent_reqs.emplace_back(parent, global_size + i + prefix, sa.local_SA[i] + lcp_val);
         }
 
         // TODO: save parent or set pointer FROM parent: tree_nodes[parent] = prefix+i
         // if parent not local: send?
         //
     }
-    // TODO: probably best to send a character S[SA[i]+maxLCP[i]] along for edge labeling
 
     // get parents of internal nodes (via LCP)
     for (size_t i = 0; i < local_size; ++i) {
         size_t parent = std::numeric_limits<size_t>::max();
+        index_t lcp_val;
         // for each LCP position, get ANSV left-furthest-eq and right-nearest-sm
         // and the max of the two is the parent
         // Special cases: first (LCP[0]) and globally last LCP
         if (comm.rank() == 0 && i == 0) {
             // globally first position in LCP
             parent = 0; // TODO: this is the root, no parent!
+            continue;
 
         //} else if (comm.rank() == comm.size() - 1 && i == local_size - 1) {
             // globally last element (no right ansv)
@@ -457,18 +561,18 @@ void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa,
             // most element, right_nsv[i] will be == nonsv
             // and as such is handled in the corresponding case below
         } else {
-            if (sa.LCP[i] == 0) {
+            if (sa.local_LCP[i] == 0) {
                 parent = 0; // root is parent if LCP is 0
+                lcp_val = 0;
             } else {
                 // left NSV can't be non-existant because LCP[0] = 0
                 assert(left_nsv[i] != nonsv);
                 if (right_nsv[i] == nonsv) {
                     // use left one
                     size_t nsv;
-                    index_t lcp_val;
                     if (left_nsv[i] < local_size) {
                         nsv = prefix + left_nsv[i];
-                        lcp_val = sa.LCP[left_nsv[i]];
+                        lcp_val = sa.local_LCP[left_nsv[i]];
                     } else {
                         nsv = lr_mins[left_nsv[i] - local_size].second;
                         lcp_val = lr_mins[left_nsv[i] - local_size].first;
@@ -480,7 +584,7 @@ void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa,
                     index_t left_lcp_val;
                     if (left_nsv[i] < local_size) {
                         lnsv = prefix + left_nsv[i];
-                        left_lcp_val = sa.LCP[left_nsv[i]];
+                        left_lcp_val = sa.local_LCP[left_nsv[i]];
                     } else {
                         lnsv = lr_mins[left_nsv[i] - local_size].second;
                         left_lcp_val = lr_mins[left_nsv[i] - local_size].first;
@@ -490,7 +594,7 @@ void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa,
                     index_t right_lcp_val;
                     if (right_nsv[i] < local_size) {
                         rnsv = prefix + right_nsv[i];
-                        right_lcp_val = sa.LCP[right_nsv[i]];
+                        right_lcp_val = sa.local_LCP[right_nsv[i]];
                     } else {
                         rnsv = lr_mins[right_nsv[i] - local_size].second;
                         right_lcp_val = lr_mins[right_nsv[i] - local_size].first;
@@ -499,61 +603,125 @@ void construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa,
                     // if same, use left furthest_eq
                     if (left_lcp_val >= right_lcp_val) {
                         parent = lnsv;
+                        lcp_val = left_lcp_val;
                     } else {
                         parent = rnsv;
+                        lcp_val = right_lcp_val;
                     }
                 }
             }
         }
+        if (sa.local_SA[i] + lcp_val >= global_size) {
+            MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
+            dollar_reqs.emplace_back(parent, prefix + i, 0);
+        } else {
+            parent_reqs.emplace_back(parent, i + prefix, sa.local_SA[i] + lcp_val);
+        }
+    }
+    
+    mxx::sync_cout(comm) << "Parent Reqs: " << parent_reqs << std::endl;
+
+    // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
+    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));});
+
+    // replace string request with character from original string
+    for (size_t i = 0; i < parent_reqs.size(); ++i) {
+        size_t offset = std::get<2>(parent_reqs[i]);
+        if (offset == global_size) {
+            // return `0` character
+            // TODO: these cases do not have to be send to the last processor, but can simply be send to the `parent` destination
+            // TODO: "often?" the parent might be local, so sending everything twice seems wasteful...
+            // TODO: send to destination and there read character via MPI_Win based RMA?
+            std::get<2>(parent_reqs[i]) = 0;
+        } else {
+            // get character from that global string position
+            std::get<2>(parent_reqs[i]) = static_cast<size_t>(*(sa.input_begin+(std::get<2>(parent_reqs[i])-prefix)));
+        }
+    }
+    // append the "dollar" requests
+    parent_reqs.insert(parent_reqs.end(), dollar_reqs.begin(), dollar_reqs.end());
+    dollar_reqs.clear(); dollar_reqs.shrink_to_fit();
+
+    // 2) send tuples (parent, i, S[SA[i]+LCP[i]) to 1st index) [to parent]
+    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));});
+
+    mxx::sync_cout(comm) << "Received reqs: " << parent_reqs << std::endl;
+
+    // TODO: (alternatives for full lookup table in each node:)
+    // local hashing key=(node-idx, char), value=(child idx)
+    //            or multimap key=(node-idx), value=(char, child idx)
+    //            2nd enables iteration over children, but not direct lookup
+    //            of specific child
+    //            2nd no different than fixed std::vector<std::list>
+
+    // one internal node for each LCP entry, each internal node is sigma cells
+    std::vector<size_t> internal_nodes((sa.sigma+1)*local_size);
+    for (size_t i = 0; i < parent_reqs.size(); ++i) {
+        size_t parent = std::get<0>(parent_reqs[i]);
+        size_t node_idx = (parent - prefix)*(sa.sigma+1);
+        uint16_t c = sa.alphabet_mapping[std::get<2>(parent_reqs[i])];
+        MXX_ASSERT(0 <= c && c < sa.sigma+1);
+        size_t cell_idx = node_idx + c;
+        internal_nodes[cell_idx] = std::get<1>(parent_reqs[i]);
     }
 
-    // each leaf node (SA position) determines its parent via max of two ajacent LCP values
-    // each internal node (LCP position) determiens its parent via ANSV
-    // each node "hangs" itself underneath its parent node
-    // what's the likelyhood of the parent node to be on another processor??
-    // since both the LCP and SA are equally distributed, and the ANSV likely to be close by
-    // its likely they are "close" as well
-    // ?? communication is basically similar the ANSV communication?
-    // at most n/p on each processor anyway (can't be parent to more than sigma * n/p)
-    // even the "heavy" (low LCP) nodes are distributed equally?
-
-
-
     // TODO:
-    // - get max of ansvs as the `parent` node (requires lr_mins for non local values)
     // - get character for internal nodes (first character of suffix starting at
     //   the node S[SA[i]+LCP[i]]) [i.e. requesting a full permutation] needed for
     //   all edges, i.e. up to 2n-1 (SA and LCP aligned)
+    //
+    // TODO:
+    // need character S[SA[i]+maxLCP[i]] for each edge (leaf + internal node)
+    // maxLCP is equal to LCP[parent]
+    // but `parent` might not be local
+    // -> can also be retrieved at `parent` when sending edges
+    // SA[i] is local, we can send that, along with `i` since edge is (parent,i)
+    // so at least needs sending (parent, i, SA[i])
+    // OR: (parent, i, c) if `c` is retrieved before sending edges to `parent`
+    // clue: we are sending exactly as many edge elements as in ANSV
+    // whereas requesting `c` is full all2all_msgs/queries/RMA?
+    //
+
+
+    // TODO: probably best to send a character S[SA[i]+maxLCP[i]] along for edge labeling
+    // each internal node: at LCP index, LCP gives string depth already
+    //                     children edges: either by fixed size sigma*n lookup table
+    //                     or by hashtable (lcp-index, character)->child-index
+    //                     The LCP indeces are predictable [n/p*rank,n/p*(rank+1))
+    //                     -> be careful with hash function!
+
+    return internal_nodes;
 }
 
+
+/**
+ * @brief   Solves the ANSV problem sequentially in one direction.
+ *
+ * @tparam T    Type of input elements.
+ * @param in    Vector of input elemens
+ * @param left  Whether to find left or right smaller value. `True` denotes
+ *              left, and `False` denotes finding the smaller value to the right.
+ *
+ * @return      The nearest smaler value for each element in `in` to the direction
+ *              given by `left`.
+ */
 template <typename T>
-void ansv_sequential(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv) {
-    // resize outputs
-    left_nsv.resize(in.size());
-    right_nsv.resize(in.size());
+std::vector<size_t> ansv_sequential(const std::vector<T>& in, bool left) {
+    std::vector<size_t> nsv(in.size());
 
     std::deque<size_t> q;
-    // iterate backwards to get the nearest smaller element to left for each element
-    for (size_t i = in.size(); i > 0; --i) {
-        while (!q.empty() && in[i-1] < in[q.back()]) {
-            // current element is the min for in[i-1]
-            left_nsv[q.back()] = i-1;
-            q.pop_back();
-        }
-        // TODO: potentially handle `equal` elements differently
-        q.push_back(i-1);
-    }
-    // iterate forwards to get the nearest smaller value to the right for each element
-    q.clear();
     for (size_t i = 0; i < in.size(); ++i) {
-        while (!q.empty() && in[i] < in[q.back()]) {
+        size_t idx = left ? in.size() - 1 - i : i;
+        while (!q.empty() && in[idx] < in[q.back()]) {
             // current element is the min for in[i-1]
-            right_nsv[q.back()] = i;
+            nsv[q.back()] = idx;
             q.pop_back();
         }
         // TODO: potentially handle `equal` elements differently
-        q.push_back(i);
+        q.push_back(idx);
     }
+    return nsv;
 }
 
 #endif // ANSV_HPP
