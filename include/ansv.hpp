@@ -401,6 +401,12 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
 template <typename InputIterator, typename index_t = std::size_t>
 std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+    // get input sizes
+    size_t local_size = sa.local_SA.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
+    size_t prefix = mxx::exscan(local_size, comm);
+    // assert n >= p, or rather at least one element per process
+    MXX_ASSERT(mxx::all_of(local_size >= 1, comm));
     // ansv of lcp!
     // TODO: use index_t instead of size_t
     std::vector<size_t> left_nsv;
@@ -412,9 +418,6 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     // ANSV with furthest eq for left and smallest for right
     ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.local_LCP, left_nsv, right_nsv, lr_mins, comm, nonsv);
 
-    size_t local_size = sa.local_SA.size();
-    size_t global_size = mxx::allreduce(local_size, comm);
-    size_t prefix = mxx::exscan(local_size, comm);
 
     //const size_t sigma = 4; // TODO determine sigma or use local hashing
     // at most `n` internal nodes?
@@ -478,7 +481,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
             // 2) globally last element: parent is always the left furthest eq nsv
             if ((i == local_size-1
                  && (comm.rank() == comm.size() || sa.local_LCP[local_size-1] >= next_first_lcp))
-                || sa.local_LCP[i] >= sa.local_LCP[i+1]) {
+                || (i < local_size-1 && sa.local_LCP[i] >= sa.local_LCP[i+1])) {
                 // the parent is the left furthest eq or nearest sm
                 size_t nsv;
                 if (left_nsv[i] < local_size) {
@@ -494,7 +497,6 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
                     parent = prefix + i;
                     lcp_val = sa.local_LCP[i];
                 }
-
             } else {
                 // SA[i] shares a longer prefix with its right neighbor SA[i+1]
                 // they converge at internal node prefix+i+1
@@ -598,11 +600,9 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         }
     }
 
-    mxx::sync_cout(comm) << "Parent Reqs: " << parent_reqs << std::endl;
-
     // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
     mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
-    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));});
+    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));}, comm);
 
     // replace string request with character from original string
     for (size_t i = 0; i < parent_reqs.size(); ++i) {
@@ -623,9 +623,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     dollar_reqs.clear(); dollar_reqs.shrink_to_fit();
 
     // 2) send tuples (parent, i, S[SA[i]+LCP[i]) to 1st index) [to parent]
-    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));});
-
-    mxx::sync_cout(comm) << "Received reqs: " << parent_reqs << std::endl;
+    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
 
     // TODO: (alternatives for full lookup table in each node:)
     // local hashing key=(node-idx, char), value=(child idx)
