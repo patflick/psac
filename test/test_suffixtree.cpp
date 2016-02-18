@@ -19,6 +19,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <check_suffix_tree.hpp>
 #include <cxx-prettyprint/prettyprint.hpp>
 #include <ansv.hpp>
 #include <suffix_array.hpp>
@@ -28,97 +29,6 @@
 #include <vector>
 #include <algorithm>
 
-
-
-void check_suffix_tree(const std::string& s, const std::vector<size_t>& sa, const std::vector<size_t>& lcp, const std::vector<size_t>& nodes) {
-    // recreate alphabet mapping
-    std::vector<size_t> hist = get_histogram<size_t>(s.begin(), s.end(), 256);
-    std::vector<uint16_t> alphabet_map = alphabet_mapping_tbl(hist);
-    unsigned int sigma = alphabet_unique_chars(hist);
-
-
-    ASSERT_EQ((sigma+1)*s.size(), nodes.size());
-
-    rmq<typename std::vector<size_t>::const_iterator> minquery(lcp.cbegin(), lcp.cend());
-
-    std::vector<bool> leafs_visited(s.size(), false);
-    std::vector<bool> edges_visited(nodes.size(), false);
-
-    size_t none = 0; // TODO: modify suffix tree construction to have special `none` value
-    std::deque<std::tuple<size_t, size_t, size_t, size_t>> q;
-    q.emplace_back(1, s.size(), 0, 0);
-
-    while (!q.empty()) {
-        size_t range_left;
-        size_t range_right;
-        size_t prev_min;
-        size_t prev_pos;
-        std::tie(range_left, range_right, prev_min, prev_pos) = q.back();
-        q.pop_back();
-
-        if (range_left == range_right) {
-            // leaf node with parent `prev_pos` with lcp `prev_min`
-            // TODO: get character at SA[i]+LCP[i]
-            size_t i = range_left-1;
-            size_t c;
-            if (sa[i] + prev_min == s.size()) {
-                c = 0;
-            } else {
-                ASSERT_GT(s.size(), sa[i] + prev_min);
-                c = alphabet_map[s[sa[i]+prev_min]];
-            }
-            size_t node_offset = (sigma+1)*prev_pos;
-            leafs_visited[i] = true;
-            edges_visited[node_offset+c] = true;
-            ASSERT_EQ(i+s.size(), nodes[node_offset+c]) << "range=" << range_left << " for node_offset=" << node_offset << ", c=" << c;
-        } else {
-            ASSERT_LT(range_left, range_right);
-
-            auto min_pos = minquery.query(lcp.cbegin()+range_left, lcp.cbegin()+range_right);
-            size_t m = *min_pos;
-
-            if (m == prev_min) {
-                // further subdivision of current node into subranges
-                size_t split = min_pos - lcp.cbegin();
-                // recursion (push right before left segment: left-first-dfs)
-                q.emplace_back(split + 1, range_right, prev_min, prev_pos);
-                q.emplace_back(range_left, split, prev_min, prev_pos);
-            } else {
-                ASSERT_LT(prev_min, m);
-                // we've found a new internal node
-                // RMQ always returns the left most minimum element
-                // -> this is the index of the internal node in `nodes`
-                size_t split = min_pos - lcp.cbegin();
-                q.emplace_back(split + 1, range_right, m, split);
-                q.emplace_back(range_left, split, m, split);
-
-                size_t c;
-                size_t i = split;
-                //std::cout << "sa[i]= " << sa[i] << ", m=" << m << std::endl;
-                if (sa[i] + prev_min == s.size()) {
-                    c = 0;
-                } else {
-                    ASSERT_GT(s.size(), sa[i] + prev_min);
-                    c = alphabet_map[s[sa[i] + prev_min]];
-                }
-                size_t node_offset = (sigma+1)*prev_pos;
-                edges_visited[node_offset+c] = true;
-                ASSERT_EQ(split, nodes[node_offset+c]) << "range: " << range_left << "," << split << "," << range_right;
-            }
-        }
-    }
-
-    // verify that all leafs have been visited
-    for (bool b : leafs_visited) {
-        ASSERT_TRUE(b);
-    }
-    // verify that all edges have been visited
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        if (nodes[i] != none) {
-            ASSERT_TRUE(edges_visited[i]);
-        }
-    }
-}
 
 TEST(PsacST, SimpleSuffixTree) {
     mxx::comm comm;
@@ -149,7 +59,8 @@ TEST(PsacST, SimpleSuffixTree) {
             std::cout << "LCP: " << lcp << std::endl;
             std::cout << "ST nodes: " << nodes << std::endl;
 
-            check_suffix_tree(str, sar, lcp, nodes);
+            bool success;
+            check_suffix_tree(str, sar, lcp, nodes, success);
 
             size_t none = 0;
             // the actual solution to the suffix tree:
@@ -199,13 +110,14 @@ TEST(PsacST, RandDNATest) {
         std::vector<size_t> lcp = mxx::gatherv(sa.local_LCP, 0, c);
 
         if (c.rank() == 0) {
-            check_suffix_tree(str, sar, lcp, nodes);
+            bool success;
+            check_suffix_tree(str, sar, lcp, nodes, success);
         }
     }
 }
 
 
-// TEST suffix tree structure for random DNA sequences
+// TEST suffix tree structure for repeats of the form: (abc)^n
 TEST(PsacST, Repeats3Test) {
     mxx::comm c;
     for (size_t n : {25, 97, 151, 14681}) {
@@ -227,14 +139,14 @@ TEST(PsacST, Repeats3Test) {
         // build ST
         std::vector<size_t> local_nodes = construct_suffix_tree(sa, c);
 
-
         // gather on master
         std::vector<size_t> nodes = mxx::gatherv(local_nodes, 0, c);
         std::vector<size_t> sar = mxx::gatherv(sa.local_SA, 0, c);
         std::vector<size_t> lcp = mxx::gatherv(sa.local_LCP, 0, c);
 
         if (c.rank() == 0) {
-            check_suffix_tree(str, sar, lcp, nodes);
+            bool success;
+            check_suffix_tree(str, sar, lcp, nodes, success);
         }
     }
 }

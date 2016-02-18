@@ -114,9 +114,11 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     size_t n_right_mins = q.size();
     lr_mins.insert(lr_mins.end(), q.begin(), q.end());
     T local_min = q.front().first;
-    assert(n_right_mins >= 1);
+    MXX_ASSERT(n_right_mins >= 1);
     q.clear();
-    assert(n_right_mins + n_left_mins == lr_mins.size());
+    if (n_right_mins + n_left_mins != lr_mins.size()) {
+        MXX_ASSERT(false);
+    }
 
     /***************************************************************
      *  Step 2: communicate un-matched elements to correct target  *

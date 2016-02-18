@@ -36,6 +36,8 @@
 #include <suffix_array.hpp>
 #include <check_suffix_array.hpp>
 #include <alphabet.hpp>
+#include <ansv.hpp> // TODO: include only suffix tree
+#include <check_suffix_tree.hpp>
 
 // parallel file block decompose
 #include <mxx/env.hpp>
@@ -68,6 +70,8 @@ int main(int argc, char *argv[]) {
     cmd.add(seedArg);
     TCLAP::SwitchArg  lcpArg("l", "lcp", "Construct the LCP alongside the SA.", false);
     cmd.add(lcpArg);
+    TCLAP::SwitchArg  stArg("t", "tree", "Construct the Suffix Tree structute.", false);
+    cmd.add(stArg);
     TCLAP::SwitchArg  checkArg("c", "check", "Check correctness of SA (and LCP).", false);
     cmd.add(checkArg);
     cmd.parse(argc, argv);
@@ -87,27 +91,44 @@ int main(int argc, char *argv[]) {
     // run our distributed suffix array construction
     mxx::timer t;
     double start = t.elapsed();
-    if (lcpArg.getValue()) {
-        // construct with LCP
-        suffix_array<std::string::iterator, index_t, true> sa(local_str.begin(), local_str.end(), MPI_COMM_WORLD);
+    if (stArg.getValue()) {
+        // construct SA+LCP+ST
+        suffix_array<std::string::iterator, size_t, true> sa(local_str.begin(), local_str.end(), comm);
+        sa.construct();
+        double sa_time = t.elapsed() - start;
+        // build ST
+        std::vector<size_t> local_st_nodes = construct_suffix_tree(sa, comm);
+        double st_time = t.elapsed() - sa_time;
+        if (comm.rank() == 0) {
+            std::cerr << "SA time: " << sa_time << " ms" << std::endl;
+            std::cerr << "ST time: " << st_time << " ms" << std::endl;
+            std::cerr << "Total  : " << sa_time+st_time << " ms" << std::endl;
+        }
+        if (checkArg.getValue())  {
+            gl_check_suffix_tree(local_str, sa, local_st_nodes, comm);
+        }
+
+    } else if (lcpArg.getValue()) {
+        // construct SA+LCP
+        suffix_array<std::string::iterator, index_t, true> sa(local_str.begin(), local_str.end(), comm);
         // TODO choose construction method
         sa.construct(true);
         double end = t.elapsed() - start;
         if (comm.rank() == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
-            gl_check_correct(sa, local_str.begin(), local_str.end(), MPI_COMM_WORLD);
+            gl_check_correct(sa, local_str.begin(), local_str.end(), comm);
         }
     } else {
-        // construct without LCP
-        suffix_array<std::string::iterator, index_t, false> sa(local_str.begin(), local_str.end(), MPI_COMM_WORLD);
+        // construct SA
+        suffix_array<std::string::iterator, index_t, false> sa(local_str.begin(), local_str.end(), comm);
         // TODO choose construction method
         sa.construct_arr<2>(true);
         double end = t.elapsed() - start;
         if (comm.rank() == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
-            gl_check_correct(sa, local_str.begin(), local_str.end(), MPI_COMM_WORLD);
+            gl_check_correct(sa, local_str.begin(), local_str.end(), comm);
         }
     }
 
