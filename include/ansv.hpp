@@ -66,6 +66,9 @@ inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,si
 // TODO: more compact via index_t template instead of size_t
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm, int indexing_type = global_indexing>
 void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
+    
+    mxx::section_timer t;
+
     std::deque<std::pair<T,size_t> > q;
     size_t local_size = in.size();
     size_t prefix = mxx::exscan(local_size, comm);
@@ -119,6 +122,8 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     if (n_right_mins + n_left_mins != lr_mins.size()) {
         MXX_ASSERT(false);
     }
+
+    t.end_section("ANSV: local ansv");
 
     /***************************************************************
      *  Step 2: communicate un-matched elements to correct target  *
@@ -212,7 +217,10 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     std::vector<size_t> recv_displs = mxx::impl::get_displacements(recv_counts);
     size_t recv_size = recv_counts.back() + recv_displs.back();
     std::vector<std::pair<T, size_t>> recved(recv_size);
+
+    t.end_section("ANSV: calc comm params");
     mxx::all2allv(&lr_mins[0], send_counts, send_displs, &recved[0], recv_counts, recv_displs, comm);
+    t.end_section("ANSV: all2all");
 
     // solve locally given the exchanged values (by prefilling min-queue before running locally)
     size_t n_left_recv = recv_displs[comm.rank()];
@@ -362,26 +370,6 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
             } else { // indexing_type == local_indexing
                 update_nsv_queue<T,right_type>(right_nsv, q, recved[rcv_idx].first, local_size+rcv_idx, 0);
             }
-
-            if (right_type == furthest_eq) {
-                if (!q.empty() && recved[rcv_idx].first == q.back().first) {
-                    // skip till furthest of an equal range
-                    while (i+1 < n_right_recv  && recved[rcv_idx].first == recved[rcv_idx+1].first) {
-                        i++;
-                        rcv_idx = n_left_recv + i;
-                    }
-                    // setting this as the furthest_eq for all equal elements in the queue
-                    // and removing all equal elements from the queue
-                    while (!q.empty() && q.back().first == recved[rcv_idx].first) {
-                        if (indexing_type == global_indexing) {
-                            right_nsv[q.back().second - prefix] = recved[rcv_idx].second;
-                        } else { // indexing_type == local_indexing
-                            right_nsv[q.back().second] = local_size+rcv_idx;
-                        }
-                        q.pop_back();
-                    }
-                }
-            }
         }
 
         // elements still in the queue do not have a smaller value to the left
@@ -393,6 +381,8 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     }
 
     lr_mins = recved;
+
+    t.end_section("ANSV: finish ansv local");
 }
 
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
@@ -403,6 +393,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
 template <typename InputIterator, typename index_t = std::size_t>
 std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+    mxx::section_timer t;
     // get input sizes
     size_t local_size = sa.local_SA.size();
     size_t global_size = mxx::allreduce(local_size, comm);
@@ -416,10 +407,12 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     std::vector<std::pair<index_t, size_t>> lr_mins;
 
     const size_t nonsv = std::numeric_limits<size_t>::max();
+    t.end_section("pre ansv");
 
     // ANSV with furthest eq for left and smallest for right
     ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.local_LCP, left_nsv, right_nsv, lr_mins, comm, nonsv);
 
+    t.end_section("ansv");
 
     //const size_t sigma = 4; // TODO determine sigma or use local hashing
     // at most `n` internal nodes?
@@ -602,9 +595,13 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         }
     }
 
+    t.end_section("locally calc parents");
+
     // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
     mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
     mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));}, comm);
+
+    t.end_section("all2all_func: req characters");
 
     // replace string request with character from original string
     for (size_t i = 0; i < parent_reqs.size(); ++i) {
@@ -624,8 +621,12 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     parent_reqs.insert(parent_reqs.end(), dollar_reqs.begin(), dollar_reqs.end());
     dollar_reqs.clear(); dollar_reqs.shrink_to_fit();
 
+    t.end_section("locally answer char queries");
+
     // 2) send tuples (parent, i, S[SA[i]+LCP[i]) to 1st index) [to parent]
     mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
+
+    t.end_section("all2all_func: send to parent");
 
     // TODO: (alternatives for full lookup table in each node:)
     // local hashing key=(node-idx, char), value=(child idx)
@@ -644,6 +645,8 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         size_t cell_idx = node_idx + c;
         internal_nodes[cell_idx] = std::get<1>(parent_reqs[i]);
     }
+
+    t.end_section("locally: create internal nodes");
 
     // TODO:
     // - get character for internal nodes (first character of suffix starting at
