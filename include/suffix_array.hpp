@@ -261,6 +261,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
             local_B_SA = local_B; // copy
             reorder_sa_to_isa(cpy_SA);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
+            SAC_TIMER_END_SECTION("sac-iteration");
             break;
         } else if ((shift_by << 1) >= n || unfinished_buckets == 0) {
             // if last iteration, use copy of local_SA for reorder and keep
