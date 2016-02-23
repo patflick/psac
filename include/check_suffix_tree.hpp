@@ -28,7 +28,7 @@
 
 // if this is not included as part of google test, define our own assert functions!
 #ifndef GTEST_INCLUDE_GTEST_GTEST_H_
-#define ASSERT_TRUE(x) {if (!(x)) { std::cerr << "[ERROR]: Assertion failed in " __FILE__ ":" << __LINE__ << std::endl;return;}}
+#define ASSERT_TRUE(x) {if (!(x)) { std::cerr << "[ERROR]: Assertion failed in " __FILE__ ":" << __LINE__ << std::endl;return;}} std::cerr << ""
 #define ASSERT_EQ(x, y) ASSERT_TRUE((x) == (y))
 #define ASSERT_GT(x, y) ASSERT_TRUE((x) > (y))
 #define ASSERT_LT(x, y) ASSERT_TRUE((x) < (y))
@@ -112,7 +112,7 @@ void check_suffix_tree(const std::string& s, const std::vector<size_t>& sa, cons
                 }
                 size_t node_offset = (sigma+1)*prev_pos;
                 edges_visited[node_offset+c] = true;
-                ASSERT_EQ(split, nodes[node_offset+c]);
+                ASSERT_EQ(split, nodes[node_offset+c]) << "node_offset=" << node_offset << ", c=" << c;
             }
         }
     }

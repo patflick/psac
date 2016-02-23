@@ -19,6 +19,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <check_suffix_array.hpp>
 #include <check_suffix_tree.hpp>
 #include <cxx-prettyprint/prettyprint.hpp>
 #include <ansv.hpp>
@@ -86,13 +87,17 @@ TEST(PsacST, SimpleSuffixTree) {
 
 // TEST suffix tree structure for random DNA sequences
 TEST(PsacST, RandDNATest) {
-    mxx::comm c;
     
-   for (size_t n : {116, 1000, 23713, 177861}) {
+    for (size_t n : {116, 1000, 23713, 177861}) {
    //size_t n = 1000;
+        mxx::comm comm;
+        comm.barrier();
+        mxx::comm c = comm.split((size_t)comm.rank() < n);
+        if ((size_t)comm.rank() >= n)
+           continue;
         std::string str;
         if (c.rank() == 0) {
-            str = rand_dna(n, 13);
+           str = rand_dna(n, 13);
         }
         std::string local_str = mxx::stable_distribute(str, c);
 
@@ -110,8 +115,8 @@ TEST(PsacST, RandDNATest) {
         std::vector<size_t> lcp = mxx::gatherv(sa.local_LCP, 0, c);
 
         if (c.rank() == 0) {
-            bool success;
-            check_suffix_tree(str, sar, lcp, nodes, success);
+           bool success;
+           check_suffix_tree(str, sar, lcp, nodes, success);
         }
     }
 }
@@ -119,9 +124,13 @@ TEST(PsacST, RandDNATest) {
 
 // TEST suffix tree structure for repeats of the form: (abc)^n
 TEST(PsacST, Repeats3Test) {
-    mxx::comm c;
-    for (size_t n : {25, 97, 151, 14681}) {
+    for (size_t n : {3, 25, 97, 151, 14681}) {
 //    size_t n = 97;
+        mxx::comm comm;
+        comm.barrier();
+        mxx::comm c = comm.split((size_t)comm.rank() < n);
+        if ((size_t)comm.rank() >= n)
+           continue;
         std::string str;
         if (c.rank() == 0) {
             str.resize(n);
@@ -135,6 +144,7 @@ TEST(PsacST, Repeats3Test) {
         // build SA and LCP
         suffix_array<std::string::iterator, size_t, true> sa(local_str.begin(), local_str.end(), c);
         sa.construct();
+        gl_check_correct(sa, sa.input_begin, sa.input_end, c);
 
         // build ST
         std::vector<size_t> local_nodes = construct_suffix_tree(sa, c);

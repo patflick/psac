@@ -66,8 +66,7 @@ inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,si
 // TODO: more compact via index_t template instead of size_t
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm, int indexing_type = global_indexing>
 void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
-    
-    mxx::section_timer t;
+    mxx::section_timer t(std::cerr, comm);
 
     std::deque<std::pair<T,size_t> > q;
     size_t local_size = in.size();
@@ -393,7 +392,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
 template <typename InputIterator, typename index_t = std::size_t>
 std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
-    mxx::section_timer t;
+    mxx::section_timer t(std::cerr, comm);
     // get input sizes
     size_t local_size = sa.local_SA.size();
     size_t global_size = mxx::allreduce(local_size, comm);
@@ -411,7 +410,6 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
 
     // ANSV with furthest eq for left and smallest for right
     ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.local_LCP, left_nsv, right_nsv, lr_mins, comm, nonsv);
-
     t.end_section("ansv");
 
     //const size_t sigma = 4; // TODO determine sigma or use local hashing
@@ -459,14 +457,16 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         // the globally first element has parent 1
         if (comm.rank() == 0 && i == 0) {
             // globally first leaf: SA[0]
-            // -> parent = 1, since it is the common prefix between SA[0] and SA[1]
-            parent = 1;
             if (local_size > 1) {
                 lcp_val = sa.local_LCP[1];
             } else {
                 MXX_ASSERT(global_size > 1);
                 lcp_val = next_first_lcp;
             }
+            // -> parent = 1, since it is the common prefix between SA[0] and SA[1]
+            // unless the lcp is 0, then this leaf is connected
+            // directly to the root node (parent = 0)
+            parent = lcp_val > 0 ? 1 : 0;
         } else {
             // To determine whether the left or right LCP is the parent,
             // we take the max of LCP[i]=lcp(SA[i-1],SA[i]) and LCP[i+1]=lcp(SA[i], SA[i+1])
@@ -504,7 +504,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         }
         if (sa.local_SA[i] + lcp_val >= global_size) {
             MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-            dollar_reqs.emplace_back(parent, global_size + prefix + i, global_size);
+            dollar_reqs.emplace_back(parent, global_size + prefix + i, 0);
         } else {
             parent_reqs.emplace_back(parent, global_size + i + prefix, sa.local_SA[i] + lcp_val);
         }
@@ -518,8 +518,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         // and the max of the two is the parent
         // Special cases: first (LCP[0]) and globally last LCP
         if (comm.rank() == 0 && i == 0) {
-            // globally first position in LCP
-            parent = 0; // TODO: this is the root, no parent!
+            // this is the root node and it has no parent!
             continue;
 
         //} else if (comm.rank() == comm.size() - 1 && i == local_size - 1) {
@@ -589,12 +588,11 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         }
         if (sa.local_SA[i] + lcp_val >= global_size) {
             MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-            dollar_reqs.emplace_back(parent, prefix + i, global_size);
+            dollar_reqs.emplace_back(parent, prefix + i, 0);
         } else {
             parent_reqs.emplace_back(parent, i + prefix, sa.local_SA[i] + lcp_val);
         }
     }
-
     t.end_section("locally calc parents");
 
     // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
@@ -609,14 +607,11 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     for (size_t i = 0; i < parent_reqs.size(); ++i) {
         size_t offset = std::get<2>(parent_reqs[i]);
         if (offset == global_size) {
-            // return `0` character
-            // TODO: these cases do not have to be send to the last processor, but can simply be send to the `parent` destination
-            // TODO: "often?" the parent might be local, so sending everything twice seems wasteful...
-            // TODO: send to destination and there read character via MPI_Win based RMA?
+            // the artificial last `$` character is mapped to 0
             std::get<2>(parent_reqs[i]) = 0;
         } else {
             // get character from that global string position
-            std::get<2>(parent_reqs[i]) = static_cast<size_t>(*(sa.input_begin+(std::get<2>(parent_reqs[i])-prefix)));
+            std::get<2>(parent_reqs[i]) = sa.alphabet_mapping[static_cast<size_t>(*(sa.input_begin+(std::get<2>(parent_reqs[i])-prefix)))];
         }
     }
     // append the "dollar" requests
@@ -683,10 +678,10 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         size_t parent = std::get<0>(parent_reqs[i]);
         size_t node_idx = (parent - prefix)*(sa.sigma+1);
 #if !USE_RMA
-        size_t x = std::get<2>(parent_reqs[i]);
-        uint16_t c = (x == global_size) ? 0 : sa.alphabet_mapping[x];
+        uint16_t c = std::get<2>(parent_reqs[i]);
 #else
-        uint16_t c = sa.alphabet_mapping[edge_chars[i]];
+        char x = edge_chars[i];
+        uint16_t c = sa.alphabet_mapping[x];
 #endif
         MXX_ASSERT(0 <= c && c < sa.sigma+1);
         size_t cell_idx = node_idx + c;
