@@ -504,7 +504,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         }
         if (sa.local_SA[i] + lcp_val >= global_size) {
             MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-            dollar_reqs.emplace_back(parent, global_size + prefix + i, 0);
+            dollar_reqs.emplace_back(parent, global_size + prefix + i, global_size);
         } else {
             parent_reqs.emplace_back(parent, global_size + i + prefix, sa.local_SA[i] + lcp_val);
         }
@@ -589,7 +589,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         }
         if (sa.local_SA[i] + lcp_val >= global_size) {
             MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-            dollar_reqs.emplace_back(parent, prefix + i, 0);
+            dollar_reqs.emplace_back(parent, prefix + i, global_size);
         } else {
             parent_reqs.emplace_back(parent, i + prefix, sa.local_SA[i] + lcp_val);
         }
@@ -598,6 +598,8 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     t.end_section("locally calc parents");
 
     // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
+#define SOMETHING 0
+#if SOMETHING
     mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
     mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));}, comm);
 
@@ -625,8 +627,48 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
 
     // 2) send tuples (parent, i, S[SA[i]+LCP[i]) to 1st index) [to parent]
     mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
-
     t.end_section("all2all_func: send to parent");
+#else
+    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    // TODO: filter by local parents (which should be the majority) and use all2all only for non-local parents
+    parent_reqs.insert(parent_reqs.end(), dollar_reqs.begin(), dollar_reqs.end());
+    dollar_reqs.clear(); dollar_reqs.shrink_to_fit();
+    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
+    t.end_section("all2all_func: send to parent");
+
+    // TODO: create MPI_Win for input string, create character array for size of parents
+    //       and use RMA to request (read) all characters which are not `$`
+    MPI_Win win;
+    MPI_Win_create(&(*sa.input_begin), local_size, 1, MPI_INFO_NULL, comm, &win);
+
+    MPI_Win_fence(0, win);
+
+    // read characters here!
+    std::vector<char> edge_chars(parent_reqs.size());
+    for (size_t i = 0; i < parent_reqs.size(); ++i) {
+        size_t offset = std::get<2>(parent_reqs[i]);
+        // read global index offset
+        if (offset == global_size) {
+            // TODO: handle specially?
+            edge_chars[i] = 0;
+        } else {
+            int proc = part.target_processor(offset);
+            size_t proc_offset = offset - part.excl_prefix_size(proc);
+            // request proc_offset from processor `proc` in window win
+            MPI_Get(&edge_chars[i], 1, MPI_CHAR, proc, proc_offset, 1, MPI_CHAR, win);
+        }
+    }
+    // fence to complete all requests
+    //MPI_Win_fence(MPI_MODE_NOSTORE | MPI_MODE_NOPUT | MPI_MODE_NOSUCCEED, win);
+    MPI_Win_fence(0, win);
+
+    // iterate through the received characters and create 
+
+    MPI_Win_free(&win);
+
+    t.end_section("RMA read chars");
+    //mxx::sync_cout(comm) << "reqs: " << parent_reqs << std::endl << "edge_chars:" << edge_chars << std::endl;
+#endif
 
     // TODO: (alternatives for full lookup table in each node:)
     // local hashing key=(node-idx, char), value=(child idx)
@@ -640,7 +682,11 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     for (size_t i = 0; i < parent_reqs.size(); ++i) {
         size_t parent = std::get<0>(parent_reqs[i]);
         size_t node_idx = (parent - prefix)*(sa.sigma+1);
+#if SOMETHING
         uint16_t c = sa.alphabet_mapping[std::get<2>(parent_reqs[i])];
+#else
+        uint16_t c = sa.alphabet_mapping[edge_chars[i]];
+#endif
         MXX_ASSERT(0 <= c && c < sa.sigma+1);
         size_t cell_idx = node_idx + c;
         internal_nodes[cell_idx] = std::get<1>(parent_reqs[i]);
