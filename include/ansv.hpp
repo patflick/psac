@@ -598,8 +598,8 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     t.end_section("locally calc parents");
 
     // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
-#define SOMETHING 0
-#if SOMETHING
+#define USE_RMA 0
+#if !USE_RMA
     mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
     mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));}, comm);
 
@@ -682,8 +682,9 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     for (size_t i = 0; i < parent_reqs.size(); ++i) {
         size_t parent = std::get<0>(parent_reqs[i]);
         size_t node_idx = (parent - prefix)*(sa.sigma+1);
-#if SOMETHING
-        uint16_t c = sa.alphabet_mapping[std::get<2>(parent_reqs[i])];
+#if !USE_RMA
+        size_t x = std::get<2>(parent_reqs[i]);
+        uint16_t c = (x == global_size) ? 0 : sa.alphabet_mapping[x];
 #else
         uint16_t c = sa.alphabet_mapping[edge_chars[i]];
 #endif
