@@ -390,6 +390,79 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     ansv<T, left_type, right_type, global_indexing>(in, left_nsv, right_nsv, lr_mins, comm);
 }
 
+
+template <typename Q, typename Func>
+typename std::result_of<Func(Q)>::type bulk_query(const std::vector<Q>& queries, Func f, const std::vector<size_t>& send_counts, const mxx::comm& comm) {
+    // type of the query results
+    typedef typename std::result_of<Func(Q)>::type T;
+
+    // get receive counts (needed as send counts for returning queries)
+    std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
+
+    // send all queries via all2all
+    std::vector<Q> local_queries = mxx::all2allv(queries, send_counts, recv_counts, comm);
+
+    // locally use query function for querying and save results
+    std::vector<T> local_results(local_queries.size());
+    for (size_t i = 0; i < local_queries.size(); ++i) {
+        local_results[i] = f(local_queries[i]);
+    }
+    // now we can free the memory used for queries
+    local_queries = std::vector<Q>();
+
+    // return all results, send_counts are the same as the recv_counts from the
+    // previous all2all, and the other way around
+    std::vector<T> results = mxx::all2allv(local_results, recv_counts, send_counts, comm);
+    return results;
+}
+
+// global_adrs don't need to be sorted by address, but sorted by target processor
+// TODO; generalize for other types of queries
+// TODO: generalize for where the global addresses/offsets are part of another data structure
+// TODO: have common bucketing function for the pre-bucketing
+template <typename InputIter>
+std::vector<typename std::iterator_traits<InputIter>::value_type>
+bulk_rma(InputIter local_begin, InputIter local_end,
+         const std::vector<size_t>& queries, const std::vector<size_t>& send_counts, const mxx::comm& comm) {
+
+    // get local and global size
+    size_t local_size = std::distance(local_begin, local_end);
+    size_t prefix = mxx::exscan(local_size, comm);
+
+    return bulk_query(queries,
+                      [&local_begin, &prefix](size_t gladr) {
+                            return *(local_begin + (gladr - prefix));
+                      }, send_counts, comm);
+}
+
+
+template <typename InputIter>
+std::vector<typename std::iterator_traits<InputIter>::value_type>
+bulk_rma(InputIter local_begin, InputIter local_end,
+         const std::vector<size_t>& global_indexes, const mxx::comm& comm) {
+    // get local and global size
+    size_t local_size = std::distance(local_begin, local_end);
+    size_t global_size = mxx::allreduce(local_size, comm);
+    // get the block decomposition class and check that input is actuall block
+    // decomposed
+    // TODO: at one point, refactor this crap:
+    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    MXX_ASSERT(part.local_size() == local_size);
+
+    // get send counts by linear scan (TODO: could get for free with the bucketing)
+    // or cheaper with p*log(n)
+    std::vector<size_t> send_counts(comm.size(), 0);
+    int cur_p = 0;
+    for (size_t i = 0; i < local_size; ++i) {
+        int t = part.target_processor(global_indexes[i]);
+        MXX_ASSERT(cur_p <= t);
+        ++send_counts[t];
+        cur_p = t;
+    }
+
+    return bulk_rma(local_begin, local_end, global_indexes, send_counts, comm);
+}
+
 template <typename InputIterator, typename index_t = std::size_t>
 std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
@@ -599,6 +672,8 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
 #define USE_RMA 0
 #if !USE_RMA
     mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    // TODO: since parents are one of the two ansv, we expect the majority of parents
+    // to be local, thus we should not send around these edges via all2all
     mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));}, comm);
 
     t.end_section("all2all_func: req characters");
@@ -631,11 +706,10 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
     t.end_section("all2all_func: send to parent");
 
-    // TODO: create MPI_Win for input string, create character array for size of parents
-    //       and use RMA to request (read) all characters which are not `$`
+    // create MPI_Win for input string, create character array for size of parents
+    // and use RMA to request (read) all characters which are not `$`
     MPI_Win win;
     MPI_Win_create(&(*sa.input_begin), local_size, 1, MPI_INFO_NULL, comm, &win);
-
     MPI_Win_fence(0, win);
 
     // read characters here!
@@ -656,13 +730,9 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     // fence to complete all requests
     //MPI_Win_fence(MPI_MODE_NOSTORE | MPI_MODE_NOPUT | MPI_MODE_NOSUCCEED, win);
     MPI_Win_fence(0, win);
-
-    // iterate through the received characters and create 
-
     MPI_Win_free(&win);
 
     t.end_section("RMA read chars");
-    //mxx::sync_cout(comm) << "reqs: " << parent_reqs << std::endl << "edge_chars:" << edge_chars << std::endl;
 #endif
 
     // TODO: (alternatives for full lookup table in each node:)
