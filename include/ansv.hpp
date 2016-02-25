@@ -396,12 +396,15 @@ template <typename Q, typename Func>
 std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector<Q>& queries, Func f, const std::vector<size_t>& send_counts, const mxx::comm& comm) {
     // type of the query results
     typedef typename std::result_of<Func(Q)>::type T;
+    mxx::section_timer t(std::cerr, comm);
 
     // get receive counts (needed as send counts for returning queries)
     std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
+    t.end_section("bulk_query: get recv_counts");
 
     // send all queries via all2all
     std::vector<Q> local_queries = mxx::all2allv(queries, send_counts, recv_counts, comm);
+    t.end_section("bulk_query: all2all queries");
 
     // locally use query function for querying and save results
     std::vector<T> local_results(local_queries.size());
@@ -410,10 +413,12 @@ std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector
     }
     // now we can free the memory used for queries
     local_queries = std::vector<Q>();
+    t.end_section("bulk_query: local query");
 
     // return all results, send_counts are the same as the recv_counts from the
     // previous all2all, and the other way around
     std::vector<T> results = mxx::all2allv(local_results, recv_counts, send_counts, comm);
+    t.end_section("bulk_query: all2all query results");
     return results;
 }
 
