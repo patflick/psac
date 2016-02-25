@@ -22,6 +22,7 @@
 #include <cxx-prettyprint/prettyprint.hpp>
 
 #include <mxx/comm.hpp>
+#include <mxx/algos.hpp>
 #include <suffix_array.hpp>
 
 constexpr int nearest_sm = 0;
@@ -392,7 +393,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
 
 
 template <typename Q, typename Func>
-typename std::result_of<Func(Q)>::type bulk_query(const std::vector<Q>& queries, Func f, const std::vector<size_t>& send_counts, const mxx::comm& comm) {
+std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector<Q>& queries, Func f, const std::vector<size_t>& send_counts, const mxx::comm& comm) {
     // type of the query results
     typedef typename std::result_of<Func(Q)>::type T;
 
@@ -417,9 +418,7 @@ typename std::result_of<Func(Q)>::type bulk_query(const std::vector<Q>& queries,
 }
 
 // global_adrs don't need to be sorted by address, but sorted by target processor
-// TODO; generalize for other types of queries
 // TODO: generalize for where the global addresses/offsets are part of another data structure
-// TODO: have common bucketing function for the pre-bucketing
 template <typename InputIter>
 std::vector<typename std::iterator_traits<InputIter>::value_type>
 bulk_rma(InputIter local_begin, InputIter local_end,
@@ -463,7 +462,12 @@ bulk_rma(InputIter local_begin, InputIter local_end,
     return bulk_rma(local_begin, local_end, global_indexes, send_counts, comm);
 }
 
-template <typename InputIterator, typename index_t = std::size_t>
+
+constexpr int edgechar_twophase_all2all = 1;
+constexpr int edgechar_bulk_rma = 2;
+constexpr int edgechar_mpi_osc_rma = 3;
+
+template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_bulk_rma>
 std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
     // get input sizes
@@ -502,6 +506,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     // parent request where the character is the last `$`/`0` character
     // these don't have to be requested, but are locally fulfilled
     std::vector<std::tuple<size_t, size_t, size_t>> dollar_reqs;
+    std::vector<std::tuple<size_t, size_t, size_t>> remote_reqs;
 
     // get the first LCP value of the next processor
     index_t next_first_lcp = mxx::left_shift(sa.local_LCP[0], comm);
@@ -575,11 +580,19 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
                     lcp_val = sa.local_LCP[i+1];
             }
         }
-        if (sa.local_SA[i] + lcp_val >= global_size) {
-            MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-            dollar_reqs.emplace_back(parent, global_size + prefix + i, 0);
+        if (edgechar_method == edgechar_twophase_all2all) {
+            if (sa.local_SA[i] + lcp_val >= global_size) {
+                MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
+                dollar_reqs.emplace_back(parent, global_size + prefix + i, 0);
+            } else {
+                parent_reqs.emplace_back(parent, global_size + prefix + i, sa.local_SA[i] + lcp_val);
+            }
         } else {
-            parent_reqs.emplace_back(parent, global_size + i + prefix, sa.local_SA[i] + lcp_val);
+            if (prefix <= parent && parent < prefix + local_size) {
+                parent_reqs.emplace_back(parent, global_size + prefix + i, sa.local_SA[i] + lcp_val);
+            } else {
+                remote_reqs.emplace_back(parent, global_size + prefix + i, sa.local_SA[i] + lcp_val);
+            }
         }
     }
 
@@ -659,81 +672,117 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
                 }
             }
         }
-        if (sa.local_SA[i] + lcp_val >= global_size) {
-            MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-            dollar_reqs.emplace_back(parent, prefix + i, 0);
+        if (edgechar_method == edgechar_twophase_all2all) {
+            if (sa.local_SA[i] + lcp_val >= global_size) {
+                MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
+                dollar_reqs.emplace_back(parent, prefix + i, 0);
+            } else {
+                parent_reqs.emplace_back(parent, prefix + i, sa.local_SA[i] + lcp_val);
+            }
         } else {
-            parent_reqs.emplace_back(parent, i + prefix, sa.local_SA[i] + lcp_val);
+            if (prefix <= parent && parent < prefix + local_size) {
+                parent_reqs.emplace_back(parent, prefix + i, sa.local_SA[i] + lcp_val);
+            } else {
+                remote_reqs.emplace_back(parent, prefix + i, sa.local_SA[i] + lcp_val);
+            }
         }
     }
     t.end_section("locally calc parents");
 
     // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
-#define USE_RMA 0
-#if !USE_RMA
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
-    // TODO: since parents are one of the two ansv, we expect the majority of parents
-    // to be local, thus we should not send around these edges via all2all
-    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));}, comm);
+    // TODO: use constexpr for different methods (rather than #defines)
+    // TODO: plus distinguish between dollar/parent req only for the first method
+    typedef typename std::iterator_traits<InputIterator>::value_type CharT;
+    std::vector<CharT> edge_chars;
+    if (edgechar_method == edgechar_bulk_rma) {
+        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        // send those edges for which the parent lies on a remote processor
+        typedef std::tuple<size_t, size_t, size_t> Tp;
+        mxx::all2all_func(remote_reqs, [&part](const Tp& t) {return part.target_processor(std::get<0>(t));}, comm);
+        parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
+        remote_reqs = std::vector<Tp>();
+        t.end_section("bulk_rma: send to parent");
 
-    t.end_section("all2all_func: req characters");
-
-    // replace string request with character from original string
-    for (size_t i = 0; i < parent_reqs.size(); ++i) {
-        size_t offset = std::get<2>(parent_reqs[i]);
-        if (offset == global_size) {
-            // the artificial last `$` character is mapped to 0
-            std::get<2>(parent_reqs[i]) = 0;
-        } else {
-            // get character from that global string position
-            std::get<2>(parent_reqs[i]) = sa.alphabet_mapping[static_cast<size_t>(*(sa.input_begin+(std::get<2>(parent_reqs[i])-prefix)))];
+        // TODO: only query for those with offset != global_size
+        // bucket by target processor of the character request
+        auto dollar_begin = std::partition(parent_reqs.begin(), parent_reqs.end(), [&global_size](const Tp& x){return std::get<2>(x) < global_size;});
+        dollar_reqs = std::vector<Tp>(dollar_begin, parent_reqs.end());
+        parent_reqs.resize(std::distance(parent_reqs.begin(), dollar_begin));
+        t.end_section("bulk_rma: partition dollars");
+        std::vector<size_t> send_counts = mxx::bucketing(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) { return part.target_processor(std::get<2>(t));}, comm.size());
+        t.end_section("bulk_rma: bucketing by char index");
+        // create request address vector
+        std::vector<size_t> global_indexes(parent_reqs.size());
+        for (size_t i = 0; i < parent_reqs.size(); ++i) {
+            global_indexes[i] = std::get<2>(parent_reqs[i]);
         }
-    }
-    // append the "dollar" requests
-    parent_reqs.insert(parent_reqs.end(), dollar_reqs.begin(), dollar_reqs.end());
-    dollar_reqs.clear(); dollar_reqs.shrink_to_fit();
+        t.end_section("bulk_rma: create global_indexes");
+        // use global bulk RMA for getting the corresponding characters
+        edge_chars = bulk_rma(sa.input_begin, sa.input_end, global_indexes, send_counts, comm);
+        t.end_section("bulk_rma: bulk_rma");
+    } else if (edgechar_method == edgechar_twophase_all2all) {
+        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        // send all requests to the process on which the character for the
+        // character request lies
+        mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));}, comm);
 
-    t.end_section("locally answer char queries");
+        t.end_section("all2all_func: req characters");
 
-    // 2) send tuples (parent, i, S[SA[i]+LCP[i]) to 1st index) [to parent]
-    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
-    t.end_section("all2all_func: send to parent");
-#else
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
-    // TODO: filter by local parents (which should be the majority) and use all2all only for non-local parents
-    parent_reqs.insert(parent_reqs.end(), dollar_reqs.begin(), dollar_reqs.end());
-    dollar_reqs.clear(); dollar_reqs.shrink_to_fit();
-    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
-    t.end_section("all2all_func: send to parent");
-
-    // create MPI_Win for input string, create character array for size of parents
-    // and use RMA to request (read) all characters which are not `$`
-    MPI_Win win;
-    MPI_Win_create(&(*sa.input_begin), local_size, 1, MPI_INFO_NULL, comm, &win);
-    MPI_Win_fence(0, win);
-
-    // read characters here!
-    std::vector<char> edge_chars(parent_reqs.size());
-    for (size_t i = 0; i < parent_reqs.size(); ++i) {
-        size_t offset = std::get<2>(parent_reqs[i]);
-        // read global index offset
-        if (offset == global_size) {
-            // TODO: handle specially?
-            edge_chars[i] = 0;
-        } else {
-            int proc = part.target_processor(offset);
-            size_t proc_offset = offset - part.excl_prefix_size(proc);
-            // request proc_offset from processor `proc` in window win
-            MPI_Get(&edge_chars[i], 1, MPI_CHAR, proc, proc_offset, 1, MPI_CHAR, win);
+        // replace string request with character from original string
+        for (size_t i = 0; i < parent_reqs.size(); ++i) {
+            size_t offset = std::get<2>(parent_reqs[i]);
+            if (offset == global_size) {
+                // the artificial last `$` character is mapped to 0
+                std::get<2>(parent_reqs[i]) = 0;
+            } else {
+                // get character from that global string position
+                std::get<2>(parent_reqs[i]) = sa.alphabet_mapping[static_cast<size_t>(*(sa.input_begin+(std::get<2>(parent_reqs[i])-prefix)))];
+            }
         }
-    }
-    // fence to complete all requests
-    //MPI_Win_fence(MPI_MODE_NOSTORE | MPI_MODE_NOPUT | MPI_MODE_NOSUCCEED, win);
-    MPI_Win_fence(0, win);
-    MPI_Win_free(&win);
+        // append the "dollar" requests
+        parent_reqs.insert(parent_reqs.end(), dollar_reqs.begin(), dollar_reqs.end());
+        dollar_reqs.clear(); dollar_reqs.shrink_to_fit();
 
-    t.end_section("RMA read chars");
-#endif
+        t.end_section("locally answer char queries");
+
+        // 2) send tuples (parent, i, S[SA[i]+LCP[i]) to 1st index) [to parent]
+        mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
+        t.end_section("all2all_func: send to parent");
+    } else if (edgechar_method == edgechar_mpi_osc_rma) {
+        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        // send those edges for which the parent lies on a remote processor
+        mxx::all2all_func(remote_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
+        parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
+        t.end_section("all2all_func: send to parent");
+
+        // create MPI_Win for input string, create character array for size of parents
+        // and use RMA to request (read) all characters which are not `$`
+        MPI_Win win;
+        MPI_Win_create(&(*sa.input_begin), local_size, 1, MPI_INFO_NULL, comm, &win);
+        MPI_Win_fence(0, win);
+
+        // read characters here!
+        edge_chars.resize(parent_reqs.size());
+        for (size_t i = 0; i < parent_reqs.size(); ++i) {
+            size_t offset = std::get<2>(parent_reqs[i]);
+            // read global index offset
+            if (offset == global_size) {
+                // TODO: handle specially?
+                edge_chars[i] = 0;
+            } else {
+                int proc = part.target_processor(offset);
+                size_t proc_offset = offset - part.excl_prefix_size(proc);
+                // request proc_offset from processor `proc` in window win
+                MPI_Get(&edge_chars[i], 1, MPI_CHAR, proc, proc_offset, 1, MPI_CHAR, win);
+            }
+        }
+        // fence to complete all requests
+        //MPI_Win_fence(MPI_MODE_NOSTORE | MPI_MODE_NOPUT | MPI_MODE_NOSUCCEED, win);
+        MPI_Win_fence(0, win);
+        MPI_Win_free(&win);
+
+        t.end_section("RMA read chars");
+    }
 
     // TODO: (alternatives for full lookup table in each node:)
     // local hashing key=(node-idx, char), value=(child idx)
@@ -747,15 +796,23 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     for (size_t i = 0; i < parent_reqs.size(); ++i) {
         size_t parent = std::get<0>(parent_reqs[i]);
         size_t node_idx = (parent - prefix)*(sa.sigma+1);
-#if !USE_RMA
-        uint16_t c = std::get<2>(parent_reqs[i]);
-#else
-        char x = edge_chars[i];
-        uint16_t c = sa.alphabet_mapping[x];
-#endif
+        uint16_t c;
+        if (edgechar_method == edgechar_twophase_all2all) {
+            c = std::get<2>(parent_reqs[i]);
+        } else {
+            char x = edge_chars[i];
+            c = sa.alphabet_mapping[x];
+        }
         MXX_ASSERT(0 <= c && c < sa.sigma+1);
         size_t cell_idx = node_idx + c;
         internal_nodes[cell_idx] = std::get<1>(parent_reqs[i]);
+    }
+    if (edgechar_method == edgechar_bulk_rma) {
+        for (size_t i = 0; i < dollar_reqs.size(); ++i) {
+            size_t parent = std::get<0>(dollar_reqs[i]);
+            size_t node_idx = (parent - prefix)*(sa.sigma+1);
+            internal_nodes[node_idx] = std::get<1>(dollar_reqs[i]);
+        }
     }
 
     t.end_section("locally: create internal nodes");

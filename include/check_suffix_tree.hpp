@@ -112,7 +112,7 @@ void check_suffix_tree(const std::string& s, const std::vector<size_t>& sa, cons
                 }
                 size_t node_offset = (sigma+1)*prev_pos;
                 edges_visited[node_offset+c] = true;
-                ASSERT_EQ(split, nodes[node_offset+c]) << "node_offset=" << node_offset << ", c=" << c;
+                ASSERT_EQ(split, nodes[node_offset+c]);
             }
         }
     }
