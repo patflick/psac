@@ -406,6 +406,17 @@ std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector
     std::vector<Q> local_queries = mxx::all2allv(queries, send_counts, recv_counts, comm);
     t.end_section("bulk_query: all2all queries");
 
+    // TODO: show load inbalance in queries and recv_counts?
+    size_t recv_num = local_queries.size();
+    std::pair<size_t, int> maxel = mxx::max_element(recv_num, comm);
+    size_t total_queries = mxx::allreduce(queries.size(), comm);
+    std::vector<size_t> recv_per_proc = mxx::gather(recv_num, 0, comm);
+    if (comm.rank() == 0) {
+        std::cerr << "Avg queries: " << total_queries * 1.0 / comm.size() << ", max queries on proc " << maxel.second << ": " << maxel.first << std::endl;
+        std::cerr << "Inbalance factor: " << maxel.first * comm.size() * 1.0 / total_queries << "x" << std::endl;
+        std::cerr << "Queries received by each processor: " << recv_per_proc << std::endl;
+    }
+
     // locally use query function for querying and save results
     std::vector<T> local_results(local_queries.size());
     for (size_t i = 0; i < local_queries.size(); ++i) {
