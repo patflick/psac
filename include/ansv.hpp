@@ -414,7 +414,7 @@ std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector
     if (comm.rank() == 0) {
         std::cerr << "Avg queries: " << total_queries * 1.0 / comm.size() << ", max queries on proc " << maxel.second << ": " << maxel.first << std::endl;
         std::cerr << "Inbalance factor: " << maxel.first * comm.size() * 1.0 / total_queries << "x" << std::endl;
-        std::cerr << "Queries received by each processor: " << recv_per_proc << std::endl;
+        //std::cerr << "Queries received by each processor: " << recv_per_proc << std::endl;
     }
 
     // locally use query function for querying and save results
