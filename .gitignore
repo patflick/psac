@@ -52,3 +52,5 @@ install_manifest.txt
 .kdev_include_paths
 BATCH_*
 runlog/
+blah.nodes
+block_node137.sh

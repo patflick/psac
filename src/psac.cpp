@@ -43,6 +43,7 @@
 #include <mxx/env.hpp>
 #include <mxx/comm.hpp>
 #include <mxx/file.hpp>
+#include <mxx/utils.hpp>
 // Timer
 #include <mxx/timer.hpp>
 
@@ -52,13 +53,10 @@ typedef uint64_t index_t;
 
 int main(int argc, char *argv[]) {
     // set up MPI
-    //MPI_Init(&argc, &argv);
-    //int rank, p;
-    //MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    //MPI_Comm_size(MPI_COMM_WORLD, &p);
     mxx::env e(argc, argv);
     mxx::env::set_exception_on_error();
     mxx::comm comm = mxx::comm();
+    mxx::print_node_distribution(comm);
 
     try {
     // define commandline usage

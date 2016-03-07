@@ -1,8 +1,10 @@
 #!/bin/sh
 
+# NOTE: just change the processor number here to something power of 2 plus 4
+#PBS -lnodes=36:ppn=16:compute,walltime=0:30:00
+
 #PBS -o BATCH_OUTPUT
 #PBS -e BATCH_ERRORS
-#PBS -lnodes=64:ppn=16:compute,walltime=0:30:00
 
 # set up compiler and MPI runtime environment
 source /home/pflick/gcc48env.sh
@@ -14,6 +16,7 @@ cd $PBS_O_WORKDIR
 # define executable to run
 #EXE=./release/bin/benchmark_sac
 EXE=./release/bin/psac
+BM=./release/bin/benchmarks
 
 # prepare log folder
 OUT_FOLDER=runlog
@@ -31,7 +34,7 @@ INFILE=/lustre/alurugroup/pflick/human_g1k_v37.actg
 # srirams 5.7 GB file
 # INFILE=/work/alurugroup/jnk/bhavani/data/SRR797058/half30m.fwd.txt
 
-NAME="st-bulk-rma-human-big"
+NAME="BM-all2all-char-$PBS_NUM_NODES"
 
 NUM_NODES=$(cat $PBS_NODEFILE | wc -l)
 echo "[$NOW]: $NAME, exe=$EXE, file=$INFILE, nnodes=$NUM_NODES, ppn=$PBS_NUM_PPN, jobid=$PBS_JOBID, nodes:" >> $OUT_FOLDER/jobs.log
@@ -39,21 +42,29 @@ MY_NODES=$(cat $PBS_NODEFILE | sort -u | tr '\n' ', ')
 echo "      $MY_NODES" >> $OUT_FOLDER/jobs.log
 echo ""
 
-	#for p in 8 16 32 64 128 256 
-	#for p in 256 128 64
-for i in 1 2 3 4 5
-do
-#for p in 64 128 256
-#p=256
+PPN=$PBS_NUM_PPN
+NUMNODES=$PBS_NUM_NODES
+NP=$(expr $NUMNODES \* $PPN)
+$MPIRUN -np $NP -errfile-pattern=$LOG_FOLDER/bm-err-$NP-%r.log -outfile-pattern=$LOG_FOLDER/bm-out-$NP-%r.log $BM
 
-#for p in 512 256 128
-for p in 1024 512 256
-#for p in 1280 1600 1024
+#HOSTFILE=$PBS_NODEFILE
+HOSTFILE=blah.nodes
+
+NUM_NODES=$(cat $HOSTFILE | wc -l)
+NP=$(expr $NUM_NODES \* $PPN)
+NP2=$(expr $NP / 2)
+
+for p in $NP $NP2
+#for p in 1024 512 256
+#for p in 1600 1280 1024
+#for p in 256 128
 do
-	printf "### Running psac iteration $i with p = $p processors ###\n" 1>&2
-	/usr/bin/time $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-%r.log $EXE -t -f $INFILE
-	#printf "### Running psac iteration $i with p = $p processors and LCP ###\n" 1>&2
-	#$MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-%r.log $EXE -t -r 1000000
-	#/usr/bin/time $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-lcp-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-lcp-%r.log $EXE --lcp -f $INFILE
-done
+	for i in 1 2 3 4 5
+	do
+		printf "### Running psac iteration $i with p = $p processors ###\n" 1>&2
+		/usr/bin/time $MPIRUN -np $p -hostfile $HOSTFILE -ppn $PPN -errfile-pattern=$LOG_FOLDER/err-$p-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-%r.log $EXE -t -f $INFILE
+		#printf "### Running psac iteration $i with p = $p processors and LCP ###\n" 1>&2
+		#$MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-%r.log $EXE -t -r 1000000
+		#/usr/bin/time $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-lcp-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-lcp-%r.log $EXE --lcp -f $INFILE
+	done
 done
