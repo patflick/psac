@@ -36,7 +36,9 @@
 #include <suffix_array.hpp>
 #include <check_suffix_array.hpp>
 #include <alphabet.hpp>
-#include <ansv.hpp> // TODO: include only suffix tree
+
+// suffix tree construction
+#include <suffix_tree.hpp>
 #include <check_suffix_tree.hpp>
 
 // parallel file block decompose

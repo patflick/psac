@@ -19,10 +19,10 @@
  */
 
 #include <gtest/gtest.h>
+#include <suffix_tree.hpp>
 #include <check_suffix_array.hpp>
 #include <check_suffix_tree.hpp>
 #include <cxx-prettyprint/prettyprint.hpp>
-#include <ansv.hpp>
 #include <suffix_array.hpp>
 #include <alphabet.hpp>
 #include <rmq.hpp>
