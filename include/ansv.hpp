@@ -32,13 +32,59 @@ constexpr int furthest_eq = 2;
 constexpr int global_indexing = 0;
 constexpr int local_indexing = 1;
 
+constexpr bool dir_left = true;
+constexpr bool dir_right = false;
+
+
+
+/**
+ * @brief   Solves the ANSV problem sequentially in one direction.
+ *
+ * @tparam T    Type of input elements.
+ * @param in    Vector of input elemens
+ * @param left  Whether to find left or right smaller value. `True` denotes
+ *              left, and `False` denotes finding the smaller value to the right.
+ *
+ * @return      The nearest smaler value for each element in `in` to the direction
+ *              given by `left`.
+ */
+template <typename T>
+std::vector<size_t> ansv_sequential(const std::vector<T>& in, bool left, size_t nonsv = 0) {
+    std::vector<size_t> nsv(in.size());
+
+    std::deque<size_t> q;
+    for (size_t i = 0; i < in.size(); ++i) {
+        size_t idx = left ? in.size() - 1 - i : i;
+        while (!q.empty() && in[idx] < in[q.back()]) {
+            // current element is the min for in[i-1]
+            nsv[q.back()] = idx;
+            q.pop_back();
+        }
+        q.push_back(idx);
+    }
+    for (auto& x : q) {
+        nsv[x] = nonsv;
+    }
+    return nsv;
+}
 
 template <typename T, int type>
 inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,size_t>>& q, const T& next_value, size_t idx, size_t prefix) {
     while (!q.empty() && next_value < q.back().first) {
         // current element is the min for the last element in the queue
         nsv[q.back().second-prefix] = idx;
-        q.pop_back();
+        if (type == furthest_eq) {
+            // if that element is followed in the queue by equal elements,
+            // set them to the furthest
+            std::pair<T,size_t> furthest = q.back();
+            q.pop_back();
+            while (!q.empty() && furthest.first == q.back().first) {
+                nsv[q.back().second-prefix] = furthest.second;
+                q.pop_back();
+            }
+        } else {
+            q.pop_back();
+        }
     }
     if (type == nearest_eq) {
         if (!q.empty() && next_value == q.back().first) {
@@ -49,7 +95,83 @@ inline void update_nsv_queue(std::vector<size_t>& nsv, std::deque<std::pair<T,si
     }
 }
 
+// TODO: this is yet uncorrect for furthest_eq
+template <typename Iterator, typename T, int nsv_type, bool dir>
+void local_indexing_nsv(Iterator begin, Iterator end, std::vector<std::pair<T, size_t>>& unmatched, std::vector<size_t>& nsv) {
+    size_t n = std::distance(begin, end);
+    std::deque<std::pair<T,size_t> > q;
+    for (Iterator it = begin; it != end; ++it) {
+        size_t idx = (dir == dir_left) ? n - std::distance(begin,it) - 1 : std::distance(begin,it);
+        size_t prefix = 0;
+        update_nsv_queue<T, nsv_type>(nsv, q, *it, idx, prefix);
+        q.push_back(std::pair<T, size_t>(*it, prefix+idx));
+    }
+    size_t prev_size = unmatched.size();
+    if (dir == dir_left) {
+        unmatched = std::vector<std::pair<T,size_t>>(q.rbegin(), q.rend());
+    } else {
+        unmatched.insert(unmatched.end(), q.begin(), q.end());
+    }
+    for (size_t i = prev_size; i < unmatched.size(); ++i) {
+        nsv[unmatched[i].second] = n + i;
+    }
+}
 
+// solve all locals with correct local indexing
+// unmatched elements point into the lr_mins
+// later only lr_mins are used for getting global solutions
+/*
+template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
+size_t local_ansv_unmatched_nsv(const std::vector<T>& in, const size_t prefix, std::vector<std::pair<T, size_t>>& unmatched, std::vector<std::pair<T, size_t>>& left_nsv, std::vector<std::pair<T,size_t>>& right_nsv) {
+    // backwards direction (left mins)
+    std::deque<std::pair<T,size_t> > q;
+
+    for (size_t i = in.size(); i > 0; --i) {
+        while (!q.empty() && in[i-1] < q.back().first) {
+            q.pop_back();
+        }
+        if (right_type == furthest_eq) {
+            // remove all equal elements but the last
+            while (q.size() >= 2 && in[i-1] == q.back().first && in[i-1] == (q.rbegin()+1)->first) {
+                q.pop_back();
+            }
+        } else {
+            while (!q.empty() && in[i-1] == q.back().first)
+                q.pop_back();
+        }
+        q.push_back(std::pair<T, size_t>(in[i-1], prefix+i-1));
+    }
+    // add results to left_mins
+    unmatched = std::vector<std::pair<T,size_t>>(q.rbegin(), q.rend());
+    size_t n_left_mins = q.size();
+    assert(n_left_mins >= 1);
+    q.clear();
+
+    // forward direction (right mins)
+    for (size_t i = 0; i < in.size(); ++i) {
+        while (!q.empty() && in[i] < q.back().first)
+            q.pop_back();
+        if (left_type == furthest_eq) {
+            while (q.size() >= 2 && in[i] == q.back().first && in[i] == (q.rbegin()+1)->first) {
+                // remove all but the last one that is equal, TODO: can be `if` instead
+                q.pop_back();
+            }
+        } else {
+            while (!q.empty() && in[i] == q.back().first)
+                q.pop_back();
+        }
+        q.push_back(std::pair<T, size_t>(in[i], prefix+i));
+    }
+    // add results to right_mins
+    size_t n_right_mins = q.size();
+    unmatched.insert(unmatched.end(), q.begin(), q.end());
+    MXX_ASSERT(n_right_mins >= 1);
+    if (n_right_mins + n_left_mins != unmatched.size()) {
+        MXX_ASSERT(false);
+    }
+    return n_left_mins;
+}
+*/
 
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
 size_t local_ansv_unmatched(const std::vector<T>& in, const size_t prefix, std::vector<std::pair<T, size_t>>& unmatched) {
@@ -203,8 +325,6 @@ size_t ansv_communicate_allpairs(const std::vector<std::pair<T,size_t>>& lr_mins
     return n_left_recv;
 }
 
-constexpr bool dir_left = true;
-constexpr bool dir_right = false;
 
 template <typename T, bool direction, int indexing_type, typename Iterator>
 void ansv_local_finish_furthest_eq(const std::vector<T>& in, Iterator tail_begin, Iterator tail_end, size_t prefix, size_t tail_prefix, size_t nonsv, std::vector<size_t>& nsv) {
@@ -339,6 +459,54 @@ void ansv_local_finish_all(const std::vector<T>& in, const std::vector<std::pair
     }
 }
 
+template <typename Iterator> //, int left_type, int right_type>
+void ansv_merge(Iterator left_begin, Iterator left_end, Iterator right_begin, Iterator right_end) {
+    // starting with the largest value (right most in left sequence and leftmost in right sequence)
+    Iterator l = left_end;
+    Iterator r = right_begin;
+    // TODO: one of the two sides need to write to the `nsv`, the other needs
+    // to be prepared for sending out
+    // TODO: global vs local indexing?
+    while (l != left_begin && r != right_end) {
+        Iterator l1 = l-1;
+        if (l1->first < r->first) {
+            *r = *l1;
+            ++r;
+        } else if (r->first < l1->first) {
+            *l1 = *r;
+            --l;
+        } else {
+            // r == l
+            // TODO: important case in the merge
+            // for now assume nearest_sm for both
+            // find smaller items by iterating up
+            Iterator lsm = l1;
+            while (lsm != left_begin && l1->first == (lsm-1)->first)
+                --lsm;
+
+            Iterator rsm = r+1;
+            while (rsm != right_end && r->first == rsm->first)
+                ++rsm;
+
+            // TODO: in case of furthest eq, use the last offset
+            // assign the smaller r (rsm) to all the equal left if there are
+            if (rsm != right_end) {
+                for (Iterator li = l1; li != (lsm-1); --li) {
+                    *li = *rsm;
+                }
+            }
+            // assign the smaller l (lsm) to all equal right
+            if (lsm != left_begin) {
+                for (Iterator ri = r; ri != rsm; ++ri) {
+                    *ri = *(lsm-1);
+                }
+            }
+            r = rsm;
+            l = lsm;
+        }
+    }
+}
+
 // parallel all nearest smallest value
 // TODO: iterator version??
 // TODO: comparator type
@@ -371,17 +539,89 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     t.end_section("ANSV: finish ansv local");
 }
 
-template <typename T, int left_type, int right_type>
-void hh_ansv_comm_params(const std::vector<std::pair<T,size_t>>& lr_mins,
-                         size_t n_left_mins, std::vector<size_t> send_counts,
-                         std::vector<size_t> send_offsets, const mxx::comm& comm) {
-    T min = lr_mins[n_left_mins].first;
-    // gather all processor minima
-    std::vector<T> allmins = mxx::allgather(min, comm);
+template <typename T, int indexing_type = global_indexing>
+void my_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
+    mxx::section_timer t(std::cerr, comm);
 
-    // solve ANSV for the processor minima
-    std::vector<size_t> lpm = ansv_sequential(allmins, true);
-    std::vector<size_t> rpm = ansv_sequential(allmins, false);
+    size_t local_size = in.size();
+    size_t prefix = mxx::exscan(local_size, comm);
+
+    /*****************************************************************
+     *  Step 1: Locally calculate ANSV and save un-matched elements  *
+     *****************************************************************/
+    if (left_nsv.size() != in.size())
+        left_nsv.resize(in.size());
+    if (right_nsv.size() != in.size())
+        right_nsv.resize(in.size());
+    //size_t n_left_mins = local_ansv_unmatched<T, left_type, right_type>(in, prefix, lr_mins);
+    local_indexing_nsv<decltype(in.rbegin()), T, nearest_sm, dir_left>(in.rbegin(), in.rend(), lr_mins, left_nsv);
+    size_t n_left_mins = lr_mins.size();
+    local_indexing_nsv<decltype(in.begin()), T, nearest_sm, dir_right>(in.begin(), in.end(), lr_mins, right_nsv);
+    // change lrmin indexing to global
+    for (size_t i = 0; i < lr_mins.size(); ++i) {
+        lr_mins[i].second += prefix;
+    }
+
+    t.end_section("ANSV: local ansv");
+
+
+    //mxx::sync_cout(comm) << "in=" << in << std::endl;
+    //mxx::sync_cout(comm) << "lr_mins=" << lr_mins << std::endl;
+    //mxx::sync_cout(comm) << "left_nsv=" << left_nsv << std::endl;
+    //mxx::sync_cout(comm) << "right_nsv=" << right_nsv << std::endl;
+
+    /***************************************************************
+     *  Step 2: communicate un-matched elements to correct target  *
+     ***************************************************************/
+    std::vector<std::pair<T, size_t>> recved;
+    size_t n_left_recv = ansv_communicate_allpairs<T, nearest_sm, nearest_sm>(lr_mins, n_left_mins, recved, comm);
+    t.end_section("ANSV: communicate all");
+    //mxx::sync_cout(comm) << "recved=" << recved << std::endl;
+
+    /***************************************************************
+     *  Step 3: Again solve ANSV locally and use lr_mins as tails  *
+     ***************************************************************/
+    // TODO: finish via merge?
+    ansv_merge(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin(), lr_mins.begin()+n_left_mins);
+    ansv_merge(lr_mins.begin()+n_left_mins, lr_mins.end(), recved.begin()+n_left_recv, recved.end());
+    //mxx::sync_cout(comm) << "merged lrmins=" << lr_mins << std::endl;
+    //mxx::sync_cout(comm) << "merged lrmins=" << lr_mins << std::endl;
+    //ansv_local_finish_all<T, left_type, right_type, indexing_type>(in, recved, n_left_recv, prefix, nonsv, left_nsv, right_nsv);
+    // local to global indexing transformation
+    for (size_t i = 0; i < in.size(); ++i) {
+        if(left_nsv[i] >= local_size) {
+            if (lr_mins[left_nsv[i]-local_size].second == i+prefix) {
+                left_nsv[i] = nonsv;
+            } else {
+                left_nsv[i] = lr_mins[left_nsv[i]-local_size].second;
+            }
+        } else {
+            left_nsv[i] += prefix;
+        }
+        if (right_nsv[i] >= local_size) {
+            if (lr_mins[right_nsv[i]-local_size].second == i+prefix) {
+                right_nsv[i] = nonsv;
+            } else {
+                right_nsv[i] = lr_mins[right_nsv[i]-local_size].second;
+            }
+        } else {
+            right_nsv[i] += prefix;
+        }
+    }
+   // mxx::sync_cout(comm) << "left_nsv=" << left_nsv << std::endl;
+   // mxx::sync_cout(comm) << "right_nsv=" << right_nsv << std::endl;
+    t.end_section("ANSV: finish ansv local");
+}
+
+//#define SDEBUG(x) mxx::sync_cerr(comm) << "[" << comm.rank() << "]: " #x " = " << (x) << std::endl
+#define SDEBUG(x) 
+
+template <typename T> //, int left_type, int right_type>
+void hh_ansv_comm_params(const std::vector<std::pair<T,size_t>>& lr_mins,
+                         const std::vector<size_t>& lpm, const std::vector<size_t>& rpm,
+                         const std::vector<T>& allmins,
+                         size_t n_left_mins, std::vector<size_t>& send_counts,
+                         std::vector<size_t>& send_offsets, const mxx::comm& comm) {
 
     send_counts = std::vector<size_t>(comm.size(), 0);
     send_offsets = std::vector<size_t>(comm.size(), 0);
@@ -392,13 +632,19 @@ void hh_ansv_comm_params(const std::vector<std::pair<T,size_t>>& lr_mins,
             if ((int)rpm[i] == comm.rank()) {
                 // determine the end of sequence S2x
                 size_t end_idx = start_idx;
-                while (end_idx+1<n_left_mins && lr_mins[end_idx+1] >= allmins[i])
+                while (end_idx+1<n_left_mins && lr_mins[end_idx].first >= allmins[i])
                     ++end_idx;
                 send_counts[i] = end_idx - start_idx + 1;
                 send_offsets[i] = start_idx;
                 start_idx = end_idx;
-            } else {
+            } else if (allmins[i] == allmins[comm.rank()] && rpm[i] == comm.size()) {
+                // if the min on the target procis equal, send all remaining
+                // to the left
+                send_counts[i] = n_left_mins - start_idx;
+                send_offsets[i] = start_idx;
                 break;
+            } else {
+                //break;
             }
         }
     }
@@ -408,55 +654,28 @@ void hh_ansv_comm_params(const std::vector<std::pair<T,size_t>>& lr_mins,
         for (int i = comm.rank()+1; i < comm.size(); ++i) {
             if ((int)lpm[i] == comm.rank()) {
                 size_t start_idx = end_idx;
-                while (start_idx > n_left_mins && lr_mins[start_idx-1] >= allmins[i]) {
+                while (start_idx > n_left_mins && lr_mins[start_idx].first >= allmins[i]) {
                     --start_idx;
                 }
                 send_counts[i] = end_idx - start_idx + 1;
                 send_offsets[i] = start_idx;
                 end_idx = start_idx;
             } else {
-                break;
+                //break;
             }
         }
     }
 }
 
-template <typename Iterator>
-void ansv_merge(Iterator left_begin, Iterator left_end, Iterator right_begin, Iterator right_end) {
-    // starting with the largest value (right most in left sequence and leftmost in right sequence)
-    Iterator l = left_end;
-    Iterator r = right_begin;
-    // TODO: one of the two sides need to write to the `nsv`, the other needs
-    // to be prepared for sending out
-    // TODO: global vs local indexing?
-    while (l != left_begin && r != right_end) {
-        if (l->first < r->first) {
-            *r = *(l-1);
-            ++r;
-        } else if (r->first < l->first) {
-            *(l-1) = *r;
-            --l;
-        } else {
-            // r == l
-            
-        }
-    }
-}
 
 template <typename T>
-void hh_ansv(const std::vector<T>& in, std::vector<size_t>& nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
-    size_t local_size = in.size();
-    size_t prefix = mxx::exscan(local_size, comm);
-
-    size_t n_left_mins = local_ansv_unmatched<T, nearest_sm, nearest_sm>(in, prefix, lr_mins);
-
-    // get communication parameters
-    std::vector<size_t> send_counts;
-    std::vector<size_t> send_offsets;
-    hh_ansv_comm_params(lr_mins, n_left_mins, send_counts, send_offsets, comm);
-
+size_t hh_ansv_comm(const std::vector<std::pair<T, size_t>>& lr_mins, const std::vector<size_t>& send_counts, const std::vector<size_t>& send_offsets, const mxx::comm& comm, std::vector<std::pair<T, size_t>>& recved) {
     // TODO: this is only for debug purposes:
     std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
+
+    SDEBUG(send_counts);
+    SDEBUG(send_offsets);
+    SDEBUG(recv_counts);
     // check if there is really just one processor sending me from each direction
     int recv_from_left = -1;
     int recv_from_right = -1;
@@ -477,11 +696,11 @@ void hh_ansv(const std::vector<T>& in, std::vector<size_t>& nsv, std::vector<std
                     std::cerr << "[ERROR] receiving more than one from right" << std::endl;
                 } else {
                     recv_from_right = i;
+                    n_right_recv = recv_counts[i];
                 }
             }
         }
     }
-
 
     // actually send and receive
     mxx::datatype dt = mxx::get_datatype<std::pair<T,size_t>>();
@@ -490,27 +709,206 @@ void hh_ansv(const std::vector<T>& in, std::vector<size_t>& nsv, std::vector<std
         if (send_counts[i] > 0) {
             // TODO: use proper mxx::isend and combine futures?
             reqs.push_back(MPI_REQUEST_NULL);
-            MPI_Isend(&lr_mins[0]+send_offsets[i], (int)send_counts[i], dt.type(), i, 0, &reqs[0]);
+            MPI_Isend(&lr_mins[0]+send_offsets[i], (int)send_counts[i], dt.type(), i, 0, comm, &reqs[0]);
         }
     }
 
-    std::vector<std::pair<T, size_t>> recved(n_left_recv+n_right_recv);
+    recved = std::vector<std::pair<T, size_t>>(n_left_recv+n_right_recv);
     MPI_Request recv_req[2] = {MPI_REQUEST_NULL, MPI_REQUEST_NULL};
     if (recv_from_left != -1) {
-        MPI_Irecv(&recved[0], n_left_recv, dt.type(), recv_from_left, 0, &recv_req[0]);
+        MPI_Irecv(&recved[0], n_left_recv, dt.type(), recv_from_left, 0, comm, &recv_req[0]);
     }
     if (recv_from_right != -1) {
-        MPI_Irecv(&recved[0]+n_left_recv, n_right_recv, dt.type(), recv_from_right, 0, &recv_req[1]);
+        MPI_Irecv(&recved[0]+n_left_recv, n_right_recv, dt.type(), recv_from_right, 0, comm, &recv_req[1]);
     }
 
     // wait for all communication to finish
     MPI_Waitall(reqs.size(), &reqs[0], MPI_STATUSES_IGNORE);
     MPI_Waitall(2, recv_req, MPI_STATUSES_IGNORE);
 
-    // solve locally both sides (i.e., execute a merge of S1 with S2, and S3 with S4)
+    return n_left_recv;
+}
 
-    // send answers back with same comm parameters
-    
+
+template <typename T>
+void hh_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
+    mxx::section_timer t(std::cerr, comm);
+    size_t local_size = in.size();
+    size_t prefix = mxx::exscan(local_size, comm);
+
+    // TODO: first unmatched solution: solve nsv with local_indexing
+    //       rather than just calculating the unmatched
+    //size_t n_left_mins = local_ansv_unmatched<T, nearest_sm, nearest_sm>(in, prefix, lr_mins);
+    if (left_nsv.size() != in.size())
+        left_nsv.resize(in.size());
+    if (right_nsv.size() != in.size())
+        right_nsv.resize(in.size());
+    //size_t n_left_mins = local_ansv_unmatched<T, left_type, right_type>(in, prefix, lr_mins);
+    local_indexing_nsv<decltype(in.rbegin()), T, nearest_sm, dir_left>(in.rbegin(), in.rend(), lr_mins, left_nsv);
+    size_t n_left_mins = lr_mins.size();
+    local_indexing_nsv<decltype(in.begin()), T, nearest_sm, dir_right>(in.begin(), in.end(), lr_mins, right_nsv);
+    // change lrmin indexing to global
+    for (size_t i = 0; i < lr_mins.size(); ++i) {
+        lr_mins[i].second += prefix;
+    }
+    t.end_section("ANSV: local ansv");
+
+    // gather all processor minima
+    T min = lr_mins[n_left_mins].first;
+    std::vector<T> allmins = mxx::allgather(min, comm);
+
+    // solve ANSV for the processor minima
+    std::vector<size_t> lpm = ansv_sequential(allmins, true, comm.size());
+    std::vector<size_t> rpm = ansv_sequential(allmins, false, comm.size());
+
+    // get communication parameters
+    std::vector<size_t> send_counts;
+    std::vector<size_t> send_offsets;
+    hh_ansv_comm_params(lr_mins, lpm, rpm, allmins, n_left_mins, send_counts, send_offsets, comm);
+
+
+    std::vector<std::pair<T,size_t>> recved;
+    size_t n_left_recv = hh_ansv_comm(lr_mins, send_counts, send_offsets, comm, recved);
+
+    SDEBUG(in);
+    SDEBUG(lr_mins);
+    SDEBUG(lpm);
+    SDEBUG(rpm);
+    SDEBUG(recved);
+
+    // calc where Seq1 is: determine `k` and then a_rm(min(k))
+    int k1 = -1;
+    int m1 = -1;
+    auto seq1_end = lr_mins.end();
+    // is there a left match?
+    if ((int)rpm[comm.rank()] != comm.size()) {
+        if ((int)rpm[comm.rank()] == comm.rank()+1) {
+            k1 = comm.rank()+1;
+        } else if ((int)rpm[comm.rank()] > comm.rank()+1) {
+            //seq3_begin = // find k3, min(k3), and first element smaller than k3
+            auto minit = std::min_element(allmins.begin() + (comm.rank()+1), allmins.begin()+rpm[comm.rank()]-1);
+            k1 = minit - allmins.begin();
+            T k1min = *minit;
+            seq1_end = std::find_if(lr_mins.begin()+n_left_mins, lr_mins.end(), [&k1min](const std::pair<T,size_t>& x) { return k1min <= x.first; });
+        }
+    } else {
+        // if there is an equal min, Seq1 is that
+        auto all_minit = std::min_element(allmins.begin() + (comm.rank()+1), allmins.end());
+        if (*all_minit == allmins[comm.rank()]) {
+            //seq3_begin = // find k3, min(k3), and first element smaller than k3
+            int rpm = all_minit - allmins.begin();
+           if (rpm == comm.rank()+1) {
+               m1 = comm.rank()+1;
+               k1 = comm.rank()+1;
+           } else if (rpm > comm.rank()+1) {
+               //seq3_begin = // find k3, min(k3), and first element smaller than k3
+               auto minit = std::min_element(allmins.begin() + (comm.rank()+1), allmins.begin()+rpm-1);
+               k1 = minit - allmins.begin();
+               m1 = rpm;
+               T k1min = *minit;
+               seq1_end = std::find_if(lr_mins.begin()+n_left_mins, lr_mins.end(), [&k1min](const std::pair<T,size_t>& x) { return k1min <= x.first; });
+           }
+        }
+    }
+
+    // calc where Seq3 is: determine (k') and then a_rm(min(k'))
+    int k3 = -1;
+    size_t seq3_begin = -1;
+    // is there a left match?
+    if ((int)lpm[comm.rank()] != comm.size()) {
+        if ((int)lpm[comm.rank()] == comm.rank()-1) {
+            seq3_begin = 0;
+            k3 = comm.rank()-1;
+        } else if ((int)lpm[comm.rank()] < comm.rank()-1) {
+            //seq3_begin = // find k3, min(k3), and first element smaller than k3
+            auto minit = std::min_element(allmins.begin()+lpm[comm.rank()]+1, allmins.begin()+(comm.rank()-1));
+            k3 = minit - allmins.begin();
+            T k3min = *minit;
+            // TODO: find the first position in lr_mins which is smaller than 
+            auto seq3_begin_it = std::find_if(lr_mins.begin(), lr_mins.begin()+n_left_mins, [&k3min](const std::pair<T,size_t>& x) { return x.first <= k3min; });
+            seq3_begin = std::distance(lr_mins.begin(), seq3_begin_it);
+        }
+    }
+
+    // solve locally both sides (i.e., execute a merge of S1 with S2, and S3 with S4)
+    // TODO: actually calculate the exact sequence position for S1 and S3
+    if (k1 >= 0) {
+       ansv_merge(lr_mins.begin()+n_left_mins, seq1_end, recved.begin()+n_left_recv, recved.end());
+    }
+    // Seq3 = (a_rm(min(k'(i))), ..., a_min(i))
+    if (k3 >= 0) {
+        // merge receved Seq4 with my Seq3
+        ansv_merge(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin()+seq3_begin, lr_mins.begin()+n_left_mins);
+    }
+
+    SDEBUG(lr_mins);
+    SDEBUG(recved);
+
+    // send back S2, all but the last one
+    std::vector<size_t> return_send_counts(comm.size(), 0);
+    std::vector<size_t> return_send_displs(comm.size(), 0);
+    if ((int)lpm[comm.rank()] != comm.size()) {
+       return_send_counts[lpm[comm.rank()]] = n_left_recv - 1;
+       return_send_displs[lpm[comm.rank()]] = 1;
+    }
+    if ((int)rpm[comm.rank()] != comm.size()) {
+       return_send_counts[rpm[comm.rank()]] = recved.size() - n_left_recv - 1;
+       return_send_displs[rpm[comm.rank()]] = n_left_recv;
+    } else if (m1 != -1) {
+       return_send_counts[m1] = recved.size() - n_left_recv - 1;
+       return_send_displs[m1] = n_left_recv;
+    }
+
+
+    std::vector<size_t> return_recv_counts = send_counts;
+    std::vector<size_t> return_recv_displs = send_offsets;
+    for (int i = 0; i < comm.rank(); ++i) {
+       if (return_recv_counts[i] > 0) {
+          --return_recv_counts[i];
+          //++return_recv_displs[i];
+       }
+    }
+    for (int i = comm.rank() + 1; i < comm.size(); ++i) {
+       if (return_recv_counts[i] > 0) {
+          --return_recv_counts[i];
+          ++return_recv_displs[i];
+       }
+    }
+
+    SDEBUG(return_send_counts);
+    SDEBUG(return_send_displs);
+    SDEBUG(return_recv_counts);
+    SDEBUG(return_recv_displs);
+    // FIXME: currently cheating with an all2all ;)
+    mxx::all2allv(&recved[0], return_send_counts, return_send_displs, &lr_mins[0], return_recv_counts, return_recv_displs, comm);
+    SDEBUG(lr_mins);
+
+    // local to global indexing transformation
+    for (size_t i = 0; i < in.size(); ++i) {
+        if(left_nsv[i] >= local_size) {
+            if (lr_mins[left_nsv[i]-local_size].second == i+prefix) {
+                left_nsv[i] = nonsv;
+            } else {
+                left_nsv[i] = lr_mins[left_nsv[i]-local_size].second;
+            }
+        } else {
+            left_nsv[i] += prefix;
+        }
+        if (right_nsv[i] >= local_size) {
+            if (lr_mins[right_nsv[i]-local_size].second == i+prefix) {
+                right_nsv[i] = nonsv;
+            } else {
+                right_nsv[i] = lr_mins[right_nsv[i]-local_size].second;
+            }
+        } else {
+            right_nsv[i] += prefix;
+        }
+    }
+    SDEBUG(left_nsv);
+    SDEBUG(right_nsv);
+    // TODO
+    // send answers back with same comm parameters (minus one?)
+    //
 }
 
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
@@ -519,34 +917,5 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     ansv<T, left_type, right_type, global_indexing>(in, left_nsv, right_nsv, lr_mins, comm);
 }
 
-
-
-/**
- * @brief   Solves the ANSV problem sequentially in one direction.
- *
- * @tparam T    Type of input elements.
- * @param in    Vector of input elemens
- * @param left  Whether to find left or right smaller value. `True` denotes
- *              left, and `False` denotes finding the smaller value to the right.
- *
- * @return      The nearest smaler value for each element in `in` to the direction
- *              given by `left`.
- */
-template <typename T>
-std::vector<size_t> ansv_sequential(const std::vector<T>& in, bool left) {
-    std::vector<size_t> nsv(in.size());
-
-    std::deque<size_t> q;
-    for (size_t i = 0; i < in.size(); ++i) {
-        size_t idx = left ? in.size() - 1 - i : i;
-        while (!q.empty() && in[idx] < in[q.back()]) {
-            // current element is the min for in[i-1]
-            nsv[q.back()] = idx;
-            q.pop_back();
-        }
-        q.push_back(idx);
-    }
-    return nsv;
-}
 
 #endif // ANSV_HPP

@@ -88,6 +88,8 @@ flags = [
 '-I',
 './ext/mxx/include',
 '-I',
+'./ext/mxx',
+'-I',
 './ext/cxx-prettyprint',
 '-I',
 './include',

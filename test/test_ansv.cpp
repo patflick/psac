@@ -25,6 +25,8 @@
 #include <mxx/distribution.hpp>
 #include <vector>
 #include <algorithm>
+#include <limits>
+#include <utility>
 
 // check ansv via a rmq
 template <typename T, int type = nearest_sm>
@@ -105,9 +107,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                                 T m2 = *minquery.query(in.cbegin()+i+1, in.cbegin()+sm_nsv[i]);
                                 EXPECT_GT(m2, in[i]);
                             }
-                        }
-                        else if (in[i] == in[s]) {
-                        }
+                        } else if (in[i] == in[s]) { }
                         // in[s] is the furthest of its kind
                         // we check that the nsv for s is smaller, not equal
                         if (nsv[s] != nonsv) {
@@ -147,8 +147,34 @@ void par_test_ansv(const std::vector<T>& in, const mxx::comm& c) {
     right_nsv = mxx::gatherv(right_nsv, 0, c);
 
     if (c.rank() == 0) {
-        check_ansv<T,left_type>(in, left_nsv, true, 0);
-        check_ansv<T,right_type>(in, right_nsv, false, 0);
+        check_ansv<T, left_type>(in, left_nsv, true, 0);
+        check_ansv<T, right_type>(in, right_nsv, false, 0);
+    }
+}
+
+template<typename T>
+void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& c) {
+    std::vector<size_t> vec = mxx::stable_distribute(in, c);
+
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << vec << std::endl;
+
+    // calc ansv
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<T, size_t>> lr_mins;
+    //my_ansv(vec, left_nsv, right_nsv, lr_mins, c);
+    const size_t nonsv = std::numeric_limits<size_t>::max();
+    hh_ansv(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+
+
+    //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << left_nsv << std::endl;
+
+    left_nsv = mxx::gatherv(left_nsv, 0, c);
+    right_nsv = mxx::gatherv(right_nsv, 0, c);
+
+    if (c.rank() == 0) {
+        check_ansv<T, nearest_sm>(in, left_nsv, true, nonsv);
+        check_ansv<T, nearest_sm>(in, right_nsv, false, nonsv);
     }
 }
 
@@ -259,5 +285,25 @@ TEST(PsacANSV, ParallelANSVrand) {
         par_test_ansv_localidx<size_t, nearest_sm, furthest_eq>(in, c);
         par_test_ansv_localidx<size_t, nearest_eq, furthest_eq>(in, c);
         par_test_ansv_localidx<size_t, furthest_eq, furthest_eq>(in, c);
+    }
+}
+
+TEST(PsacANSV, MyANSV) {
+    mxx::comm c;
+
+    for (size_t n : {15, 137, 1000, 66666, 137900}) {
+    //size_t n = 43;
+    //size_t n = 1000;
+        std::vector<size_t> in;
+        if (c.rank() == 0) {
+            in.resize(n);
+            std::srand(7);
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 10;});
+            //for (size_t i = 0; i < n; ++i)
+            //    in[i] = i;
+            //std::random_shuffle(in.begin(), in.end());
+        }
+
+        par_test_my_ansv(in, c);
     }
 }
