@@ -325,6 +325,36 @@ size_t ansv_communicate_allpairs(const std::vector<std::pair<T,size_t>>& lr_mins
     return n_left_recv;
 }
 
+template <typename T, int left_type, int right_type>
+void x_ansv_local(const std::vector<T>& in,
+                std::vector<std::pair<T, size_t>>& lr_mins,
+                std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv) {
+    lr_mins = std::vector<std::pair<T, size_t>>(in.size());
+    size_t q = 0;
+    // left scan = find left matches
+    for (size_t i = 0; i < in.size(); ++i) {
+        size_t idx = in.size() - i - 1;
+        if (q > 0) {
+            if (in[idx] < lr_mins[q-1].first) {
+                // a new minimum (potentially)
+                if (left_type == furthest_eq) {
+                    
+                }
+            }
+        }
+        while (q > 0 && in[idx] < lr_mins[q-1].first) {
+            left_nsv[lr_mins[q-1].second] = idx;
+            --q;
+        }
+    }
+    // right scan = find right matches
+    for (size_t i = 0; i < in.size(); ++i) {
+        while (q > 0 && in[i] < lr_mins[q-1].first) {
+            right_nsv[lr_mins[q-1].second] = i;
+            --q;
+        }
+    }
+}
 
 template <typename T, bool direction, int indexing_type, typename Iterator>
 void ansv_local_finish_furthest_eq(const std::vector<T>& in, Iterator tail_begin, Iterator tail_end, size_t prefix, size_t tail_prefix, size_t nonsv, std::vector<size_t>& nsv) {
