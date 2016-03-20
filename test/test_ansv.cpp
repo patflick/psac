@@ -153,8 +153,8 @@ void par_test_ansv(const std::vector<T>& in, const mxx::comm& c) {
 }
 
 template<typename T>
-void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& c) {
-    std::vector<size_t> vec = mxx::stable_distribute(in, c);
+void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& comm) {
+    std::vector<size_t> vec = mxx::stable_distribute(in, comm);
 
     //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << vec << std::endl;
 
@@ -164,15 +164,17 @@ void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& c) {
     std::vector<std::pair<T, size_t>> lr_mins;
     //my_ansv(vec, left_nsv, right_nsv, lr_mins, c);
     const size_t nonsv = std::numeric_limits<size_t>::max();
-    hh_ansv(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+    //hh_ansv(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+    my_ansv_minpair(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
 
+    SDEBUG(vec);
+    SDEBUG(left_nsv);
+    SDEBUG(right_nsv);
 
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << left_nsv << std::endl;
+    left_nsv = mxx::gatherv(left_nsv, 0, comm);
+    right_nsv = mxx::gatherv(right_nsv, 0, comm);
 
-    left_nsv = mxx::gatherv(left_nsv, 0, c);
-    right_nsv = mxx::gatherv(right_nsv, 0, c);
-
-    if (c.rank() == 0) {
+    if (comm.rank() == 0) {
         check_ansv<T, nearest_sm>(in, left_nsv, true, nonsv);
         check_ansv<T, nearest_sm>(in, right_nsv, false, nonsv);
     }
@@ -298,7 +300,7 @@ TEST(PsacANSV, MyANSV) {
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 10;});
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
             //for (size_t i = 0; i < n; ++i)
             //    in[i] = i;
             //std::random_shuffle(in.begin(), in.end());

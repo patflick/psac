@@ -35,6 +35,9 @@ constexpr int local_indexing = 1;
 constexpr bool dir_left = true;
 constexpr bool dir_right = false;
 
+// for debugging
+//#define SDEBUG(x) mxx::sync_cerr(comm) << "[" << comm.rank() << "]: " #x " = " << (x) << std::endl
+#define SDEBUG(x)
 
 
 /**
@@ -223,16 +226,17 @@ size_t local_ansv_unmatched(const std::vector<T>& in, const size_t prefix, std::
     return n_left_mins;
 }
 
-
 template <typename T, int left_type, int right_type>
-size_t ansv_communicate_allpairs(const std::vector<std::pair<T,size_t>>& lr_mins, size_t n_left_mins, std::vector<std::pair<T, size_t>>& remote_seqs, const mxx::comm& comm) {
-    mxx::section_timer t(std::cerr, comm);
-    T local_min = lr_mins[n_left_mins].first;
-
+void ansv_comm_allpairs_params(const std::vector<std::pair<T, size_t>>& lr_mins,
+                               size_t n_left_mins,
+                               std::vector<size_t>& send_counts,
+                               std::vector<size_t>& send_displs,
+                               const mxx::comm& comm) {
     // allgather min and max of all left and right mins
+    T local_min = lr_mins[n_left_mins].first;
     std::vector<T> allmins = mxx::allgather(local_min, comm);
-    std::vector<size_t> send_counts(comm.size(), 0);
-    std::vector<size_t> send_displs(comm.size(), 0);
+    send_counts = std::vector<size_t>(comm.size(), 0);
+    send_displs = std::vector<size_t>(comm.size(), 0);
 
     // calculate which processor to exchange unmatched left_mins and right_mins with
     // 1) calculate communication parameters for left processes
@@ -243,7 +247,7 @@ size_t ansv_communicate_allpairs(const std::vector<std::pair<T,size_t>>& lr_mins
             size_t start_idx = left_idx;
             // move start back to other `equal` elements (there can be at most 2)
             if (right_type == furthest_eq && i < comm.rank()-1) {
-                if (start_idx > 0 && lr_mins[start_idx-1].first <= prev_mins_min) {
+                while (start_idx > 0 && lr_mins[start_idx-1].first <= prev_mins_min) {
                     --start_idx;
                 }
             }
@@ -309,6 +313,16 @@ size_t ansv_communicate_allpairs(const std::vector<std::pair<T,size_t>>& lr_mins
             }
         }
     }
+}
+
+
+template <typename T, int left_type, int right_type>
+size_t ansv_communicate_allpairs(const std::vector<std::pair<T,size_t>>& lr_mins, size_t n_left_mins, std::vector<std::pair<T, size_t>>& remote_seqs, const mxx::comm& comm) {
+    mxx::section_timer t(std::cerr, comm);
+
+    std::vector<size_t> send_counts;
+    std::vector<size_t> send_displs;
+    ansv_comm_allpairs_params<T, left_type, right_type>(lr_mins, n_left_mins, send_counts, send_displs, comm);
 
     // exchange lr_mins via all2all
     std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
@@ -338,7 +352,7 @@ void x_ansv_local(const std::vector<T>& in,
             if (in[idx] < lr_mins[q-1].first) {
                 // a new minimum (potentially)
                 if (left_type == furthest_eq) {
-                    
+                    // TODO
                 }
             }
         }
@@ -490,13 +504,10 @@ void ansv_local_finish_all(const std::vector<T>& in, const std::vector<std::pair
 }
 
 template <typename Iterator> //, int left_type, int right_type>
-void ansv_merge(Iterator left_begin, Iterator left_end, Iterator right_begin, Iterator right_end) {
+std::pair<Iterator,Iterator> ansv_merge(Iterator left_begin, Iterator left_end, Iterator right_begin, Iterator right_end) {
     // starting with the largest value (right most in left sequence and leftmost in right sequence)
     Iterator l = left_end;
     Iterator r = right_begin;
-    // TODO: one of the two sides need to write to the `nsv`, the other needs
-    // to be prepared for sending out
-    // TODO: global vs local indexing?
     while (l != left_begin && r != right_end) {
         Iterator l1 = l-1;
         if (l1->first < r->first) {
@@ -535,6 +546,7 @@ void ansv_merge(Iterator left_begin, Iterator left_end, Iterator right_begin, It
             l = lsm;
         }
     }
+    return std::pair<Iterator, Iterator>(l-1, r);
 }
 
 // parallel all nearest smallest value
@@ -638,13 +650,185 @@ void my_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
             right_nsv[i] += prefix;
         }
     }
-   // mxx::sync_cout(comm) << "left_nsv=" << left_nsv << std::endl;
-   // mxx::sync_cout(comm) << "right_nsv=" << right_nsv << std::endl;
+    // mxx::sync_cout(comm) << "left_nsv=" << left_nsv << std::endl;
+    // mxx::sync_cout(comm) << "right_nsv=" << right_nsv << std::endl;
     t.end_section("ANSV: finish ansv local");
 }
 
-//#define SDEBUG(x) mxx::sync_cerr(comm) << "[" << comm.rank() << "]: " #x " = " << (x) << std::endl
-#define SDEBUG(x) 
+template <typename T, int indexing_type = global_indexing>
+void my_ansv_minpair(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
+    mxx::section_timer t(std::cerr, comm);
+
+    size_t local_size = in.size();
+    size_t prefix = mxx::exscan(local_size, comm);
+
+    /*****************************************************************
+     *  Step 1: Locally calculate ANSV and save un-matched elements  *
+     *****************************************************************/
+    if (left_nsv.size() != in.size())
+        left_nsv.resize(in.size());
+    if (right_nsv.size() != in.size())
+        right_nsv.resize(in.size());
+    //size_t n_left_mins = local_ansv_unmatched<T, left_type, right_type>(in, prefix, lr_mins);
+    local_indexing_nsv<decltype(in.rbegin()), T, nearest_sm, dir_left>(in.rbegin(), in.rend(), lr_mins, left_nsv);
+    size_t n_left_mins = lr_mins.size();
+    local_indexing_nsv<decltype(in.begin()), T, nearest_sm, dir_right>(in.begin(), in.end(), lr_mins, right_nsv);
+    // change lrmin indexing to global
+    for (size_t i = 0; i < lr_mins.size(); ++i) {
+        lr_mins[i].second += prefix;
+    }
+
+    t.end_section("ANSV: local ansv");
+
+    //mxx::sync_cout(comm) << "in=" << in << std::endl;
+    //mxx::sync_cout(comm) << "lr_mins=" << lr_mins << std::endl;
+    //mxx::sync_cout(comm) << "left_nsv=" << left_nsv << std::endl;
+    //mxx::sync_cout(comm) << "right_nsv=" << right_nsv << std::endl;
+
+    /***************************************************************
+     *  Step 2: communicate un-matched elements to correct target  *
+     ***************************************************************/
+    std::vector<std::pair<T, size_t>> recved;
+    //size_t n_left_recv = ansv_communicate_allpairs<T, nearest_sm, nearest_sm>(lr_mins, n_left_mins, recved, comm);
+    t.end_section("ANSV: communicate all");
+    //mxx::sync_cout(comm) << "recved=" << recved << std::endl;
+    std::vector<size_t> send_counts;
+    std::vector<size_t> send_displs;
+    ansv_comm_allpairs_params<T, furthest_eq, furthest_eq>(lr_mins, n_left_mins, send_counts, send_displs, comm);
+    // determine min/max for each communication pair
+    std::vector<size_t> min_send_counts(send_counts.begin(), send_counts.end());
+    std::vector<size_t> min_recv_counts = mxx::all2all(min_send_counts, comm);
+    // TODO: modify send/recv counts by selecting the minimum partner
+    for (int i = 0; i < comm.size(); ++i) {
+        if (min_recv_counts[i] != 0 && min_send_counts[i] != 0) {
+            // choose the min and set the other one to 0
+            if (min_recv_counts[i] < min_send_counts[i]) {
+                min_send_counts[i] = 0;
+            } else if (min_recv_counts[i] == min_send_counts[i]) {
+                // need to handle this case so that its symmetric
+                if (i < comm.rank()) {
+                    min_recv_counts[i] = 0;
+                } else {
+                    min_send_counts[i] = 0;
+                }
+            } else {
+                min_recv_counts[i] = 0;
+            }
+        }
+    }
+
+    SDEBUG(lr_mins);
+    SDEBUG(send_counts);
+    SDEBUG(min_send_counts);
+    SDEBUG(min_recv_counts);
+
+    std::vector<size_t> recv_displs = mxx::local_exscan(min_recv_counts);
+    size_t recv_size = min_recv_counts.back() + recv_displs.back();
+    recved = std::vector<std::pair<T, size_t>>(recv_size);
+    // communicate through an all2all TODO: replace by send/recv + barrier?
+    t.end_section("ANSV: calc comm params");
+    mxx::all2allv(&lr_mins[0], min_send_counts, send_displs, &recved[0], min_recv_counts, recv_displs, comm);
+    t.end_section("ANSV: all2allv");
+
+
+    SDEBUG(recved);
+
+    /***************************************************************
+     *  Step 3: Again solve ANSV locally and use lr_mins as tails  *
+     ***************************************************************/
+    // use original send_counts as the range for the merge, and merge one sequence at a time
+    // at the same time determine the send_counts for sending back solutions
+    std::vector<size_t> ret_send_counts(min_recv_counts);
+    std::vector<size_t> ret_send_displs(recv_displs);
+    typedef typename std::vector<std::pair<T, size_t>>::iterator pair_it;
+    for (int i = comm.rank()-1; i >= 0; --i) {
+        // local_range = send_displs[i] + [0, send_counts[i])
+        if (min_recv_counts[i] > 0) {
+            // local merge
+            pair_it rec_begin = recved.begin()+recv_displs[i];
+            pair_it rec_end = recved.begin()+recv_displs[i]+min_recv_counts[i];
+            pair_it loc_begin = lr_mins.begin()+send_displs[i];
+            pair_it loc_end = lr_mins.begin()+send_displs[i]+send_counts[i];
+            pair_it rec_merge_end, loc_merge_end;
+            std::tie(rec_merge_end, loc_merge_end) = ansv_merge(rec_begin, rec_end, loc_begin, loc_end);
+            ret_send_counts[i] = min_recv_counts[i] - (rec_merge_end  - rec_begin + 1);
+            ret_send_displs[i] += (rec_merge_end - rec_begin + 1);
+        } else {
+            // this section is waiting for the result from the remote
+        }
+    }
+    for (int i = comm.rank()+1; i < comm.size(); ++i) {
+        if (min_recv_counts[i] > 0) {
+            pair_it loc_begin = lr_mins.begin()+send_displs[i];
+            pair_it loc_end = lr_mins.begin()+send_displs[i]+send_counts[i];
+            pair_it rec_begin = recved.begin()+recv_displs[i];
+            pair_it rec_end = recved.begin()+recv_displs[i]+min_recv_counts[i];
+            pair_it loc_merge_end, rec_merge_end;
+            std::tie(loc_merge_end, rec_merge_end) = ansv_merge(loc_begin, loc_end, rec_begin, rec_end);
+            ret_send_counts[i] = min_recv_counts[i] - (rec_end - rec_merge_end);
+            // displacements stay the same, since we take elements away at the end of the sequence
+        } else {
+            // remote is answering my queries, so nothing to do here
+        }
+    }
+
+    // get receive counts via all2all
+    std::vector<size_t> ret_recv_counts = mxx::all2all(ret_send_counts, comm);
+    std::vector<size_t> ret_recv_displs(send_displs);
+
+    // re-calculate the receive displacementsjjj
+    for (int i = comm.rank()+1; i < comm.size(); ++i) {
+        ret_recv_displs[i] += (send_counts[i] - ret_recv_counts[i]);
+    }
+
+    // return the solved elements via a all2all
+    mxx::all2allv(&recved[0], ret_send_counts, ret_send_displs, &lr_mins[0], ret_recv_counts, ret_recv_displs, comm);
+
+    // now finish solving locally
+
+    // step 3b) send solutions back (reverse communication) [minus one smaller than all element?]
+    //          or rather change send count if didn't find any solutions
+    // step 3x) receive where? receive into lr_mins, where i send from
+    //          lr_mins also needs to change accordingly in 3a) for those I solved for remote
+    //          then use the inverse of lr_mins (per side) to resolve locally
+    //          - add received mins to lr_mins (those that are smaller or equal to my own allmins[])
+    //          - those are the elements that I didn't send back in recv_..
+    //          - actually I already merged those elmeents with lr_mins, such that lr_mins already contains the answers for these?
+    // step 3c) now i have all the elements i need to solve everything locally?
+
+
+    // recalculate send/recv counts for inverse communication.
+
+
+    //mxx::sync_cout(comm) << "merged lrmins=" << lr_mins << std::endl;
+    //mxx::sync_cout(comm) << "merged lrmins=" << lr_mins << std::endl;
+    //ansv_local_finish_all<T, left_type, right_type, indexing_type>(in, recved, n_left_recv, prefix, nonsv, left_nsv, right_nsv);
+    // local to global indexing transformation
+    for (size_t i = 0; i < in.size(); ++i) {
+        if(left_nsv[i] >= local_size) {
+            if (lr_mins[left_nsv[i]-local_size].second == i+prefix) {
+                left_nsv[i] = nonsv;
+            } else {
+                left_nsv[i] = lr_mins[left_nsv[i]-local_size].second;
+            }
+        } else {
+            left_nsv[i] += prefix;
+        }
+        if (right_nsv[i] >= local_size) {
+            if (lr_mins[right_nsv[i]-local_size].second == i+prefix) {
+                right_nsv[i] = nonsv;
+            } else {
+                right_nsv[i] = lr_mins[right_nsv[i]-local_size].second;
+            }
+        } else {
+            right_nsv[i] += prefix;
+        }
+    }
+    // mxx::sync_cout(comm) << "left_nsv=" << left_nsv << std::endl;
+    // mxx::sync_cout(comm) << "right_nsv=" << right_nsv << std::endl;
+    t.end_section("ANSV: finish ansv local");
+}
+
 
 template <typename T> //, int left_type, int right_type>
 void hh_ansv_comm_params(const std::vector<std::pair<T,size_t>>& lr_mins,
@@ -936,9 +1120,6 @@ void hh_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
     }
     SDEBUG(left_nsv);
     SDEBUG(right_nsv);
-    // TODO
-    // send answers back with same comm parameters (minus one?)
-    //
 }
 
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
