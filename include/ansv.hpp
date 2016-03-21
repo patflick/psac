@@ -822,11 +822,125 @@ template <class Iterator, class T>
 inline size_t range_displacement(Iterator first, Iterator last, const T* base_ptr) {
     static_assert(std::is_same<typename std::iterator_traits<Iterator>::value_type, T>::value, "Iterator must have value_type `T`.");
     MXX_ASSERT(&(*first) >= base_ptr);
-    if (first == last || &(*first) <= &(*last-1)) {
+    if (first == last || &(*first) <= &(*(last-1))) {
         return &(*first) - base_ptr;
     } else {
         MXX_ASSERT(&(*(last-1)) >= base_ptr);
         return &(*(last-1)) - base_ptr;
+    }
+}
+
+template <typename Iterator, typename T>
+void ansv_comm_param_lbub_dir(Iterator min_begin, Iterator min_end, const std::pair<T,size_t>* base_ptr,
+                              bool direction, const mxx::comm& comm, const std::vector<T>& allmins,
+                              std::vector<size_t>& lb_counts, std::vector<size_t>& lb_displs,
+                              std::vector<size_t>& in_counts, std::vector<size_t>& in_displs,
+                              std::vector<size_t>& ub_counts, std::vector<size_t>& ub_displs) {
+        T local_min = allmins[comm.rank()];
+        //typedef typename std::vector<std::pair<T, size_t>>::iterator pair_it;
+        typedef Iterator pair_it;
+
+        // initialize lower range as empty
+        // lb <- [begin, begin)
+        pair_it lb_begin = min_begin;
+        pair_it lb_end = min_begin;
+
+        int next_proc = (direction == dir_left) ? comm.rank()-1 : comm.rank()+1;
+        T prev_mins_min = allmins[next_proc];
+
+        // if my largest value is smaller or equal to the min of my neighbor
+        // then I have to create a lower bound for it
+        bool first_lb = false;
+        T lb_val = lb_begin->first;
+        if (allmins[next_proc] >= lb_val) {
+            first_lb = true;
+            pair_it tmp = lb_end;
+            while (lb_end != min_end && lb_end->first == allmins[next_proc])
+                ++lb_end;
+            tmp = lb_end;
+            while (lb_end != min_end && lb_end->first == tmp->first)
+                ++lb_end;
+        }
+
+
+        for (int i = next_proc;;) {
+            if (i < 0 || i >= comm.size())
+                break;
+            if (allmins[i] >= lb_val) {
+                // only send previous lower box
+                lb_counts[i] = std::distance(lb_begin, lb_end);
+                lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
+            } else {
+            //if (allmins[i] < lb_val || (allmins[i] >= lb_val && ((i == next_proc) || allmins[i] < prev_mins_min))) {
+                // calculate bounds of inner range
+                pair_it in_begin = lb_end;
+                pair_it in_end = pair_lower_bound_dec(in_begin, min_end, allmins[i]);
+                // calculate bounds of upper range
+                // ub ends at the equal range of the first element larger than allmins
+                // ub = [in_end, ub_end)
+                pair_it ub_end = in_end;
+                while (ub_end != min_end && ub_end->first <= allmins[i])
+                    ++ub_end;
+                pair_it ub_mid = ub_end;
+                while (ub_end != min_end && ub_end->first == ub_mid->first)
+                    ++ub_end;
+                // TODO: re-enable after fixing the nsv to only have 2 per type
+                //MXX_ASSERT(ub_end - in_end <= 4);
+
+                // set send counts and offsets
+                lb_counts[i] = std::distance(lb_begin, lb_end);
+                lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
+
+                in_counts[i] = std::distance(in_begin, in_end);
+                in_displs[i] = range_displacement(in_begin, in_end, base_ptr);
+
+                ub_counts[i] = std::distance(in_end, ub_end);
+                ub_displs[i] = range_displacement(in_end, ub_end, base_ptr);
+
+                // lb <- ub
+                lb_begin = in_end;
+                lb_end = ub_end;
+                lb_val = lb_begin->first;
+            //} else {
+            }
+
+            // remember most min we have seen so far
+            if (allmins[i] < prev_mins_min) {
+                prev_mins_min = allmins[i];
+            }
+            // stop if we reached a processor with a smaller min than ours
+            if (allmins[i] < local_min) {
+                break;
+            }
+            if (direction == dir_left)
+                --i;
+            else
+                ++i;
+        }
+}
+
+
+template <typename T>
+void ansv_comm_param_lbub(const std::vector<std::pair<T, size_t>>& lr_mins,
+                          size_t n_left_mins, const mxx::comm& comm,
+                          std::vector<size_t>& lb_counts, std::vector<size_t>& lb_displs,
+                          std::vector<size_t>& in_counts, std::vector<size_t>& in_displs,
+                          std::vector<size_t>& ub_counts, std::vector<size_t>& ub_displs) {
+    // allgather min and max of all left and right mins
+    T local_min = lr_mins[n_left_mins].first;
+    std::vector<T> allmins = mxx::allgather(local_min, comm);
+    typedef typename std::vector<std::pair<T, size_t>>::const_iterator pair_it;
+    pair_it lr_begin = lr_mins.cbegin();
+    if (comm.rank() > 0) {
+        pair_it left_begin = lr_mins.cbegin();
+        pair_it left_end = lr_mins.cbegin()+n_left_mins;
+
+        ansv_comm_param_lbub_dir(left_begin, left_end, &lr_mins[0], dir_left, comm, allmins,
+                                 lb_counts, lb_displs, in_counts, in_displs, ub_counts, ub_displs);
+    }
+    if (comm.rank()+1 < comm.size()) {
+        ansv_comm_param_lbub_dir(lr_mins.crbegin(), lr_mins.crend()-n_left_mins, &lr_mins[0], dir_right, comm, allmins,
+                                 lb_counts, lb_displs, in_counts, in_displs, ub_counts, ub_displs);
     }
 }
 
@@ -845,6 +959,7 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     if (right_nsv.size() != in.size())
         right_nsv.resize(in.size());
     //size_t n_left_mins = local_ansv_unmatched<T, left_type, right_type>(in, prefix, lr_mins);
+    // TODO: make sure we only have 2 elements for every equal range
     local_indexing_nsv<decltype(in.rbegin()), T, nearest_sm, dir_left>(in.rbegin(), in.rend(), lr_mins, left_nsv);
     size_t n_left_mins = lr_mins.size();
     local_indexing_nsv<decltype(in.begin()), T, nearest_sm, dir_right>(in.begin(), in.end(), lr_mins, right_nsv);
@@ -855,247 +970,117 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
 
     t.end_section("ANSV: local ansv");
 
-    //mxx::sync_cout(comm) << "in=" << in << std::endl;
-    //mxx::sync_cout(comm) << "lr_mins=" << lr_mins << std::endl;
-    //mxx::sync_cout(comm) << "left_nsv=" << left_nsv << std::endl;
-    //mxx::sync_cout(comm) << "right_nsv=" << right_nsv << std::endl;
 
     /***************************************************************
      *  Step 2: communicate un-matched elements to correct target  *
      ***************************************************************/
-    std::vector<std::pair<T, size_t>> recved;
-    //size_t n_left_recv = ansv_communicate_allpairs<T, nearest_sm, nearest_sm>(lr_mins, n_left_mins, recved, comm);
-    t.end_section("ANSV: communicate all");
-    //mxx::sync_cout(comm) << "recved=" << recved << std::endl;
-    std::vector<size_t> send_counts(comm.size(), 0);
-    std::vector<size_t> send_displs(comm.size(), 0);
-    //ansv_comm_allpairs_params<T, furthest_eq, furthest_eq>(lr_mins, n_left_mins, send_counts, send_displs, comm);
 
 
     /*********************************************************************
      *                   get communication parameters                    *
      *********************************************************************/
 
-    // allgather min and max of all left and right mins
-    T local_min = lr_mins[n_left_mins].first;
-    std::vector<T> allmins = mxx::allgather(local_min, comm);
-
+    // get lb/in/ub counts and displacements
     std::vector<size_t> lb_counts(comm.size(), 0);
     std::vector<size_t> lb_displs(comm.size(), 0);
     std::vector<size_t> in_counts(comm.size(), 0);
     std::vector<size_t> in_displs(comm.size(), 0);
     std::vector<size_t> ub_counts(comm.size(), 0);
     std::vector<size_t> ub_displs(comm.size(), 0);
+    ansv_comm_param_lbub(lr_mins, n_left_mins, comm,
+                         lb_counts, lb_displs, in_counts, in_displs,
+                         ub_counts, ub_displs);
 
-    typedef typename std::vector<std::pair<T, size_t>>::iterator pair_it;
-    size_t dir_offset = 0;
-    pair_it lr_begin = lr_mins.begin();
-    if (comm.rank() > 0) {
-        pair_it left_begin = lr_mins.begin();
-        pair_it left_end = lr_mins.begin()+n_left_mins;
-        pair_it left_it = left_begin;
+    SDEBUG(lb_counts);
+    SDEBUG(in_counts);
+    SDEBUG(ub_counts);
 
-        pair_it lb_begin;
-        pair_it lb_end;
-        pair_it in_begin;
-        pair_it in_end;
-        pair_it ub_begin;
-        pair_it ub_end;
-        T prev_mins_min = allmins[comm.rank()-1];
-        // calc comm parameters for first neighboring processor
-        //while (left_it < left_end && left_it->first > allmins[comm.rank()-1])
-        //    ++left_it;
-        // now `left_it` is either the first equal element OR the end
-        // in which case our neighbor has a smaller min than ourselves
-        // thus we only have only an internal section, no lower or upper sections
-        //in_begin = left_begin;
-        //in_end = left_it;
+    SDEBUG(in_displs);
+    SDEBUG(ub_displs);
 
-        // initialize lower range as empty
-        // lb <- [begin, begin)
-        lb_begin = left_begin;
-        lb_end = left_begin;
-
-        for (int i = comm.rank()-1; i >= 0; --i) {
-            if (i == comm.rank()-1 || allmins[i] < prev_mins_min) {
-                // calculate bounds of inner range
-                in_begin = lb_end;
-                in_end = pair_lower_bound_dec(in_begin, left_end, allmins[i]);
-                // calculate bounds of upper range
-                // ub ends at the equal range of the first element larger than allmins
-                // ub = [in_end, ub_end)
-                ub_end = in_end;
-                while (ub_end != left_end && ub_end->first <= allmins[i])
-                    ++ub_end;
-                pair_it ub_mid = ub_end;
-                while (ub_end != left_end && ub_end->first == ub_mid->first)
-                    ++ub_end;
-                MXX_ASSERT(ub_end - in_end <= 4);
-
-                // set send counts and offsets
-                lb_counts[i] = std::distance(lb_begin, lb_end);
-                lb_displs[i] = range_displacement(lb_begin, lb_end, &lr_mins[0]);
-
-                in_counts[i] = std::distance(in_begin, in_end);
-                in_displs[i] = range_displacement(in_begin, in_end, &lr_mins[0]);
-
-                ub_counts[i] = std::distance(in_end, ub_end);
-                ub_displs[i] = range_displacement(in_end, ub_end, &lr_mins[0]);
-
-                // lb <- ub
-                lb_begin = in_end;
-                lb_end = ub_end;
-            } else {
-                // only send previous lower box
-                lb_counts[i] = std::distance(lb_begin, lb_end);
-                lb_displs[i] = range_displacement(lb_begin, lb_end, &lr_mins[0]);
-            }
-
-            // remember most min we have seen so far
-            if (allmins[i] < prev_mins_min) {
-                prev_mins_min = allmins[i];
-            }
-            // stop if we reached a processor with a smaller min than ours
-            if (allmins[i] < local_min) {
-                break;
-            }
-        }
-        // TODO: generalize the above as a function (is symmetric as left and right)
-
-        // TODO: upper is always send as part of inner, but only
-        //       after determining inner min
-        // TODO: lower is separate all2all communication step
-
-        /*
-        if (left_it == left_end) {
-            // just internal section, nothing else
-            // TODO: save internal section size
-            //break; // TODO: doesn't do anything!
-        } else {
-            // TODO: replace with std::find_if, or std::lower_bound/std::equal_range
-            // find lower bound
-            lb_begin = left_it;
-            // find lb_end: equal range
-            while (left_it < left_end && lb_begin->first == left_it->first)
-                ++left_it;
-            // next equal range
-            pair_it lb_mid = left_it;
-            while (left_it < left_end && lb_mid->first == left_it->first)
-                ++left_it;
-            lb_end = left_it;
-            MXX_ASSERT(lb_end - lb_begin <= 4);
-        }
-        */
-
-        for (int i = comm.rank()-2; i >= 0; --i) {
-
-            size_t start_idx = left_idx;
-            // move start back to other `equal` elements (there can be at most 2)
-            if (i < comm.rank()-1) {
-                while (start_idx > 0 && lr_mins[start_idx-1].first <= prev_mins_min) {
-                    --start_idx;
-                }
-            }
-            while (left_idx+1 < n_left_mins && lr_mins[left_idx].first >= allmins[i]) {
-                ++left_idx;
-            }
-            if (right_type == furthest_eq) {
-                while (left_idx+1 < n_left_mins && lr_mins[left_idx].first == lr_mins[left_idx+1].first) {
-                    ++left_idx;
-                }
-            }
-            // remember most min we have seen so far
-            if (allmins[i] < prev_mins_min) {
-                prev_mins_min = allmins[i];
-            }
-
-            // send all from [left_idx, start_idx] (inclusive) to proc `i`
-            send_counts[i] = left_idx - start_idx + 1;
-            send_displs[i] = start_idx;
-
-            // set comm parameters
-            if (allmins[i] < local_min) {
-                break;
-            }
-        }
-    }
-
-    // 2) calculate communication parameters for right process
-    if (comm.rank() < comm.size()-1) {
-        size_t right_idx = lr_mins.size()-1; // n_left_mins;
-        T prev_mins_min = allmins[comm.rank()+1];
-        for (int i = comm.rank()+1; i < comm.size(); ++i) {
-            // find the range which should be send
-            size_t end_idx = right_idx;
-            if (left_type == furthest_eq && i > comm.rank()+1) {
-                // move start back to other `equal` elements
-                while (end_idx+1 < lr_mins.size() && lr_mins[end_idx+1].first <= prev_mins_min) {
-                    ++end_idx;
-                }
-            }
-            while (right_idx > n_left_mins && lr_mins[right_idx].first >= allmins[i]) {
-                --right_idx;
-            }
-            if (left_type == furthest_eq) {
-                while (right_idx > n_left_mins && lr_mins[right_idx].first == lr_mins[right_idx-1].first) {
-                    --right_idx;
-                }
-            }
-
-            // remember most min we have seen so far
-            if (prev_mins_min > allmins[i]) {
-                prev_mins_min = allmins[i];
-            }
-
-            // now right_idx is the first one that is smaller than the min of `i`
-            // send all elements from [start_idx, right_idx]
-            send_counts[i] = end_idx - right_idx + 1;
-            send_displs[i] = right_idx;
-
-            // can stop if an overall smaller min than my own has been found
-            if (allmins[i] < local_min) {
-                break;
-            }
-        }
-    }
+    // all2all communicate the send counts
+    std::vector<size_t> lb_recv_counts = mxx::all2all(lb_counts, comm);
+    std::vector<size_t> in_recv_counts = mxx::all2all(in_counts, comm);
+    std::vector<size_t> ub_recv_counts = mxx::all2all(ub_counts, comm);
 
 
-    // determine min/max for each communication pair
-    std::vector<size_t> min_send_counts(send_counts.begin(), send_counts.end());
-    std::vector<size_t> min_recv_counts = mxx::all2all(min_send_counts, comm);
-    // TODO: modify send/recv counts by selecting the minimum partner
+    // determine minimum of `in` counts
+    std::vector<size_t> inub_send_counts(comm.size(), 0);
+    std::vector<size_t> inub_send_displs(comm.size(), 0);
+    std::vector<size_t> inub_recv_counts(comm.size(), 0);
+    std::vector<size_t> inub_recv_displs(comm.size(), 0);
+
+    std::vector<size_t> min_send_counts(in_counts);
+    std::vector<size_t> min_recv_counts(in_recv_counts);
+    std::vector<size_t> lb_recv_displs(comm.size(), 0);
+    std::vector<size_t> in_recv_displs(comm.size(), 0);
+    size_t recv_offset = 0;
     for (int i = 0; i < comm.size(); ++i) {
-        if (min_recv_counts[i] != 0 && min_send_counts[i] != 0) {
-            // choose the min and set the other one to 0
-            if (min_recv_counts[i] < min_send_counts[i]) {
-                min_send_counts[i] = 0;
-            } else if (min_recv_counts[i] == min_send_counts[i]) {
-                // need to handle this case so that its symmetric
-                if (i < comm.rank()) {
-                    min_recv_counts[i] = 0;
-                } else {
-                    min_send_counts[i] = 0;
-                }
-            } else {
+        // choose the min and set the other one to 0
+        if (min_recv_counts[i] < min_send_counts[i]) {
+            min_send_counts[i] = 0;
+        } else if (min_recv_counts[i] == min_send_counts[i]) {
+            // need to handle this case so that its symmetric
+            if (i < comm.rank()) {
                 min_recv_counts[i] = 0;
+            } else {
+                min_send_counts[i] = 0;
             }
+        } else {
+            min_recv_counts[i] = 0;
+        }
+
+        // calculate receive counts and offsets
+        if (i < comm.rank()) {
+            // sending to left [lb, in, ub]
+            inub_send_counts[i] = min_send_counts[i] + ub_counts[i];
+            inub_send_displs[i] = (in_counts[i] == 0) ? ub_displs[i] : in_displs[i];
+            // receiving from left: [ub, in, lb]
+            // [ub, in]
+            inub_recv_counts[i] = min_recv_counts[i] + ub_recv_counts[i];
+            inub_recv_displs[i] = recv_offset;
+            recv_offset += ub_recv_counts[i];
+            in_recv_displs[i] = recv_offset;
+            recv_offset += min_recv_counts[i];
+            // lb
+            lb_recv_displs[i] = recv_offset;
+            recv_offset += lb_recv_counts[i];
+        } else if (i > comm.rank()) {
+            // sending to right: [ub, in, lb]
+            inub_send_counts[i] = min_send_counts[i] + ub_counts[i];
+            inub_send_displs[i] = (ub_counts[i] == 0) ? in_displs[i] : ub_displs[i];
+            // receiving from right: [lb, in, ub]
+            // lb
+            lb_recv_displs[i] = recv_offset;
+            recv_offset += lb_recv_counts[i];
+            // [in, ub]
+            inub_recv_counts[i] = min_recv_counts[i] + ub_recv_counts[i];
+            inub_recv_displs[i] = recv_offset;
+            in_recv_displs[i] = recv_offset;
+            recv_offset += min_recv_counts[i];
+            recv_offset += ub_recv_counts[i];
         }
     }
 
-    SDEBUG(lr_mins);
-    SDEBUG(send_counts);
-    SDEBUG(min_send_counts);
-    SDEBUG(min_recv_counts);
+    // create receive buffer for all elements
+    std::vector<std::pair<T, size_t>> recved(recv_offset);
 
-    std::vector<size_t> recv_displs = mxx::local_exscan(min_recv_counts);
-    size_t recv_size = min_recv_counts.back() + recv_displs.back();
-    recved = std::vector<std::pair<T, size_t>>(recv_size);
-    // communicate through an all2all TODO: replace by send/recv + barrier?
-    t.end_section("ANSV: calc comm params");
-    mxx::all2allv(&lr_mins[0], min_send_counts, send_displs, &recved[0], min_recv_counts, recv_displs, comm);
+    // lb communication
+    mxx::all2allv(&lr_mins[0], lb_counts, lb_displs,
+                  &recved[0], lb_recv_counts, lb_recv_displs, comm);
+
+    // in+ub communication
+    mxx::all2allv(&lr_mins[0], inub_send_counts, inub_send_displs,
+                  &recved[0], inub_recv_counts, inub_recv_displs, comm);
+
+
     t.end_section("ANSV: all2allv");
 
 
+    SDEBUG(in);
+    SDEBUG(left_nsv);
+    SDEBUG(right_nsv);
+    SDEBUG(lr_mins);
     SDEBUG(recved);
 
     /***************************************************************
@@ -1103,8 +1088,20 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
      ***************************************************************/
     // use original send_counts as the range for the merge, and merge one sequence at a time
     // at the same time determine the send_counts for sending back solutions
-    std::vector<size_t> ret_send_counts(min_recv_counts);
-    std::vector<size_t> ret_send_displs(recv_displs);
+
+    // TODO: for now simply merge everything and then return the `in` ranges
+    size_t n_left_recv = 0;
+    if (comm.rank() > 0) {
+        // merge left
+        n_left_recv = lb_recv_displs[comm.rank()-1] + lb_recv_counts[comm.rank()-1];
+        ansv_merge(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin(), lr_mins.begin()+n_left_mins);
+    }
+    if (comm.rank()+1 < comm.size()) {
+        ansv_merge(lr_mins.begin()+n_left_mins, lr_mins.end(), recved.begin()+n_left_recv, recved.end());
+    }
+    SDEBUG(lr_mins);
+    SDEBUG(recved);
+    /*
     for (int i = comm.rank()-1; i >= 0; --i) {
         // local_range = send_displs[i] + [0, send_counts[i])
         if (min_recv_counts[i] > 0) {
@@ -1135,18 +1132,11 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
             // remote is answering my queries, so nothing to do here
         }
     }
-
-    // get receive counts via all2all
-    std::vector<size_t> ret_recv_counts = mxx::all2all(ret_send_counts, comm);
-    std::vector<size_t> ret_recv_displs(send_displs);
-
-    // re-calculate the receive displacementsjjj
-    for (int i = comm.rank()+1; i < comm.size(); ++i) {
-        ret_recv_displs[i] += (send_counts[i] - ret_recv_counts[i]);
-    }
+    */
 
     // return the solved elements via a all2all
-    mxx::all2allv(&recved[0], ret_send_counts, ret_send_displs, &lr_mins[0], ret_recv_counts, ret_recv_displs, comm);
+    mxx::all2allv(&recved[0], min_recv_counts, in_recv_displs, &lr_mins[0], min_send_counts, in_displs, comm);
+    SDEBUG(lr_mins);
 
     // local to global indexing transformation
     for (size_t i = 0; i < in.size(); ++i) {
@@ -1170,6 +1160,8 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
         }
     }
     t.end_section("ANSV: finish ansv local");
+    SDEBUG(left_nsv);
+    SDEBUG(right_nsv);
 }
 
 template <typename T> //, int left_type, int right_type>

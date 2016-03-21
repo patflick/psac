@@ -165,7 +165,8 @@ void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& comm) {
     //my_ansv(vec, left_nsv, right_nsv, lr_mins, c);
     const size_t nonsv = std::numeric_limits<size_t>::max();
     //hh_ansv(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
-    my_ansv_minpair(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    //my_ansv_minpair(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    my_ansv_minpair_lbub(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
 
     SDEBUG(vec);
     SDEBUG(left_nsv);
