@@ -1257,7 +1257,7 @@ size_t hh_ansv_comm(const std::vector<std::pair<T, size_t>>& lr_mins, const std:
         if (send_counts[i] > 0) {
             // TODO: use proper mxx::isend and combine futures?
             reqs.push_back(MPI_REQUEST_NULL);
-            MPI_Isend(&lr_mins[0]+send_offsets[i], (int)send_counts[i], dt.type(), i, 0, comm, &reqs[0]);
+            MPI_Isend(const_cast<std::pair<T,size_t>*>(&lr_mins[0]+send_offsets[i]), (int)send_counts[i], dt.type(), i, 0, comm, &reqs[0]);
         }
     }
 
