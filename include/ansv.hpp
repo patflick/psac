@@ -131,7 +131,7 @@ void local_indexing_nsv_2(Iterator begin, Iterator end, std::vector<std::pair<T,
         size_t prefix = 0;
         //update_nsv_queue<T, nsv_type>(nsv, q, *it, idx, prefix);
         while (!q.empty() && *it < q.back().first) {
-            // this is only correct for nearest_sm and nearest_eq
+            // this is only works for nearest_sm and nearest_eq
             // furthest_eq requires a post-processing of _all_ items at the end
             nsv[q.back().second-prefix] = idx;
             if (nsv_type == nearest_sm) {
@@ -142,6 +142,14 @@ void local_indexing_nsv_2(Iterator begin, Iterator end, std::vector<std::pair<T,
                     }
                     q.pop_back();
                     nsv[q.back().second-prefix] = idx;
+                }
+            }
+            if (nsv_type == nearest_eq) {
+                // if there is a second element with the same value
+                // pop that one as well, since it alreay has its
+                // nsv set correctly
+                if (q.size() >= 2 && q.back().first  == (q.end()-2)->first) {
+                    q.pop_back();
                 }
             }
             q.pop_back();
@@ -173,9 +181,20 @@ void local_indexing_nsv_2(Iterator begin, Iterator end, std::vector<std::pair<T,
         unmatched.insert(unmatched.end(), q.begin(), q.end());
     }
     for (size_t i = prev_size; i < unmatched.size(); ++i) {
-        nsv[unmatched[i].second] = n + i;
+        if (nsv_type == nearest_eq) {
+            // if nearest_eq, don't do this for the second of an equal range
+            if (dir == dir_left && i > prev_size && unmatched[i-1].first == unmatched[i].first) {
+                // nsv is already set, don't change
+            } else if (dir == dir_right && i+1 < unmatched.size() && unmatched[i].first == unmatched[i+1].first) {
+                // nsv is already set, don't change
+            } else {
+                nsv[unmatched[i].second] = n + i;
+            }
+        } else {
+            nsv[unmatched[i].second] = n + i;
+        }
     }
-    if (dir == dir_left) {
+    if (dir == dir_left && nsv_type == nearest_sm) {
         size_t n_left_mins = unmatched.size();
         for (auto& x : eq) {
             nsv[x.second] += n_left_mins;
@@ -445,7 +464,9 @@ void ansv_local_finish_furthest_eq(const std::vector<T>& in, Iterator tail_begin
     // since we never pop, we just need to keep track of an iterator position
     size_t n_tail = std::distance(tail_begin, tail_end);
     for (size_t i = 0; i < n_tail; ++i) {
-        auto r = (direction == dir_left) ? tail_begin+i : tail_begin+(n_tail-i-1);
+        // TODO: FIXME: the direction depends on whehter lr_mins or recved is passed
+        //              both of which happens somewhere in my code
+        auto r = (direction == dir_right) ? tail_begin+i : tail_begin+(n_tail-i-1);
         // TODO: I should be able to assume that the sequence is non-decreasing
         while (!q.empty() && r->first < q.back().first) {
             q.pop_back();
@@ -976,19 +997,28 @@ void ansv_comm_param_lbub_dir(Iterator min_begin, Iterator min_end, const std::p
         for (int i = next_proc;;) {
             if (i < 0 || i >= comm.size())
                 break;
-            if (allmins[i] >= lb_val) {
+            if (allmins[i] > lb_val) {
                 // only send previous lower box
+                lb_counts[i] = std::distance(lb_begin, lb_end);
+                lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
+            } else if (allmins[i] == lb_val) {
+                // possibly adjust lb to include one smaller
+                if (lb_begin->first == (lb_end-1)->first) {
+                    pair_it lb_mid = lb_end;
+                    while (lb_end != min_end && lb_end->first == lb_mid->first)
+                        ++lb_end;
+                }
                 lb_counts[i] = std::distance(lb_begin, lb_end);
                 lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
             } else {
                 // calculate bounds of inner range
                 pair_it in_begin = lb_end;
-                pair_it in_end = pair_lower_bound_dec(in_begin, min_end, allmins[i]);
+                pair_it in_end = pair_lower_bound_dec(in_begin, min_end, std::max<T>(allmins[i],local_min));
                 // calculate bounds of upper range
                 // ub ends at the equal range of the first element larger than allmins
                 // ub = [in_end, ub_end)
                 pair_it ub_end = in_end;
-                while (ub_end != min_end && ub_end->first <= allmins[i])
+                while (ub_end != min_end && ub_end->first == allmins[i])
                     ++ub_end;
                 pair_it ub_mid = ub_end;
                 while (ub_end != min_end && ub_end->first == ub_mid->first)
@@ -1065,8 +1095,6 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
         left_nsv.resize(in.size());
     if (right_nsv.size() != in.size())
         right_nsv.resize(in.size());
-    //size_t n_left_mins = local_ansv_unmatched<T, left_type, right_type>(in, prefix, lr_mins);
-    // TODO: make sure we only have 2 elements for every equal range
     local_indexing_nsv_2<decltype(in.rbegin()), T, left_type, dir_left>(in.rbegin(), in.rend(), lr_mins, left_nsv);
     size_t n_left_mins = lr_mins.size();
     local_indexing_nsv_2<decltype(in.begin()), T, right_type, dir_right>(in.begin(), in.end(), lr_mins, right_nsv);
@@ -1141,7 +1169,7 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
         if (i < comm.rank()) {
             // sending to left [lb, in, ub]
             inub_send_counts[i] = min_send_counts[i] + ub_counts[i];
-            inub_send_displs[i] = (in_counts[i] == 0) ? ub_displs[i] : in_displs[i];
+            inub_send_displs[i] = (min_send_counts[i] == 0) ? ub_displs[i] : in_displs[i];
             // receiving from left: [ub, in, lb]
             // [ub, in]
             inub_recv_counts[i] = min_recv_counts[i] + ub_recv_counts[i];
@@ -1216,45 +1244,101 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     SDEBUG(lr_mins);
 
     // local to global indexing transformation
-    for (size_t i = 0; i < lr_mins.size(); ++i) {
-        // if local element
+    // TODO: start from center (most min elements) and iterate outwards
+    //       to find the border of nsv and nonsv
+    size_t left_upper = n_left_mins;
+    for (; left_upper > 0; --left_upper) {
+        size_t j = left_upper - 1;
+        if (prefix <= lr_mins[j].second && lr_mins[j].second < prefix+local_size) {
+            size_t idx = lr_mins[j].second - prefix;
+            if (left_nsv[idx] >= local_size && left_nsv[idx] == local_size+j) {
+                left_nsv[idx] = nonsv;
+                lr_mins[j].second = nonsv;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    size_t right_upper = n_left_mins;
+    for (; right_upper != lr_mins.size(); ++right_upper) {
+        size_t i = right_upper;
         if (prefix <= lr_mins[i].second && lr_mins[i].second < prefix+local_size) {
             size_t idx = lr_mins[i].second - prefix;
-            if (left_nsv[idx] >= local_size && left_nsv[idx] == local_size+i) {
-                left_nsv[idx] = nonsv;
-                lr_mins[i].second = nonsv;
-            }
             if (right_nsv[idx] >= local_size && right_nsv[idx] == local_size+i) {
                 right_nsv[idx] = nonsv;
                 lr_mins[i].second = nonsv;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    if (left_type == furthest_eq) {
+        ansv_local_finish_furthest_eq<T, dir_left, indexing_type>(in, lr_mins.begin(), lr_mins.begin()+left_upper, prefix, 0, nonsv, left_nsv);
+    }
+    if (right_type == furthest_eq) {
+        ansv_local_finish_furthest_eq<T, dir_right, indexing_type>(in, lr_mins.begin()+right_upper, lr_mins.end(), prefix, right_upper, nonsv, right_nsv);
+    }
+
+    if (indexing_type == global_indexing) {
+        for (size_t i = 0; i < in.size(); ++i) {
+            if (left_type != furthest_eq) {
+                if (left_nsv[i] != nonsv) {
+                    if(left_nsv[i] >= local_size) {
+                        if (lr_mins[left_nsv[i]-local_size].second == i+prefix) {
+                            //assert(false);
+                            left_nsv[i] = nonsv;
+                        } else {
+                            left_nsv[i] = lr_mins[left_nsv[i]-local_size].second;
+                        }
+                    } else {
+                        left_nsv[i] += prefix;
+                    }
+                }
+            }
+            if (right_type != furthest_eq) {
+                if (right_nsv[i] != nonsv) {
+                    if (right_nsv[i] >= local_size) {
+                        if (lr_mins[right_nsv[i]-local_size].second == i+prefix) {
+                            //assert(false);
+                            right_nsv[i] = nonsv;
+                        } else {
+                            right_nsv[i] = lr_mins[right_nsv[i]-local_size].second;
+                        }
+                    } else {
+                        right_nsv[i] += prefix;
+                    }
+                }
             }
         }
     }
-    // TODO: generalize for different nsv_types
-    for (size_t i = 0; i < in.size(); ++i) {
-        if (left_nsv[i] != nonsv) {
-            if(left_nsv[i] >= local_size) {
-                if (lr_mins[left_nsv[i]-local_size].second == i+prefix) {
-                    left_nsv[i] = nonsv;
-                } else {
-                    left_nsv[i] = lr_mins[left_nsv[i]-local_size].second;
+
+    if (indexing_type == local_indexing) {
+        // only need to fix nearest_sm
+        for (size_t i = 0; i < in.size(); ++i) {
+            if (left_type != furthest_eq) {
+                if (left_nsv[i] != nonsv && left_nsv[i] >= local_size) {
+                    if (lr_mins[left_nsv[i]-local_size].second == nonsv
+                        || lr_mins[left_nsv[i]-local_size].second == prefix + i) {
+                        left_nsv[i] = nonsv;
+                    }
                 }
-            } else {
-                left_nsv[i] += prefix;
             }
-        }
-        if (right_nsv[i] != nonsv) {
-            if (right_nsv[i] >= local_size) {
-                if (lr_mins[right_nsv[i]-local_size].second == i+prefix) {
-                    right_nsv[i] = nonsv;
-                } else {
-                    right_nsv[i] = lr_mins[right_nsv[i]-local_size].second;
+            if (right_type != furthest_eq) {
+                if (right_nsv[i] != nonsv && right_nsv[i] >= local_size) {
+                    if (lr_mins[right_nsv[i]-local_size].second == nonsv
+                        || lr_mins[right_nsv[i]-local_size].second == prefix + i) {
+                        right_nsv[i] = nonsv;
+                    }
                 }
-            } else {
-                right_nsv[i] += prefix;
             }
         }
     }
+
     t.end_section("ANSV: finish ansv local");
     SDEBUG(left_nsv);
     SDEBUG(right_nsv);

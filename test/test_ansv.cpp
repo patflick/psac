@@ -68,7 +68,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                             // everything is larger than in[i]
                             if (sm_nsv[i] + 1 < i) {
                                 T m2 = *minquery.query(in.cbegin()+sm_nsv[i]+1, in.cbegin()+i);
-                                EXPECT_GT(m2, in[i]);
+                                EXPECT_GT(m2, in[i]) << " i=" << i << ",s=" << s;
                             }
                             // no other equal to in[i] in between
                             //EXPECT_TRUE(m > in[i]) << " for range [" << s+1 << "," << i << "], m=" << m << ", in[i]=" << in[i] << ", in[s]=" << in[s];
@@ -81,7 +81,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                             EXPECT_LT(in[nsv[s]], in[s]) << "i=" << i << ", s=" << s << ", nsv[s]=" << nsv[s];
                         }
                     } else { // type == nearest_eq
-                        EXPECT_TRUE(in[i] < m && in[s] < m);
+                        EXPECT_TRUE(in[i] < m && in[s] < m) << "i=" << i << ",s=" << s;
                     }
                 }
                 // element at `s` is smaller than `in[i]`
@@ -138,7 +138,10 @@ void par_test_ansv(const std::vector<T>& in, const mxx::comm& c) {
     // calc ansv
     std::vector<size_t> left_nsv;
     std::vector<size_t> right_nsv;
-    ansv<T,left_type,right_type>(vec, left_nsv, right_nsv, c);
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    //ansv<T,left_type,right_type>(vec, left_nsv, right_nsv, c);
+    std::vector<std::pair<T,size_t>> lr_mins;
+    my_ansv_minpair_lbub<T,left_type,right_type>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
 
 
     //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << left_nsv << std::endl;
@@ -147,8 +150,8 @@ void par_test_ansv(const std::vector<T>& in, const mxx::comm& c) {
     right_nsv = mxx::gatherv(right_nsv, 0, c);
 
     if (c.rank() == 0) {
-        check_ansv<T, left_type>(in, left_nsv, true, 0);
-        check_ansv<T, right_type>(in, right_nsv, false, 0);
+        check_ansv<T, left_type>(in, left_nsv, true, nonsv);
+        check_ansv<T, right_type>(in, right_nsv, false, nonsv);
     }
 }
 
@@ -166,7 +169,7 @@ void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& comm) {
     const size_t nonsv = std::numeric_limits<size_t>::max();
     //hh_ansv(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
     //my_ansv_minpair(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
-    my_ansv_minpair_lbub(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    my_ansv_minpair_lbub<T, nearest_eq, nearest_sm>(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
 
     SDEBUG(vec);
     SDEBUG(left_nsv);
@@ -176,7 +179,7 @@ void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& comm) {
     right_nsv = mxx::gatherv(right_nsv, 0, comm);
 
     if (comm.rank() == 0) {
-        check_ansv<T, nearest_sm>(in, left_nsv, true, nonsv);
+        check_ansv<T, nearest_eq>(in, left_nsv, true, nonsv);
         check_ansv<T, nearest_sm>(in, right_nsv, false, nonsv);
     }
 }
@@ -193,7 +196,8 @@ void par_test_ansv_localidx(const std::vector<T>& in, const mxx::comm& c) {
     std::vector<std::pair<T, size_t>> lr_mins;
 
     const size_t nonsv = std::numeric_limits<size_t>::max();
-    ansv<T,left_type,right_type,local_indexing>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+    //ansv<T,left_type,right_type,local_indexing>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+    my_ansv_minpair_lbub<T,left_type,right_type,local_indexing>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
     ASSERT_TRUE(mxx::all_of(vec.size() == left_nsv.size() && vec.size() == right_nsv.size(), c));
 
     //mxx::sync_cout(c) << "[rank " << c.rank() << "]: in=" << in << std::endl;
@@ -256,12 +260,11 @@ TEST(PsacANSV, ParallelANSVrand) {
     mxx::comm c;
 
     for (size_t n : {13, 137, 1000, 66666, 137900}) {
-    //size_t n = 1000;
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 1000;});
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 4;});
         }
 
         par_test_ansv<size_t, nearest_sm, nearest_sm>(in, c);
@@ -291,6 +294,7 @@ TEST(PsacANSV, ParallelANSVrand) {
     }
 }
 
+/*
 TEST(PsacANSV, MyANSV) {
     mxx::comm c;
 
@@ -301,7 +305,7 @@ TEST(PsacANSV, MyANSV) {
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 4;});
             //for (size_t i = 0; i < n; ++i)
             //    in[i] = i;
             //std::random_shuffle(in.begin(), in.end());
@@ -310,3 +314,4 @@ TEST(PsacANSV, MyANSV) {
         par_test_my_ansv(in, c);
     }
 }
+*/
