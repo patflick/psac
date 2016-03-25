@@ -28,7 +28,7 @@
 #include <limits>
 #include <utility>
 
-// check ansv via a rmq
+// check the correctness of ansv via a rmq
 template <typename T, int type = nearest_sm>
 void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool left, size_t nonsv) {
     // construct RMQ
@@ -129,63 +129,14 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
     }
 }
 
-template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
-void par_test_ansv(const std::vector<T>& in, const mxx::comm& c) {
-    std::vector<size_t> vec = mxx::stable_distribute(in, c);
+// the API declaration of a generalized ANSV function
+template <typename T>
+using ansv_func_t=void (*)(const std::vector<T>&, std::vector<size_t>&, std::vector<size_t>&, std::vector<std::pair<T, size_t>>&, const mxx::comm& c, size_t);
 
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << vec << std::endl;
-
-    // calc ansv
-    std::vector<size_t> left_nsv;
-    std::vector<size_t> right_nsv;
-    size_t nonsv = std::numeric_limits<size_t>::max();
-    //ansv<T,left_type,right_type>(vec, left_nsv, right_nsv, c);
-    std::vector<std::pair<T,size_t>> lr_mins;
-    my_ansv_minpair_lbub<T,left_type,right_type>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
-
-
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << left_nsv << std::endl;
-
-    left_nsv = mxx::gatherv(left_nsv, 0, c);
-    right_nsv = mxx::gatherv(right_nsv, 0, c);
-
-    if (c.rank() == 0) {
-        check_ansv<T, left_type>(in, left_nsv, true, nonsv);
-        check_ansv<T, right_type>(in, right_nsv, false, nonsv);
-    }
-}
-
-template<typename T>
-void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& comm) {
-    std::vector<size_t> vec = mxx::stable_distribute(in, comm);
-
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]:" << vec << std::endl;
-
-    // calc ansv
-    std::vector<size_t> left_nsv;
-    std::vector<size_t> right_nsv;
-    std::vector<std::pair<T, size_t>> lr_mins;
-    //my_ansv(vec, left_nsv, right_nsv, lr_mins, c);
-    const size_t nonsv = std::numeric_limits<size_t>::max();
-    //hh_ansv(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
-    //my_ansv_minpair(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
-    my_ansv_minpair_lbub<T, nearest_eq, nearest_sm>(vec, left_nsv, right_nsv, lr_mins, comm, nonsv);
-
-    SDEBUG(vec);
-    SDEBUG(left_nsv);
-    SDEBUG(right_nsv);
-
-    left_nsv = mxx::gatherv(left_nsv, 0, comm);
-    right_nsv = mxx::gatherv(right_nsv, 0, comm);
-
-    if (comm.rank() == 0) {
-        check_ansv<T, nearest_eq>(in, left_nsv, true, nonsv);
-        check_ansv<T, nearest_sm>(in, right_nsv, false, nonsv);
-    }
-}
-
-template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
-void par_test_ansv_localidx(const std::vector<T>& in, const mxx::comm& c) {
+// parallel test for generalized ANSV
+template <typename T, int left_type, int right_type, int indexing_type>
+void par_test_gansv(const std::vector<T>& in, ansv_func_t<T> ansv_func, const mxx::comm& c) {
+    // stably distribute input across processors
     std::vector<size_t> vec = mxx::stable_distribute(in, c);
     size_t prefix = mxx::exscan(vec.size(), c);
 
@@ -196,42 +147,74 @@ void par_test_ansv_localidx(const std::vector<T>& in, const mxx::comm& c) {
 
     const size_t nonsv = std::numeric_limits<size_t>::max();
     //ansv<T,left_type,right_type,local_indexing>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
-    my_ansv_minpair_lbub<T,left_type,right_type,local_indexing>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+    //my_ansv_minpair_lbub<T,left_type,right_type,indexing_type>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+    ansv_func(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
     ASSERT_TRUE(mxx::all_of(vec.size() == left_nsv.size() && vec.size() == right_nsv.size(), c));
 
     // resolve local indexing into global indexing prior to gathering the results
-    for (size_t i = 0; i < vec.size(); ++i) {
-        // resolve left
-        if (left_nsv[i] != nonsv) {
-            if (left_nsv[i] < vec.size()) {
-                // this is a local element, add prefix
-                left_nsv[i] += prefix;
-            } else {
-                EXPECT_TRUE(left_nsv[i] >= vec.size() && left_nsv[i] < vec.size()+lr_mins.size());
-                left_nsv[i] = lr_mins[left_nsv[i]-vec.size()].second;
+    if (indexing_type == local_indexing) {
+        for (size_t i = 0; i < vec.size(); ++i) {
+            // resolve left
+            if (left_nsv[i] != nonsv) {
+                if (left_nsv[i] < vec.size()) {
+                    // this is a local element, add prefix
+                    left_nsv[i] += prefix;
+                } else {
+                    EXPECT_TRUE(left_nsv[i] >= vec.size() && left_nsv[i] < vec.size()+lr_mins.size());
+                    left_nsv[i] = lr_mins[left_nsv[i]-vec.size()].second;
+                }
             }
-        }
-        // resolve right
-        if (right_nsv[i] != nonsv) {
-            if (right_nsv[i] < vec.size()) {
-                // this is a local element, add prefix
-                right_nsv[i] += prefix;
-            } else {
-                EXPECT_TRUE(right_nsv[i] >= vec.size() && right_nsv[i] < vec.size()+lr_mins.size());
-                right_nsv[i] = lr_mins[right_nsv[i]-vec.size()].second;
+            // resolve right
+            if (right_nsv[i] != nonsv) {
+                if (right_nsv[i] < vec.size()) {
+                    // this is a local element, add prefix
+                    right_nsv[i] += prefix;
+                } else {
+                    EXPECT_TRUE(right_nsv[i] >= vec.size() && right_nsv[i] < vec.size()+lr_mins.size());
+                    right_nsv[i] = lr_mins[right_nsv[i]-vec.size()].second;
+                }
             }
         }
     }
 
-
+    // gather results
     left_nsv = mxx::gatherv(left_nsv, 0, c);
     right_nsv = mxx::gatherv(right_nsv, 0, c);
 
+    // sequentially check the correctness on processor 0
     if (c.rank() == 0) {
         check_ansv<T,left_type>(in, left_nsv, true, nonsv);
         check_ansv<T,right_type>(in, right_nsv, false, nonsv);
     }
 }
+
+
+/*********************************************************************
+ * Macros for generating all combination tests for generalized ANSV  *
+ *********************************************************************/
+
+#define PAR_TEST_GANSV(T, in, c, func_name, idx_type, left_type, right_type) \
+        {std::string str = "" #func_name "<" #left_type ", " #right_type ", " #idx_type ">"; \
+        SCOPED_TRACE(str); \
+        par_test_gansv<T, left_type, right_type, idx_type>(in, &func_name<T,left_type,right_type,idx_type>, c); }
+
+#define PAR_TEST_GANSV_ALLRIGHT(T, in , c, func_name, idx_type, left_type) \
+        PAR_TEST_GANSV(T, in, c, func_name, idx_type, left_type, nearest_sm) \
+        PAR_TEST_GANSV(T, in, c, func_name, idx_type, left_type, nearest_eq) \
+        PAR_TEST_GANSV(T, in, c, func_name, idx_type, left_type, furthest_eq)
+
+#define PAR_TEST_GANSV_ALLVAR(T, in, c, func_name, idx_type) \
+        PAR_TEST_GANSV_ALLRIGHT(T, in , c, func_name, idx_type, nearest_sm) \
+        PAR_TEST_GANSV_ALLRIGHT(T, in , c, func_name, idx_type, nearest_eq) \
+        PAR_TEST_GANSV_ALLRIGHT(T, in , c, func_name, idx_type, furthest_eq)
+
+// generates tests for all combinations of gANSV template parameters:
+//    {nearest_sm, nearest_eq, furthest_eq}^2 x {local_indexing, global_indexing}
+//    => 3*3*2 total
+#define PAR_TEST_GANSV_ALL(T, in, c, func_name) \
+        PAR_TEST_GANSV_ALLVAR(T, in, c, func_name, global_indexing) \
+        PAR_TEST_GANSV_ALLVAR(T, in, c, func_name, local_indexing)
+
 
 TEST(PsacANSV, SeqANSVrand) {
 
@@ -256,33 +239,10 @@ TEST(PsacANSV, ParallelANSVrand) {
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 4;});
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
         }
 
-        par_test_ansv<size_t, nearest_sm, nearest_sm>(in, c);
-        par_test_ansv<size_t, nearest_eq, nearest_sm>(in, c);
-        par_test_ansv<size_t, furthest_eq, nearest_sm>(in, c);
-
-        par_test_ansv<size_t, nearest_sm, nearest_eq>(in, c);
-        par_test_ansv<size_t, nearest_eq, nearest_eq>(in, c);
-        par_test_ansv<size_t, furthest_eq, nearest_eq>(in, c);
-
-        par_test_ansv<size_t, nearest_sm, furthest_eq>(in, c);
-        par_test_ansv<size_t, nearest_eq, furthest_eq>(in, c);
-        par_test_ansv<size_t, furthest_eq, furthest_eq>(in, c);
-
-        // test local_indexing
-        par_test_ansv_localidx<size_t, nearest_sm, nearest_sm>(in, c);
-        par_test_ansv_localidx<size_t, nearest_eq, nearest_sm>(in, c);
-        par_test_ansv_localidx<size_t, furthest_eq, nearest_sm>(in, c);
-
-        par_test_ansv_localidx<size_t, nearest_sm, nearest_eq>(in, c);
-        par_test_ansv_localidx<size_t, nearest_eq, nearest_eq>(in, c);
-        par_test_ansv_localidx<size_t, furthest_eq, nearest_eq>(in, c);
-
-        par_test_ansv_localidx<size_t, nearest_sm, furthest_eq>(in, c);
-        par_test_ansv_localidx<size_t, nearest_eq, furthest_eq>(in, c);
-        par_test_ansv_localidx<size_t, furthest_eq, furthest_eq>(in, c);
+        PAR_TEST_GANSV_ALL(size_t, in, c, my_ansv_minpair_lbub);
     }
 }
 

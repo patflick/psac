@@ -714,7 +714,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     t.end_section("ANSV: finish ansv local");
 }
 
-template <typename T, int indexing_type = global_indexing>
+template <typename T>
 void my_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
     mxx::section_timer t(std::cerr, comm);
 
@@ -778,7 +778,7 @@ void my_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
     t.end_section("ANSV: finish ansv local");
 }
 
-template <typename T, int indexing_type = global_indexing>
+template <typename T>
 void my_ansv_minpair(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
     mxx::section_timer t(std::cerr, comm);
 
@@ -1452,13 +1452,12 @@ void hh_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
     size_t local_size = in.size();
     size_t prefix = mxx::exscan(local_size, comm);
 
-    // TODO: first unmatched solution: solve nsv with local_indexing
-    //       rather than just calculating the unmatched
-    //size_t n_left_mins = local_ansv_unmatched<T, nearest_sm, nearest_sm>(in, prefix, lr_mins);
+    // allocate output
     if (left_nsv.size() != in.size())
         left_nsv.resize(in.size());
     if (right_nsv.size() != in.size())
         right_nsv.resize(in.size());
+
     //size_t n_left_mins = local_ansv_unmatched<T, left_type, right_type>(in, prefix, lr_mins);
     local_indexing_nsv<decltype(in.rbegin()), T, nearest_sm, dir_left>(in.rbegin(), in.rend(), lr_mins, left_nsv);
     size_t n_left_mins = lr_mins.size();
@@ -1595,7 +1594,7 @@ void hh_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
     SDEBUG(return_send_displs);
     SDEBUG(return_recv_counts);
     SDEBUG(return_recv_displs);
-    // FIXME: currently cheating with an all2all ;)
+    // FIXME: replace all2all with send/recv
     mxx::all2allv(&recved[0], return_send_counts, return_send_displs, &lr_mins[0], return_recv_counts, return_recv_displs, comm);
     SDEBUG(lr_mins);
 
