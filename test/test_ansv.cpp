@@ -114,7 +114,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                         // in[s] is the furthest of its kind
                         // we check that the nsv for s is smaller, not equal
                         if (nsv[s] != nonsv) {
-                            EXPECT_LT(in[nsv[s]], in[i]) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s << ", nsv[s]=" << nsv[s] << ", in.size()=" << in.size();
+                            EXPECT_LT(in[nsv[s]], in[i]) << " for i=" << i << ", in[i]=" << in[i] << ", in[s]=" << in[s] << ",s=" << s << ", nsv[s]=" << nsv[s] << ", in[nsv[s]]=" << in[nsv[s]] <<  ", in.size()=" << in.size();
                         }
                     } else { // type == nearest_eq
                         EXPECT_TRUE(in[i] < m && in[s] < m) << " for range [" << i << "," << s-1 << "]";
@@ -266,7 +266,7 @@ TEST(PsacANSV, SeqANSVrand) {
 }
 
 #define PAR_GTEST_GANSV_RAND(func_name) \
-TEST(PsacANSV, ParallelANSVrand ## func_name) {  \
+TEST(PsacANSV, ParallelANSVrand_ ## func_name) {  \
     mxx::comm c; \
     for (size_t n : {13, 137, 1000, 26666}) { \
         std::vector<size_t> in; \
@@ -282,7 +282,7 @@ TEST(PsacANSV, ParallelANSVrand ## func_name) {  \
 // TODO: use google test test-case intialization instead of
 //       generating input every time
 #define PAR_GTEST_ANSV_RAND(func_name) \
-TEST(PsacANSV, ParallelANSVrand ## func_name) {  \
+TEST(PsacANSV, ParallelANSVrand_ ## func_name) {  \
     mxx::comm c; \
     for (size_t n : {13, 137, 1000, 26666}) { \
         std::vector<size_t> in; \
@@ -290,6 +290,22 @@ TEST(PsacANSV, ParallelANSVrand ## func_name) {  \
             in.resize(n); \
             std::srand(7); \
             std::generate(in.begin(), in.end(), [](){return std::rand() % 100;}); \
+        } \
+        par_test_ansv(in, & func_name <size_t>, c); \
+   } \
+}
+
+
+#define PAR_GTEST_ANSV_RAND_PERM(func_name) \
+TEST(PsacANSV, ParallelANSVrandperm_ ## func_name) {  \
+    mxx::comm c; \
+    for (size_t n : {13, 137, 1000, 26666}) { \
+        std::vector<size_t> in; \
+        if (c.rank() == 0) { \
+            in.resize(n); \
+            std::srand(7); \
+            for (size_t i = 0; i < n; ++i) in[i] = i; \
+            std::random_shuffle(in.begin(), in.end()); \
         } \
         par_test_ansv(in, & func_name <size_t>, c); \
    } \
@@ -304,42 +320,20 @@ PAR_GTEST_ANSV_RAND(my_ansv);
 //PAR_GTEST_ANSV_RAND(my_ansv_minpair);
 //PAR_GTEST_ANSV_RAND(hh_ansv);
 
-#define PAR_GTEST_ANSV_RAND_PERM(func_name) \
-TEST(PsacANSV, ParallelANSVrand ## func_name) {  \
-    mxx::comm c; \
-    for (size_t n : {13, 137, 1000, 26666}) { \
-        std::vector<size_t> in; \
-        if (c.rank() == 0) { \
-            in.resize(n); \
-            std::srand(7); \
-            for (size_t i = 0; i < n; ++i) in[i] = i; \
-            std::random_shuffle(in.begin(), in.end()); \
-        } \
-        par_test_ansv(in, & func_name <size_t>, c); \
-   } \
-}
-
 PAR_GTEST_ANSV_RAND_PERM(my_ansv_minpair);
 PAR_GTEST_ANSV_RAND_PERM(hh_ansv);
 
 /*
-TEST(PsacANSV, MyANSV) {
+TEST(PsacANSV, ParallelANSVrand_special) {
     mxx::comm c;
-
-    for (size_t n : {15, 137, 1000, 66666, 137900}) {
-    //size_t n = 43;
-    //size_t n = 1000;
+    for (size_t n : {1000}) { // {13, 137, 1000, 26666}) {
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 4;});
-            //for (size_t i = 0; i < n; ++i)
-            //    in[i] = i;
-            //std::random_shuffle(in.begin(), in.end());
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
         }
-
-        par_test_my_ansv(in, c);
+        par_test_gansv<size_t, nearest_sm, furthest_eq, global_indexing>(in, &my_ansv_minpair_lbub<size_t,nearest_sm,furthest_eq,global_indexing>, c);
     }
 }
 */

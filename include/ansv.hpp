@@ -966,6 +966,7 @@ void ansv_comm_param_lbub_dir(Iterator min_begin, Iterator min_end, const std::p
     // initialize lower range as empty
     // lb <- [begin, begin)
     pair_it lb_begin = min_begin;
+    pair_it lb_mid = min_begin;
     pair_it lb_end = min_begin;
 
     int next_proc = (direction == dir_left) ? comm.rank()-1 : comm.rank()+1;
@@ -975,11 +976,10 @@ void ansv_comm_param_lbub_dir(Iterator min_begin, Iterator min_end, const std::p
     // then I have to create a lower bound for it
     T lb_val = lb_begin->first;
     if (allmins[next_proc] >= lb_val) {
-        pair_it tmp = lb_end;
         while (lb_end != min_end && lb_end->first == allmins[next_proc])
             ++lb_end;
-        tmp = lb_end;
-        while (lb_end != min_end && lb_end->first == tmp->first)
+        lb_mid = lb_end;
+        while (lb_end != min_end && lb_end->first == lb_mid->first)
             ++lb_end;
     }
 
@@ -988,27 +988,32 @@ void ansv_comm_param_lbub_dir(Iterator min_begin, Iterator min_end, const std::p
         if (i < 0 || i >= comm.size())
             break;
         if (allmins[i] > lb_val) {
-            // only send previous lower box
+            // only send previous lower range
             lb_counts[i] = std::distance(lb_begin, lb_end);
             lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
         } else if (allmins[i] == lb_val) {
             // possibly adjust lb to include one smaller
             if (lb_begin->first == (lb_end-1)->first) {
-                pair_it lb_mid = lb_end;
+                lb_mid = lb_end;
                 while (lb_end != min_end && lb_end->first == lb_mid->first)
                     ++lb_end;
             }
             lb_counts[i] = std::distance(lb_begin, lb_end);
             lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
+        } else if (lb_mid == min_end) {
+            // just send lb and stop
+            lb_counts[i] = std::distance(lb_begin, lb_end);
+            lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
+            break;
         } else {
             // calculate bounds of inner range
-            pair_it in_begin = lb_end;
+            pair_it in_begin = lb_mid;
             pair_it in_end = pair_lower_bound_dec(in_begin, min_end, std::max<T>(allmins[i],local_min));
             // calculate bounds of upper range
             // ub ends at the equal range of the first element larger than allmins
             // ub = [in_end, ub_end)
             pair_it ub_end = in_end;
-            while (ub_end != min_end && ub_end->first == allmins[i])
+            while (ub_end != min_end && ub_end->first == std::max<T>(allmins[i],local_min))
                 ++ub_end;
             pair_it ub_mid = ub_end;
             while (ub_end != min_end && ub_end->first == ub_mid->first)
@@ -1026,7 +1031,9 @@ void ansv_comm_param_lbub_dir(Iterator min_begin, Iterator min_end, const std::p
             ub_displs[i] = range_displacement(in_end, ub_end, base_ptr);
 
             // lb <- ub
+            assert(ub_end - in_end >= 1);
             lb_begin = in_end;
+            lb_mid = ub_mid;
             lb_end = ub_end;
             lb_val = lb_begin->first;
         }
@@ -1202,9 +1209,9 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     t.end_section("ANSV: all2allv");
 
 
-    SDEBUG(in);
-    SDEBUG(left_nsv);
-    SDEBUG(right_nsv);
+    //SDEBUG(in);
+    //SDEBUG(left_nsv);
+    //SDEBUG(right_nsv);
     SDEBUG(lr_mins);
     SDEBUG(recved);
 
@@ -1328,8 +1335,8 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     }
 
     t.end_section("ANSV: finish ansv local");
-    SDEBUG(left_nsv);
-    SDEBUG(right_nsv);
+    //SDEBUG(left_nsv);
+    //SDEBUG(right_nsv);
 }
 
 template <typename T> //, int left_type, int right_type>
