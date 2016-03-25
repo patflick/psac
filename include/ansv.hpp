@@ -455,7 +455,7 @@ void x_ansv_local(const std::vector<T>& in,
     }
 }
 
-template <typename T, bool direction, int indexing_type, typename Iterator>
+template <typename T, bool direction, bool tail_direction, int indexing_type, typename Iterator>
 void ansv_local_finish_furthest_eq(const std::vector<T>& in, Iterator tail_begin, Iterator tail_end, size_t prefix, size_t tail_prefix, size_t nonsv, std::vector<size_t>& nsv) {
     std::deque<std::pair<T,size_t> > q;
     const size_t iprefix = (indexing_type == global_indexing) ? prefix : 0;
@@ -466,7 +466,7 @@ void ansv_local_finish_furthest_eq(const std::vector<T>& in, Iterator tail_begin
     for (size_t i = 0; i < n_tail; ++i) {
         // TODO: FIXME: the direction depends on whehter lr_mins or recved is passed
         //              both of which happens somewhere in my code
-        auto r = (direction == dir_right) ? tail_begin+i : tail_begin+(n_tail-i-1);
+        auto r = (tail_direction == dir_left) ? tail_begin+i : tail_begin+(n_tail-i-1);
         // TODO: I should be able to assume that the sequence is non-decreasing
         while (!q.empty() && r->first < q.back().first) {
             q.pop_back();
@@ -511,7 +511,7 @@ void ansv_local_finish_all(const std::vector<T>& in, const std::vector<std::pair
     const size_t iprefix = (indexing_type == global_indexing) ? prefix : 0;
 
     if (left_type == furthest_eq) {
-        ansv_local_finish_furthest_eq<T, dir_left, indexing_type>(in, recved.begin(), recved.begin()+n_left_recv, prefix, 0, nonsv, left_nsv);
+        ansv_local_finish_furthest_eq<T, dir_left, dir_left, indexing_type>(in, recved.begin(), recved.begin()+n_left_recv, prefix, 0, nonsv, left_nsv);
     } else {
         // iterate backwards to get the nearest smaller element to left for each element
         for (size_t i = in.size(); i > 0; --i) {
@@ -554,7 +554,7 @@ void ansv_local_finish_all(const std::vector<T>& in, const std::vector<std::pair
     q.clear();
 
     if (right_type == furthest_eq) {
-        ansv_local_finish_furthest_eq<T, dir_right, indexing_type>(in, recved.begin()+n_left_recv, recved.end(), prefix, n_left_recv, nonsv, right_nsv);
+        ansv_local_finish_furthest_eq<T, dir_right, dir_right, indexing_type>(in, recved.begin()+n_left_recv, recved.end(), prefix, n_left_recv, nonsv, right_nsv);
     } else {
         for (size_t i = 0; i < in.size(); ++i) {
             if (indexing_type == global_indexing) {
@@ -739,28 +739,18 @@ void my_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
 
     t.end_section("ANSV: local ansv");
 
-
-    //mxx::sync_cout(comm) << "in=" << in << std::endl;
-    //mxx::sync_cout(comm) << "lr_mins=" << lr_mins << std::endl;
-    //mxx::sync_cout(comm) << "left_nsv=" << left_nsv << std::endl;
-    //mxx::sync_cout(comm) << "right_nsv=" << right_nsv << std::endl;
-
     /***************************************************************
      *  Step 2: communicate un-matched elements to correct target  *
      ***************************************************************/
     std::vector<std::pair<T, size_t>> recved;
     size_t n_left_recv = ansv_communicate_allpairs<T, nearest_sm, nearest_sm>(lr_mins, n_left_mins, recved, comm);
     t.end_section("ANSV: communicate all");
-    //mxx::sync_cout(comm) << "recved=" << recved << std::endl;
 
     /***************************************************************
      *  Step 3: Again solve ANSV locally and use lr_mins as tails  *
      ***************************************************************/
-    // TODO: finish via merge?
     ansv_merge(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin(), lr_mins.begin()+n_left_mins);
     ansv_merge(lr_mins.begin()+n_left_mins, lr_mins.end(), recved.begin()+n_left_recv, recved.end());
-    //mxx::sync_cout(comm) << "merged lrmins=" << lr_mins << std::endl;
-    //mxx::sync_cout(comm) << "merged lrmins=" << lr_mins << std::endl;
     //ansv_local_finish_all<T, left_type, right_type, indexing_type>(in, recved, n_left_recv, prefix, nonsv, left_nsv, right_nsv);
     // local to global indexing transformation
     for (size_t i = 0; i < in.size(); ++i) {
@@ -969,91 +959,91 @@ void ansv_comm_param_lbub_dir(Iterator min_begin, Iterator min_end, const std::p
                               std::vector<size_t>& lb_counts, std::vector<size_t>& lb_displs,
                               std::vector<size_t>& in_counts, std::vector<size_t>& in_displs,
                               std::vector<size_t>& ub_counts, std::vector<size_t>& ub_displs) {
-        T local_min = allmins[comm.rank()];
-        //typedef typename std::vector<std::pair<T, size_t>>::iterator pair_it;
-        typedef Iterator pair_it;
+    T local_min = allmins[comm.rank()];
+    //typedef typename std::vector<std::pair<T, size_t>>::iterator pair_it;
+    typedef Iterator pair_it;
 
-        // initialize lower range as empty
-        // lb <- [begin, begin)
-        pair_it lb_begin = min_begin;
-        pair_it lb_end = min_begin;
+    // initialize lower range as empty
+    // lb <- [begin, begin)
+    pair_it lb_begin = min_begin;
+    pair_it lb_end = min_begin;
 
-        int next_proc = (direction == dir_left) ? comm.rank()-1 : comm.rank()+1;
-        T prev_mins_min = allmins[next_proc];
+    int next_proc = (direction == dir_left) ? comm.rank()-1 : comm.rank()+1;
+    T prev_mins_min = allmins[next_proc];
 
-        // if my largest value is smaller or equal to the min of my neighbor
-        // then I have to create a lower bound for it
-        T lb_val = lb_begin->first;
-        if (allmins[next_proc] >= lb_val) {
-            pair_it tmp = lb_end;
-            while (lb_end != min_end && lb_end->first == allmins[next_proc])
-                ++lb_end;
-            tmp = lb_end;
-            while (lb_end != min_end && lb_end->first == tmp->first)
-                ++lb_end;
+    // if my largest value is smaller or equal to the min of my neighbor
+    // then I have to create a lower bound for it
+    T lb_val = lb_begin->first;
+    if (allmins[next_proc] >= lb_val) {
+        pair_it tmp = lb_end;
+        while (lb_end != min_end && lb_end->first == allmins[next_proc])
+            ++lb_end;
+        tmp = lb_end;
+        while (lb_end != min_end && lb_end->first == tmp->first)
+            ++lb_end;
+    }
+
+
+    for (int i = next_proc;;) {
+        if (i < 0 || i >= comm.size())
+            break;
+        if (allmins[i] > lb_val) {
+            // only send previous lower box
+            lb_counts[i] = std::distance(lb_begin, lb_end);
+            lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
+        } else if (allmins[i] == lb_val) {
+            // possibly adjust lb to include one smaller
+            if (lb_begin->first == (lb_end-1)->first) {
+                pair_it lb_mid = lb_end;
+                while (lb_end != min_end && lb_end->first == lb_mid->first)
+                    ++lb_end;
+            }
+            lb_counts[i] = std::distance(lb_begin, lb_end);
+            lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
+        } else {
+            // calculate bounds of inner range
+            pair_it in_begin = lb_end;
+            pair_it in_end = pair_lower_bound_dec(in_begin, min_end, std::max<T>(allmins[i],local_min));
+            // calculate bounds of upper range
+            // ub ends at the equal range of the first element larger than allmins
+            // ub = [in_end, ub_end)
+            pair_it ub_end = in_end;
+            while (ub_end != min_end && ub_end->first == allmins[i])
+                ++ub_end;
+            pair_it ub_mid = ub_end;
+            while (ub_end != min_end && ub_end->first == ub_mid->first)
+                ++ub_end;
+            MXX_ASSERT(ub_end - in_end <= 4);
+
+            // set send counts and offsets
+            lb_counts[i] = std::distance(lb_begin, lb_end);
+            lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
+
+            in_counts[i] = std::distance(in_begin, in_end);
+            in_displs[i] = range_displacement(in_begin, in_end, base_ptr);
+
+            ub_counts[i] = std::distance(in_end, ub_end);
+            ub_displs[i] = range_displacement(in_end, ub_end, base_ptr);
+
+            // lb <- ub
+            lb_begin = in_end;
+            lb_end = ub_end;
+            lb_val = lb_begin->first;
         }
 
-
-        for (int i = next_proc;;) {
-            if (i < 0 || i >= comm.size())
-                break;
-            if (allmins[i] > lb_val) {
-                // only send previous lower box
-                lb_counts[i] = std::distance(lb_begin, lb_end);
-                lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
-            } else if (allmins[i] == lb_val) {
-                // possibly adjust lb to include one smaller
-                if (lb_begin->first == (lb_end-1)->first) {
-                    pair_it lb_mid = lb_end;
-                    while (lb_end != min_end && lb_end->first == lb_mid->first)
-                        ++lb_end;
-                }
-                lb_counts[i] = std::distance(lb_begin, lb_end);
-                lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
-            } else {
-                // calculate bounds of inner range
-                pair_it in_begin = lb_end;
-                pair_it in_end = pair_lower_bound_dec(in_begin, min_end, std::max<T>(allmins[i],local_min));
-                // calculate bounds of upper range
-                // ub ends at the equal range of the first element larger than allmins
-                // ub = [in_end, ub_end)
-                pair_it ub_end = in_end;
-                while (ub_end != min_end && ub_end->first == allmins[i])
-                    ++ub_end;
-                pair_it ub_mid = ub_end;
-                while (ub_end != min_end && ub_end->first == ub_mid->first)
-                    ++ub_end;
-                MXX_ASSERT(ub_end - in_end <= 4);
-
-                // set send counts and offsets
-                lb_counts[i] = std::distance(lb_begin, lb_end);
-                lb_displs[i] = range_displacement(lb_begin, lb_end, base_ptr);
-
-                in_counts[i] = std::distance(in_begin, in_end);
-                in_displs[i] = range_displacement(in_begin, in_end, base_ptr);
-
-                ub_counts[i] = std::distance(in_end, ub_end);
-                ub_displs[i] = range_displacement(in_end, ub_end, base_ptr);
-
-                // lb <- ub
-                lb_begin = in_end;
-                lb_end = ub_end;
-                lb_val = lb_begin->first;
-            }
-
-            // remember most min we have seen so far
-            if (allmins[i] < prev_mins_min) {
-                prev_mins_min = allmins[i];
-            }
-            // stop if we reached a processor with a smaller min than ours
-            if (allmins[i] < local_min) {
-                break;
-            }
-            if (direction == dir_left)
-                --i;
-            else
-                ++i;
+        // remember most min we have seen so far
+        if (allmins[i] < prev_mins_min) {
+            prev_mins_min = allmins[i];
         }
+        // stop if we reached a processor with a smaller min than ours
+        if (allmins[i] < local_min) {
+            break;
+        }
+        if (direction == dir_left)
+            --i;
+        else
+            ++i;
+    }
 }
 
 
@@ -1244,8 +1234,6 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     SDEBUG(lr_mins);
 
     // local to global indexing transformation
-    // TODO: start from center (most min elements) and iterate outwards
-    //       to find the border of nsv and nonsv
     size_t left_upper = n_left_mins;
     for (; left_upper > 0; --left_upper) {
         size_t j = left_upper - 1;
@@ -1278,10 +1266,10 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     }
 
     if (left_type == furthest_eq) {
-        ansv_local_finish_furthest_eq<T, dir_left, indexing_type>(in, lr_mins.begin(), lr_mins.begin()+left_upper, prefix, 0, nonsv, left_nsv);
+        ansv_local_finish_furthest_eq<T, dir_left, dir_right, indexing_type>(in, lr_mins.begin(), lr_mins.begin()+left_upper, prefix, 0, nonsv, left_nsv);
     }
     if (right_type == furthest_eq) {
-        ansv_local_finish_furthest_eq<T, dir_right, indexing_type>(in, lr_mins.begin()+right_upper, lr_mins.end(), prefix, right_upper, nonsv, right_nsv);
+        ansv_local_finish_furthest_eq<T, dir_right, dir_left, indexing_type>(in, lr_mins.begin()+right_upper, lr_mins.end(), prefix, right_upper, nonsv, right_nsv);
     }
 
     if (indexing_type == global_indexing) {

@@ -187,7 +187,6 @@ void par_test_my_ansv(const std::vector<T>& in, const mxx::comm& comm) {
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
 void par_test_ansv_localidx(const std::vector<T>& in, const mxx::comm& c) {
     std::vector<size_t> vec = mxx::stable_distribute(in, c);
-
     size_t prefix = mxx::exscan(vec.size(), c);
 
     // calc ansv
@@ -200,14 +199,7 @@ void par_test_ansv_localidx(const std::vector<T>& in, const mxx::comm& c) {
     my_ansv_minpair_lbub<T,left_type,right_type,local_indexing>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
     ASSERT_TRUE(mxx::all_of(vec.size() == left_nsv.size() && vec.size() == right_nsv.size(), c));
 
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: in=" << in << std::endl;
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: vec=" << vec << std::endl;
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: left=" << left_nsv << std::endl;
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: right=" << right_nsv << std::endl;
-    //mxx::sync_cout(c) << "[rank " << c.rank() << "]: lrmin=" << lr_mins << std::endl;
-
-    // resolve local indexing into global indexing
-    // FIXME: now we actually have to use a special value for non-matched
+    // resolve local indexing into global indexing prior to gathering the results
     for (size_t i = 0; i < vec.size(); ++i) {
         // resolve left
         if (left_nsv[i] != nonsv) {
