@@ -19,6 +19,9 @@
  */
 
 #include <gtest/gtest.h>
+
+#define MXX_DISABLE_TIMER 1
+
 #include <cxx-prettyprint/prettyprint.hpp>
 #include <ansv.hpp>
 #include <rmq.hpp>
@@ -129,9 +132,39 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
     }
 }
 
+
 // the API declaration of a generalized ANSV function
 template <typename T>
 using ansv_func_t=void (*)(const std::vector<T>&, std::vector<size_t>&, std::vector<size_t>&, std::vector<std::pair<T, size_t>>&, const mxx::comm& c, size_t);
+
+// parallel test for neareat_smaller ANSV functions
+template <typename T>
+void par_test_ansv(const std::vector<T>& in, ansv_func_t<T> ansv_func, const mxx::comm& c) {
+    // stably distribute input across processors
+    std::vector<size_t> vec = mxx::stable_distribute(in, c);
+
+    // prepare parameters for ANVS
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<T, size_t>> lr_mins;
+    const size_t nonsv = std::numeric_limits<size_t>::max();
+
+    // call actual ANSV function
+    ansv_func(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+
+    // check that the output sizes are correct
+    ASSERT_TRUE(mxx::all_of(vec.size() == left_nsv.size() && vec.size() == right_nsv.size(), c));
+
+    // gather results
+    left_nsv = mxx::gatherv(left_nsv, 0, c);
+    right_nsv = mxx::gatherv(right_nsv, 0, c);
+
+    // sequentially check the correctness on processor 0
+    if (c.rank() == 0) {
+        check_ansv<T,nearest_sm>(in, left_nsv, true, nonsv);
+        check_ansv<T,nearest_sm>(in, right_nsv, false, nonsv);
+    }
+}
 
 // parallel test for generalized ANSV
 template <typename T, int left_type, int right_type, int indexing_type>
@@ -140,15 +173,16 @@ void par_test_gansv(const std::vector<T>& in, ansv_func_t<T> ansv_func, const mx
     std::vector<size_t> vec = mxx::stable_distribute(in, c);
     size_t prefix = mxx::exscan(vec.size(), c);
 
-    // calc ansv
+    // prepare parameters for ANVS
     std::vector<size_t> left_nsv;
     std::vector<size_t> right_nsv;
     std::vector<std::pair<T, size_t>> lr_mins;
-
     const size_t nonsv = std::numeric_limits<size_t>::max();
-    //ansv<T,left_type,right_type,local_indexing>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
-    //my_ansv_minpair_lbub<T,left_type,right_type,indexing_type>(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+
+    // call actual ANSV function
     ansv_func(vec, left_nsv, right_nsv, lr_mins, c, nonsv);
+
+    // check that the output sizes are correct
     ASSERT_TRUE(mxx::all_of(vec.size() == left_nsv.size() && vec.size() == right_nsv.size(), c));
 
     // resolve local indexing into global indexing prior to gathering the results
@@ -231,20 +265,62 @@ TEST(PsacANSV, SeqANSVrand) {
     }
 }
 
-TEST(PsacANSV, ParallelANSVrand) {
-    mxx::comm c;
-
-    for (size_t n : {13, 137, 1000, 26666}) { //, 137900}) {
-        std::vector<size_t> in;
-        if (c.rank() == 0) {
-            in.resize(n);
-            std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
-        }
-
-        PAR_TEST_GANSV_ALL(size_t, in, c, my_ansv_minpair_lbub);
-    }
+#define PAR_GTEST_GANSV_RAND(func_name) \
+TEST(PsacANSV, ParallelANSVrand ## func_name) {  \
+    mxx::comm c; \
+    for (size_t n : {13, 137, 1000, 26666}) { \
+        std::vector<size_t> in; \
+        if (c.rank() == 0) { \
+            in.resize(n); \
+            std::srand(7); \
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;}); \
+        } \
+        PAR_TEST_GANSV_ALL(size_t, in, c, func_name); \
+   } \
 }
+
+// TODO: use google test test-case intialization instead of
+//       generating input every time
+#define PAR_GTEST_ANSV_RAND(func_name) \
+TEST(PsacANSV, ParallelANSVrand ## func_name) {  \
+    mxx::comm c; \
+    for (size_t n : {13, 137, 1000, 26666}) { \
+        std::vector<size_t> in; \
+        if (c.rank() == 0) { \
+            in.resize(n); \
+            std::srand(7); \
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;}); \
+        } \
+        par_test_ansv(in, & func_name <size_t>, c); \
+   } \
+}
+
+PAR_GTEST_GANSV_RAND(ansv);
+PAR_GTEST_GANSV_RAND(my_ansv_minpair_lbub);
+
+PAR_GTEST_ANSV_RAND(my_ansv);
+// NOTE: these two variants fail if there are equal elements in the range
+//       -> they only work if all elements are unique
+//PAR_GTEST_ANSV_RAND(my_ansv_minpair);
+//PAR_GTEST_ANSV_RAND(hh_ansv);
+
+#define PAR_GTEST_ANSV_RAND_PERM(func_name) \
+TEST(PsacANSV, ParallelANSVrand ## func_name) {  \
+    mxx::comm c; \
+    for (size_t n : {13, 137, 1000, 26666}) { \
+        std::vector<size_t> in; \
+        if (c.rank() == 0) { \
+            in.resize(n); \
+            std::srand(7); \
+            for (size_t i = 0; i < n; ++i) in[i] = i; \
+            std::random_shuffle(in.begin(), in.end()); \
+        } \
+        par_test_ansv(in, & func_name <size_t>, c); \
+   } \
+}
+
+PAR_GTEST_ANSV_RAND_PERM(my_ansv_minpair);
+PAR_GTEST_ANSV_RAND_PERM(hh_ansv);
 
 /*
 TEST(PsacANSV, MyANSV) {

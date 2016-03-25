@@ -749,8 +749,8 @@ void my_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
     /***************************************************************
      *  Step 3: Again solve ANSV locally and use lr_mins as tails  *
      ***************************************************************/
-    ansv_merge(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin(), lr_mins.begin()+n_left_mins);
-    ansv_merge(lr_mins.begin()+n_left_mins, lr_mins.end(), recved.begin()+n_left_recv, recved.end());
+    ansv_merge<nearest_sm, nearest_sm>(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin(), lr_mins.begin()+n_left_mins);
+    ansv_merge<nearest_sm, nearest_sm>(lr_mins.begin()+n_left_mins, lr_mins.end(), recved.begin()+n_left_recv, recved.end());
     //ansv_local_finish_all<T, left_type, right_type, indexing_type>(in, recved, n_left_recv, prefix, nonsv, left_nsv, right_nsv);
     // local to global indexing transformation
     for (size_t i = 0; i < in.size(); ++i) {
@@ -873,7 +873,7 @@ void my_ansv_minpair(const std::vector<T>& in, std::vector<size_t>& left_nsv, st
             pair_it loc_begin = lr_mins.begin()+send_displs[i];
             pair_it loc_end = lr_mins.begin()+send_displs[i]+send_counts[i];
             pair_it rec_merge_end, loc_merge_end;
-            std::tie(rec_merge_end, loc_merge_end) = ansv_merge(rec_begin, rec_end, loc_begin, loc_end);
+            std::tie(rec_merge_end, loc_merge_end) = ansv_merge<nearest_sm, nearest_sm>(rec_begin, rec_end, loc_begin, loc_end);
             ret_send_counts[i] = min_recv_counts[i] - (rec_merge_end  - rec_begin + 1);
             ret_send_displs[i] += (rec_merge_end - rec_begin + 1);
         } else {
@@ -887,7 +887,7 @@ void my_ansv_minpair(const std::vector<T>& in, std::vector<size_t>& left_nsv, st
             pair_it rec_begin = recved.begin()+recv_displs[i];
             pair_it rec_end = recved.begin()+recv_displs[i]+min_recv_counts[i];
             pair_it loc_merge_end, rec_merge_end;
-            std::tie(loc_merge_end, rec_merge_end) = ansv_merge(loc_begin, loc_end, rec_begin, rec_end);
+            std::tie(loc_merge_end, rec_merge_end) = ansv_merge<nearest_sm, nearest_sm>(loc_begin, loc_end, rec_begin, rec_end);
             ret_send_counts[i] = min_recv_counts[i] - (rec_end - rec_merge_end);
             // displacements stay the same, since we take elements away at the end of the sequence
         } else {
@@ -1353,7 +1353,7 @@ void hh_ansv_comm_params(const std::vector<std::pair<T,size_t>>& lr_mins,
                 send_counts[i] = end_idx - start_idx + 1;
                 send_offsets[i] = start_idx;
                 start_idx = end_idx;
-            } else if (allmins[i] == allmins[comm.rank()] && rpm[i] == comm.size()) {
+            } else if (allmins[i] == allmins[comm.rank()] && (int)rpm[i] == comm.size()) {
                 // if the min on the target procis equal, send all remaining
                 // to the left
                 send_counts[i] = n_left_mins - start_idx;
@@ -1548,12 +1548,12 @@ void hh_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
     // solve locally both sides (i.e., execute a merge of S1 with S2, and S3 with S4)
     // TODO: actually calculate the exact sequence position for S1 and S3
     if (k1 >= 0) {
-       ansv_merge(lr_mins.begin()+n_left_mins, seq1_end, recved.begin()+n_left_recv, recved.end());
+       ansv_merge<nearest_sm, nearest_sm>(lr_mins.begin()+n_left_mins, seq1_end, recved.begin()+n_left_recv, recved.end());
     }
     // Seq3 = (a_rm(min(k'(i))), ..., a_min(i))
     if (k3 >= 0) {
         // merge receved Seq4 with my Seq3
-        ansv_merge(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin()+seq3_begin, lr_mins.begin()+n_left_mins);
+        ansv_merge<nearest_sm, nearest_sm>(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin()+seq3_begin, lr_mins.begin()+n_left_mins);
     }
 
     SDEBUG(lr_mins);
