@@ -41,6 +41,7 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     std::vector<size_t> right_nsv;
     std::vector<std::pair<size_t, size_t>> lr_mins;
     size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
     double start = t.elapsed();
     my_ansv_minpair_lbub<size_t, nearest_sm, nearest_sm, local_indexing>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
     double time = t.elapsed() - start;
@@ -53,6 +54,7 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     std::vector<size_t> right_nsv;
     std::vector<std::pair<size_t, size_t>> lr_mins;
     size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
     double start = t.elapsed();
     ansv_local_finish_furthest_eq<size_t, dir_left, dir_left, local_indexing>(local_input, lr_mins.begin(), lr_mins.begin(), 0, 0, nonsv, left_nsv);
     double time = t.elapsed() - start;
