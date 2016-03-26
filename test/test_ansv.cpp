@@ -323,17 +323,16 @@ PAR_GTEST_ANSV_RAND(my_ansv);
 PAR_GTEST_ANSV_RAND_PERM(my_ansv_minpair);
 PAR_GTEST_ANSV_RAND_PERM(hh_ansv);
 
-/*
 TEST(PsacANSV, ParallelANSVrand_special) {
     mxx::comm c;
-    for (size_t n : {1000}) { // {13, 137, 1000, 26666}) {
+    for (size_t n : {40}) { // {13, 137, 1000, 26666}) {
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 4;});
         }
-        par_test_gansv<size_t, nearest_sm, furthest_eq, global_indexing>(in, &my_ansv_minpair_lbub<size_t,nearest_sm,furthest_eq,global_indexing>, c);
+        PAR_TEST_GANSV(size_t, in, c, my_ansv_minpair_lbub, global_indexing, furthest_eq, furthest_eq);
+        //par_test_gansv<size_t, nearest_sm, nearest_eq, global_indexing>(in, &my_ansv_minpair_lbub<size_t,nearest_sm,nearest_eq,global_indexing>, c);
     }
 }
-*/

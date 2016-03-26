@@ -23,9 +23,14 @@ target_link_libraries(psac ${EXTRA_LIBS})
 # benchmarks of our different internal methods
 add_executable(benchmark_sac benchmark.cpp)
 target_link_libraries(benchmark_sac ${EXTRA_LIBS})
+
 # benchmark with different values of `k` for initial k-mer sorting
 add_executable(benchmark_k benchmark_k.cpp)
 target_link_libraries(benchmark_k ${EXTRA_LIBS})
+
+# benchmark ANSV
+add_executable(benchmark-ansv benchmark_ansv.cpp)
+target_link_libraries(benchmark-ansv ${EXTRA_LIBS})
 
 
 ################
