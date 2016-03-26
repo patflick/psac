@@ -19,6 +19,8 @@
 #include <iostream>
 #include <vector>
 
+//#define MXX_DISABLE_TIMER 1
+
 // using TCLAP for command line parsing
 #include <tclap/CmdLine.h>
 
@@ -37,6 +39,49 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     mxx::timer t;
 
     {
+    std::vector<size_t> left_nsv(local_input.size());
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    ansv<size_t, nearest_sm, nearest_sm, local_indexing>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "ansv-allpair";
+    if (comm.rank() == 0)
+        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
+
+
+    {
+    std::vector<size_t> left_nsv(local_input.size());
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    hh_ansv<size_t>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "hh-ansv-incorrect";
+    if (comm.rank() == 0)
+        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
+
+    {
+    std::vector<size_t> left_nsv(local_input.size());
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    my_ansv_minpair<size_t>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "my-ansv-minpair";
+    if (comm.rank() == 0)
+        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
+
+    {
     std::vector<size_t> left_nsv;
     std::vector<size_t> right_nsv;
     std::vector<std::pair<size_t, size_t>> lr_mins;
@@ -45,20 +90,7 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     double start = t.elapsed();
     my_ansv_minpair_lbub<size_t, nearest_sm, nearest_sm, local_indexing>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
     double time = t.elapsed() - start;
-    std::string method_name = "minpair_lbub";
-    if (comm.rank() == 0)
-        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
-    }
-    {
-    std::vector<size_t> left_nsv(local_input.size());
-    std::vector<size_t> right_nsv;
-    std::vector<std::pair<size_t, size_t>> lr_mins;
-    size_t nonsv = std::numeric_limits<size_t>::max();
-    comm.barrier();
-    double start = t.elapsed();
-    ansv_local_finish_furthest_eq<size_t, dir_left, dir_left, local_indexing>(local_input, lr_mins.begin(), lr_mins.begin(), 0, 0, nonsv, left_nsv);
-    double time = t.elapsed() - start;
-    std::string method_name = "finish_furthest_eq";
+    std::string method_name = "minpair-lbub";
     if (comm.rank() == 0)
         std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
@@ -72,6 +104,29 @@ std::vector<size_t> generate_input(size_t n, const mxx::comm& c) {
     }
     mxx::stable_distribute_inplace(result, c);
     return result;
+}
+
+std::vector<size_t> generate_input_procpeaks(size_t n, const mxx::comm& c) {
+    size_t np = n/c.size();
+    std::vector<size_t> local_els(np);
+
+    // 1.) pick random number on processor
+    size_t proc_min = std::rand() % n;
+
+    std::srand(0);
+    std::srand(std::rand()*c.rank());
+    // generate linear peak from `n-1` to proc_min
+    size_t n2 = np/2;
+    local_els[n2] = proc_min;
+
+    for (size_t i = 0; i < n2; ++i) {
+        local_els[i] = n - ((n - proc_min)*i / n2);
+    }
+    for (size_t i = n2+1; i < np; ++i) {
+        local_els[i] = (n-2*proc_min) + ((n - proc_min)*i / n2);
+    }
+
+    return local_els;
 }
 
 int main(int argc, char *argv[])
@@ -91,7 +146,8 @@ int main(int argc, char *argv[])
     cmd.add(iterArg);
     cmd.parse(argc, argv);
 
-    std::vector<size_t> local_input = generate_input(100000000, comm);
+    //std::vector<size_t> local_input = generate_input(100000000, comm);
+    std::vector<size_t> local_input = generate_input_procpeaks(80000000, comm);
     /*
     if (fileArg.getValue() != "")
     {
