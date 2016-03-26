@@ -300,23 +300,22 @@ template <typename T, int nsv_type, bool direction>
 void local_indexing_nsv_4(const std::vector<T>& in, std::vector<std::pair<T, size_t>>& unmatched, std::vector<size_t>& nsv) {
     // to the first equal or smaller element in the queue
     //std::deque<std::pair<T, size_t>> q;
-    std::vector<std::pair<T, size_t>> q;
+    std::vector<size_t> q;
     q.reserve(in.size());
     std::deque<size_t> e;
     size_t prev_size = unmatched.size();
-    unmatched.reserve(in.size());
     if (direction == dir_left) {
         unmatched.emplace_back(in[0], 0);
         nsv[0] = in.size();
-        q.emplace_back(in[0], 0);
+        q.emplace_back(0);
     } else {
         unmatched.emplace_back(in[in.size()-1], in.size()-1);
         nsv[in.size()-1] = prev_size + in.size();
-        q.emplace_back(in[in.size()-1], in.size()-1);
+        q.emplace_back(in.size()-1);
     }
     for (size_t idx = 1; idx < in.size(); ++idx) {
         size_t i = (direction == dir_left) ? idx : in.size() - idx - 1;
-        while (!q.empty() && in[i] < q.back().first) {
+        while (!q.empty() && in[i] < in[q.back()]) {
             q.pop_back();
         }
 
@@ -325,13 +324,13 @@ void local_indexing_nsv_4(const std::vector<T>& in, std::vector<std::pair<T, siz
             unmatched.emplace_back(in[i], i);
             nsv[i] = in.size() + unmatched.size()-1;
             // also add to queue
-            q.emplace_back(in[i], i);
+            q.emplace_back(i);
         } else {
             if (nsv_type == furthest_eq) {
-                nsv[i] = q.back().second;
-                if (in[i] > q.back().first) {
+                nsv[i] = q.back();
+                if (in[i] > in[q.back()]) {
                     // don't push equal elements
-                    q.emplace_back(in[i], i);
+                    q.emplace_back(i);
                 }
             } else if (nsv_type == nearest_sm) {
                 // if unmatched is equal
@@ -351,23 +350,23 @@ void local_indexing_nsv_4(const std::vector<T>& in, std::vector<std::pair<T, siz
                     }
                     // nsv is last added unmatched
                     nsv[i] = in.size() + unmatched.size()-1;
-                    q.back().second = i;
+                    q.back() = i;
                 } else {
                     // also remove equal elements from queue
-                    while (!q.empty() && in[i] == q.back().first) {
+                    while (!q.empty() && in[i] == in[q.back()]) {
                         q.pop_back();
                     }
-                    nsv[i] = q.back().second;
-                    q.emplace_back(in[i], i);
+                    nsv[i] = q.back();
+                    q.emplace_back(i);
                 }
             } else if (nsv_type == nearest_eq) {
                 // the queue contains my match
-                nsv[i] = q.back().second;
+                nsv[i] = q.back();
                 // pop if previous element is equal
-                if (in[i] == q.back().first) {
+                if (in[i] == in[q.back()]) {
                     q.pop_back();
                 }
-                q.emplace_back(in[i], i);
+                q.emplace_back(i);
             }
             // add the last element of equal range to unmatched
             if (nsv_type != nearest_sm) {
