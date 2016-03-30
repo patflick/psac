@@ -25,15 +25,8 @@
 #include <mxx/timer.hpp>
 #include <mxx/algos.hpp>
 
-constexpr int nearest_sm = 0;
-constexpr int nearest_eq = 1;
-constexpr int furthest_eq = 2;
-
-constexpr int global_indexing = 0;
-constexpr int local_indexing = 1;
-
-constexpr bool dir_left = true;
-constexpr bool dir_right = false;
+#include "ansv_common.hpp"
+#include "ansv_merge.hpp"
 
 // for debugging
 //#define SDEBUG(x) mxx::sync_cerr(comm) << "[" << comm.rank() << "]: " #x " = " << (x) << std::endl
@@ -794,98 +787,6 @@ void ansv_local_finish_all(const std::vector<T>& in, const std::vector<std::pair
     }
 }
 
-template <int left_type, int right_type, typename Iterator> //, int left_type, int right_type>
-std::pair<Iterator,Iterator> ansv_merge(Iterator left_begin, Iterator left_end, Iterator right_begin, Iterator right_end) {
-    // starting with the largest value (right most in left sequence and leftmost in right sequence)
-    typedef typename std::iterator_traits<Iterator>::value_type T;
-    Iterator l = left_end;
-    Iterator r = right_begin;
-    while (l != left_begin && r != right_end) {
-        Iterator l1 = l-1;
-        if (l1->first < r->first) {
-            // if furthest_eq: need to find furthest that is equal to l1
-            if (left_type == furthest_eq) {
-                // find the last of the equal range for l1
-                Iterator li = l1;
-                while (li != left_begin && (li-1)->first == l1->first)
-                    --li;
-                *r = *li;
-            } else {
-                *r = *l1;
-            }
-            ++r;
-        } else if (r->first < l1->first) {
-            // if furthest_eq: need to find furthest that is equal to r
-            if (right_type == furthest_eq) {
-                Iterator ri = r+1;
-                while (ri != right_end && ri->first == r->first)
-                    ++ri;
-                *l1 = *(ri-1);
-            } else {
-                *l1 = *r;
-            }
-            --l;
-        } else {
-            // r == l
-            // find end of equal range for both sides
-            // equal range: [lsm, l1] = [lsm, l)
-            Iterator lsm = l1;
-            while (lsm != left_begin && l1->first == (lsm-1)->first)
-                --lsm;
-
-            // equal range: [r, rms)
-            Iterator rsm = r+1;
-            while (rsm != right_end && r->first == rsm->first)
-                ++rsm;
-
-            // saving first and last left elements since the underlying values
-            // may be overwritten when merging into the left
-            T low_left = *l1;
-            T up_left = *lsm;
-
-            // assigning right matches to the left side
-            if (right_type == nearest_sm && rsm != right_end) {
-                for (Iterator li = l1; li != (lsm-1); --li) {
-                    *li = *rsm;
-                }
-            } else if (right_type == nearest_eq) {
-                // assign the next element to each internal and the first right to the last
-                for (Iterator li = lsm; li != l1; ++li) {
-                    *li = *(li+1);
-                }
-                *l1 = *r;
-            } else if (right_type == furthest_eq) {
-                // for all but the last of the equal range (which is on the
-                // other side), the furthest eq is rms-1
-                for (Iterator li = l1; li != (lsm-1); --li) {
-                    *li = *(rsm-1);
-                }
-            }
-
-            // assigning left matches to right side
-            if (left_type == nearest_sm && lsm != left_begin) {
-                for (Iterator ri = r; ri != rsm; ++ri) {
-                    *ri = *(lsm-1);
-                }
-            } else if (left_type == nearest_eq) {
-                for (Iterator ri = rsm-1; ri != r; --ri) {
-                    *ri = *(ri-1);
-                }
-                *r = low_left;
-            } else if (left_type == furthest_eq) {
-                for (Iterator ri = r; ri != rsm; ++ri) {
-                    *ri = up_left;
-                }
-            }
-
-            // continue with the next smaller element
-            r = rsm;
-            l = lsm;
-        }
-    }
-    return std::pair<Iterator, Iterator>(l-1, r);
-}
-
 // parallel all nearest smallest value
 // TODO: iterator version??
 // TODO: comparator type
@@ -1417,19 +1318,44 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     SDEBUG(lr_mins);
     SDEBUG(recved);
 
-    /***************************************************************
-     *  Step 3: Again solve ANSV locally and use lr_mins as tails  *
-     ***************************************************************/
-    // use original send_counts as the range for the merge, and merge one sequence at a time
-    // at the same time determine the send_counts for sending back solutions
+    /*********************************************************************
+     *                 Merge received and local elements                 *
+     *********************************************************************/
 
     // simply merge everything and then return the `in` ranges
     // TODO: should skip `in`-ranges that are solved elsewhere
     size_t n_left_recv = 0;
+    typedef typename std::vector<std::pair<T, size_t>>::iterator pair_it;
+
+// merge routine:
+// - internal merge [two cases: need to reply other side or not?]
+//    - bidir: merge with the next greater eq-range as extension on both sides
+//             for local_min (last lr_mins), the merged answer might be wrong for furthest eq: fix after
+//    - one-sided (receive only): no extension needed, write side is inner range, other side is all read only
+//       [always pass all? or next inner range?]
+// - between in ranges: since lb includes first in range:
+//   - always one-sided, on write side (lr_mins), merge till lb_mid, read side till lb_end?
+
     if (comm.rank() > 0) {
         // merge left
         n_left_recv = lb_recv_displs[comm.rank()-1] + lb_recv_counts[comm.rank()-1];
         ansv_merge<left_type, right_type>(recved.begin(), recved.begin()+n_left_recv, lr_mins.begin(), lr_mins.begin()+n_left_mins);
+        //
+    /*
+        pair_it l_not_merged = recved.end()-1;
+        pair_it r_not_merged = lr_mins.begin();
+        for (int i = comm.rank()-1; i >= 0; --i) {
+            // if there is an `in` range to merge: merge all those before
+            // and then merge in range
+            // else just increase some pointer/iterator
+            // special case if reached the top (min of recved or me)
+            n_left_recv = lb_recv_displs[comm.rank()-1] + lb_recv_counts[comm.rank()-1];
+            // TODO: merge only partial sequences and skip `in` if its solved elsewhere
+            //       and use one-sided-merge if its a bi-directional comm
+            //       and use it for things i don't need to send back (received ub/lb)
+            std::tie(l_not_merged, r_not_merged) = ansv_merge<left_type, right_type>(recved.begin(), recved.begin()+n_left_recv, r_not_merged, lr_mins.begin()+n_left_mins);
+        }
+    */
     }
 
     if (comm.rank()+1 < comm.size()) {
@@ -1447,7 +1373,7 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     t.end_section("ANSV: all2all back");
     SDEBUG(lr_mins);
 
-    // local to global indexing transformation
+    // set elements without a match to `nonsv`
     size_t left_upper = n_left_mins;
     for (; left_upper > 0; --left_upper) {
         size_t j = left_upper - 1;

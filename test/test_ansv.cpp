@@ -276,7 +276,7 @@ TEST(PsacANSV, ParallelANSVrand_ ## func_name) {  \
             std::generate(in.begin(), in.end(), [](){return std::rand() % 100;}); \
         } \
         PAR_TEST_GANSV_ALL(size_t, in, c, func_name); \
-   } \
+    } \
 }
 
 // TODO: use google test test-case intialization instead of
@@ -292,7 +292,7 @@ TEST(PsacANSV, ParallelANSVrand_ ## func_name) {  \
             std::generate(in.begin(), in.end(), [](){return std::rand() % 100;}); \
         } \
         par_test_ansv(in, & func_name <size_t>, c); \
-   } \
+    } \
 }
 
 
@@ -308,7 +308,7 @@ TEST(PsacANSV, ParallelANSVrandperm_ ## func_name) {  \
             std::random_shuffle(in.begin(), in.end()); \
         } \
         par_test_ansv(in, & func_name <size_t>, c); \
-   } \
+    } \
 }
 
 PAR_GTEST_GANSV_RAND(ansv);
@@ -330,7 +330,7 @@ TEST(PsacANSV, ParallelANSVrand_special) {
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
-            std::generate(in.begin(), in.end(), [](){return std::rand() % 4;});
+            std::generate(in.begin(), in.end(), [](){return std::rand() % 10;});
         }
         PAR_TEST_GANSV(size_t, in, c, my_ansv_minpair_lbub, global_indexing, furthest_eq, furthest_eq);
         //par_test_gansv<size_t, nearest_sm, nearest_eq, global_indexing>(in, &my_ansv_minpair_lbub<size_t,nearest_sm,nearest_eq,global_indexing>, c);
