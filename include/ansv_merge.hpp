@@ -275,7 +275,6 @@ It2 ansv_right_merge(It1 left_begin, It1 left_end, It2 right_begin, It2 right_en
             while (l != left_begin && !((l-1)->first < r->first))
                 --l;
             if (l == left_begin) {
-                r = rsm;
                 break;
             }
             for (It2 ri = r; ri != rsm; ++ri) {
@@ -287,7 +286,6 @@ It2 ansv_right_merge(It1 left_begin, It1 left_end, It2 right_begin, It2 right_en
             while (l != left_begin && r->first < (l-1)->first)
                 --l;
             if (l == left_begin) {
-                r = rsm;
                 break;
             }
             // assign nearest within equal range
@@ -301,7 +299,6 @@ It2 ansv_right_merge(It1 left_begin, It1 left_end, It2 right_begin, It2 right_en
             while (l != left_begin && r->first < (l-1)->first)
                 --l;
             if (l == left_begin) {
-                r = rsm;
                 break;
             }
             // find end of equal range for both sides
@@ -329,6 +326,7 @@ It2 ansv_right_merge(It1 left_begin, It1 left_end, It2 right_begin, It2 right_en
 template <int left_type, int right_type, typename Iterator>
 std::pair<Iterator,Iterator> ansv_merge(Iterator left_begin, Iterator left_end, Iterator right_begin, Iterator right_end) {
     typedef typename std::iterator_traits<Iterator>::value_type T;
+    // TODO: this was just for testing purposes
     std::vector<T> left(left_begin, left_end);
     auto l = ansv_left_merge<right_type>(left_begin, left_end, right_begin, right_end);
     auto r = ansv_right_merge<left_type>(left.begin(), left.end(), right_begin, right_end);
