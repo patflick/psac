@@ -1248,9 +1248,10 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     std::vector<size_t> in_recv_displs(comm.size(), 0);
     size_t recv_offset = 0;
     // TODO: dynamically set whether we solve in duplex
-    std::vector<bool> bidir(comm.size(), false);
+    std::vector<bool> bidir(comm.size(), true);
     for (int i = 0; i < comm.size(); ++i) {
         // choose the min and set the other one to 0
+        /*
         if (min_recv_counts[i] < min_send_counts[i]) {
             min_send_counts[i] = 0;
         } else if (min_recv_counts[i] == min_send_counts[i]) {
@@ -1263,6 +1264,7 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
         } else {
             min_recv_counts[i] = 0;
         }
+        */
 
         // calculate receive counts and offsets
         if (i < comm.rank()) {
@@ -1442,7 +1444,7 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
                 left_nsv[idx] = nonsv;
                 lr_mins[j].second = nonsv;
             } else {
-                break;
+                //break;
             }
         } else {
             break;
@@ -1457,7 +1459,7 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
                 right_nsv[idx] = nonsv;
                 lr_mins[i].second = nonsv;
             } else {
-                break;
+                //break;
             }
         } else {
             break;
