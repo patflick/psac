@@ -337,7 +337,7 @@ void local_indexing_nsv_4(const std::vector<T>& in, std::vector<std::pair<T, siz
                     // match as the previous added one
                     // TODO: handle the case there there are two?
                     //       in `unmatched`
-                    if (unmatched.size() >= 2 && unmatched[unmatched.size()-2].first == in[i]) {
+                    if (unmatched.size() - prev_size >= 2 && unmatched[unmatched.size()-2].first == in[i]) {
                         // replace the index and remember the one we replaced
                         if (direction == dir_right)
                             e.emplace_back(unmatched.back().second);
@@ -1248,14 +1248,14 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     std::vector<size_t> in_recv_displs(comm.size(), 0);
     size_t recv_offset = 0;
     // TODO: dynamically set whether we solve in duplex
-    std::vector<bool> bidir(comm.size(), true);
+    std::vector<bool> bidir(comm.size(), false);
     for (int i = 0; i < comm.size(); ++i) {
         // choose the min and set the other one to 0
-        /*
         if (min_recv_counts[i] < min_send_counts[i]) {
             min_send_counts[i] = 0;
         } else if (min_recv_counts[i] == min_send_counts[i]) {
             // need to handle this case so that its symmetric
+            // -> send to the left
             if (i < comm.rank()) {
                 min_recv_counts[i] = 0;
             } else {
@@ -1264,7 +1264,6 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
         } else {
             min_recv_counts[i] = 0;
         }
-        */
 
         // calculate receive counts and offsets
         if (i < comm.rank()) {
@@ -1414,7 +1413,77 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     SDEBUG(recved);
 
     if (comm.rank()+1 < comm.size()) {
-        ansv_merge<left_type, right_type>(lr_mins.begin()+n_left_mins, lr_mins.end(), recved.begin()+n_left_recv, recved.end());
+        pair_it l_not_merged = lr_mins.end()-1;
+        pair_it r_not_merged = recved.begin()+n_left_recv;
+        for (int i = comm.rank()+1; i < comm.size(); ++i) {
+
+            if (!bidir[i] && min_recv_counts[i] > 0) {
+                // we are solving processor i's in-range via a
+                // bidirectional merge, using the first upper bound
+                // on each side as read-only extension in the merge
+
+                // merge in ranges with ub on both sides
+                pair_it l_in_begin = lr_mins.begin() + in_displs[i];
+                pair_it l_in_end = lr_mins.begin() + in_displs[i] + in_counts[i];
+                // extended sequence can only be single equal range?
+                pair_it l_ub_begin = l_in_begin-1;
+                while (l_ub_begin != lr_mins.begin()+n_left_mins && (l_ub_begin-1)->first == (l_in_begin-1)->first)
+                    --l_ub_begin;
+
+                // get bounds for received in-range
+                pair_it r_in_begin = recved.begin() + inub_recv_displs[i];
+                pair_it r_in_end = recved.begin() + inub_recv_displs[i] + min_recv_counts[i];
+                pair_it r_ub_end = r_in_end;
+                assert(r_ub_end->first < (r_in_end-1)->first);
+                assert(r_ub_end->first < l_in_begin->first);
+                while (r_ub_end != recved.end() && r_ub_end->first == r_in_end->first)
+                    ++r_ub_end;
+
+                // first one-sided merge everything up to the in-range
+                //pair_it rx = ansv_right_merge<left_type>(recved.begin(), l_not_merged+1, r_not_merged, r_in_begin);
+                pair_it lx = ansv_left_merge<right_type>(l_in_end, l_not_merged+1, r_not_merged, recved.end());
+                assert(lx == l_in_end-1);
+
+                // bidirectional merge with one element overhang:
+                pair_it rx;
+                std::tie(lx, rx) = ansv_merge<left_type, right_type>(l_in_begin, l_in_end, l_ub_begin, l_in_begin, r_in_begin, r_in_end, r_in_end, r_ub_end);
+                assert(rx == r_in_end);
+                assert(lx == l_in_begin-1);
+
+                l_not_merged = l_in_begin-1;
+                r_not_merged = r_in_end;
+                // TODO:
+                // if this is the last inrange and right_type == furthest_eq,
+                //    use read-only extension of right-received as match
+                //    to those which have min as match
+            }
+            if (!bidir[i] && min_send_counts[i] == in_counts[i] && in_counts[i] > 0) {
+                assert(min_recv_counts[i] == 0);
+                // skip my inrange, since its solved elsewhere
+                // i.e. merge everything till the beginning of the in-range
+                // then skip (set the unmerged_iterator to the in_end)
+
+                // first one-sided merge everything up to my in-range
+                //pair_it l_lb_begin = recved.begin() + lb_recv_displs[i];
+
+                pair_it l_in_begin = lr_mins.begin() + in_displs[i];
+                pair_it l_in_end = lr_mins.begin() + in_displs[i] + in_counts[i];
+
+                //pair_it r_in_begin = lr_mins.begin() + in_displs[i];
+                //pair_it r_in_end = lr_mins.begin() + in_displs[i] + in_counts[i];
+                //ansv_right_merge<left_type>(recved.begin(), l_not_merged+1, r_not_merged, r_in_begin);
+                ansv_left_merge<right_type>(l_in_end, l_not_merged+1, r_not_merged, recved.end());
+
+                r_not_merged = recved.begin()+lb_recv_displs[i];
+                //size_t lb_offset = (lb_recv_displs[i] + lb_recv_counts[i] == 0) ? 0 : lb_recv_displs[i] + lb_recv_counts[i]-1;
+                l_not_merged = l_in_begin-1;
+            }
+        }
+        //ansv_right_merge<left_type>(recved.begin(), l_not_merged+1, r_not_merged, lr_mins.begin()+n_left_mins);
+        ansv_left_merge<right_type>(lr_mins.begin()+n_left_mins, l_not_merged+1, r_not_merged, recved.end());
+
+
+        //ansv_merge<left_type, right_type>(lr_mins.begin()+n_left_mins, lr_mins.end(), recved.begin()+n_left_recv, recved.end());
     }
 
     t.end_section("ANSV: merge");

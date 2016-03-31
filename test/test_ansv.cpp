@@ -63,7 +63,7 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
                     T m = *minquery.query(in.cbegin()+s+1, in.cbegin()+i);
                     if (type == nearest_sm) {
                         // check that there is nothing smaller than in[i] in the range
-                        EXPECT_TRUE(in[i] <= m && in[s] < m) << " for range [" << s+1 << "," << i << "]";
+                        EXPECT_TRUE(in[i] <= m && in[s] < m) << " for range [" << s+1 << "," << i << "): " << "in[i]=" << in[i] << ", in[s]=" << in[s] << ", m=" << m;
                     } else if (type == furthest_eq) {
                         // test that no smaller values lay in between
                         EXPECT_TRUE(in[s] <= in[i] && in[s] <= m);
@@ -327,14 +327,14 @@ PAR_GTEST_ANSV_RAND_PERM(hh_ansv);
 
 TEST(PsacANSV, ParallelANSVrand_special) {
     mxx::comm c;
-    for (size_t n : {1000}) { // {13, 137, 1000, 26666}) {
+    for (size_t n : {137}) { // {13, 137, 1000, 26666}) {
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
             std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
         }
-        PAR_TEST_GANSV(size_t, in, c, my_ansv_minpair_lbub, global_indexing, nearest_sm, furthest_eq);
+        PAR_TEST_GANSV(size_t, in, c, my_ansv_minpair_lbub, global_indexing, nearest_eq, nearest_sm);
         //par_test_gansv<size_t, nearest_sm, nearest_eq, global_indexing>(in, &my_ansv_minpair_lbub<size_t,nearest_sm,nearest_eq,global_indexing>, c);
     }
 }
