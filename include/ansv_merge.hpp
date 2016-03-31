@@ -101,7 +101,7 @@ std::pair<Iterator,Iterator> ansv_merge(Iterator left_begin, Iterator left_end, 
             }
 
             // assigning left matches to right side
-            if (left_type == nearest_sm && lsm != left_begin) {
+            if (left_type == nearest_sm) {
                 if (lsm != left_begin) {
                     for (Iterator ri = r; ri != rsm; ++ri) {
                         *ri = *(lsm-1);
@@ -134,54 +134,61 @@ std::pair<Iterator,Iterator> ansv_merge(Iterator left_begin, Iterator left_end, 
     // use right extension to merge remaining unsovled left elements
     if (l != left_begin && right_ext_begin != right_ext_end) {
         // extended sequence consists of a single equal range
-        assert(*right_ext_begin == *(right_ext_end-1));
+        assert(right_ext_begin->first == (right_ext_end-1)->first);
         // find right matches for the remaining elements using the extended sequence
         if (right_type == nearest_sm) {
             for (Iterator li = l; li != left_begin; --li) {
-                if (*right_ext_begin < *(li-1)) {
-                    *(li-1) = *right_ext_begin;
+                assert(right_ext_begin->first < (li-1)->first);
+                //if (right_ext_begin->first < (li-1)->first) {
+                *(li-1) = *right_ext_begin;
+                /*
                 } else {
                     l = li;
                     break;
                 }
+                */
             }
+            l = left_begin;
         } else if (right_type == nearest_eq) {
             for (Iterator li = l; li != left_begin; --li) {
-                assert(*right_ext_begin <= *(li-1));
+                assert(right_ext_begin->first <= (li-1)->first);
                 *(li-1) = *right_ext_begin;
             }
+            l = left_begin;
         } else if (right_type == furthest_eq) {
             for (Iterator li = l; li != left_begin; --li) {
-                assert(*right_ext_begin <= *(li-1));
+                assert(right_ext_begin->first <= (li-1)->first);
                 *(li-1) = *(right_ext_end-1);
             }
+            l = left_begin;
         }
     }
 
     // use left extension to merge remaining unsolved right elments
     if (r != right_end && left_ext_begin != left_ext_end) {
         // find left matches for unmatched right elements
-        assert(*left_ext_begin == *(left_ext_end-1));
+        assert(left_ext_begin->first == (left_ext_end-1)->first);
         if (left_type == nearest_sm) {
             for (Iterator ri = r; ri != right_end; ++ri) {
-                if (*(left_ext_end-1) < *ri) {
+                assert((left_ext_end-1)->first < ri->first);
+                //if ((left_ext_end-1)->first < ri->first) {
                     *ri = *(left_ext_end-1);
-                } else {
-                    r = ri;
-                    break;
-                }
+                //}
             }
+            r = right_end;
         } else if (left_type == nearest_eq) {
             for (Iterator ri = r; ri != right_end; ++ri) {
-                assert(*(left_ext_end-1) <= *ri);
+                assert((left_ext_end-1)->first <= ri->first);
                 *ri = *(left_ext_end-1);
             }
+            r = right_end;
         } else if (left_type == furthest_eq) {
             // set to left most = left_ext_begin
             for (Iterator ri = r; ri != right_end; ++ri) {
-                assert(*left_ext_begin <= *ri);
+                assert(left_ext_begin->first <= ri->first);
                 *ri = *left_ext_begin;
             }
+            r = right_end;
         }
     }
 
@@ -210,48 +217,48 @@ It2 ansv_left_merge(It1 left_begin, It1 left_end, It2 right_begin, It2 right_end
             // iterate through `r` to find the next smaller
             while (r != right_end && !(r->first < l1->first))
                 ++r;
-            if (r != right_end) {
-                for (It1 li = l1; li != (lsm-1); --li) {
-                    *li = *r;
-                }
-                l = lsm;
+            if (r == right_end)
+                break;
+            for (It1 li = l1; li != (lsm-1); --li) {
+                *li = *r;
             }
+            l = lsm;
         } else if (right_type == nearest_eq) {
             // iterate through `r` to find the nearest non-larger
             while (r != right_end && r->first > l1->first)
                 ++r;
-            if (r != right_end) {
-                // assign nearest within equal range
-                for (It1 li = lsm; li != l1; ++li) {
-                    *li = *(li+1);
-                }
-                *l1 = *r;
-                l = lsm;
+            if (r == right_end)
+                break;
+            // assign nearest within equal range
+            for (It1 li = lsm; li != l1; ++li) {
+                *li = *(li+1);
             }
+            *l1 = *r;
+            l = lsm;
         } else if (right_type == furthest_eq) {
             // iterate through `r` to find the nearest non-larger
             while (r != right_end && r->first > l1->first)
                 ++r;
-            if (r != right_end) {
-                assert(r->first <= l1->first);
-                // find end of equal range: [r, rms)
-                It2 rsm = r+1;
-                while (rsm != right_end && r->first == rsm->first)
-                    ++rsm;
-                if (r->first == l1->first) {
-                    // assign this furthest element of its equal range to left
-                    for (It1 li = l1; li != (lsm-1); --li) {
-                        *li = *(rsm-1);
-                    }
-                } else {
-                    // only the right-most of the left equal range has r as its match
-                    for (It1 li = l1-1; li != (lsm-1); --li) {
-                        *li = *l1;
-                    }
-                    *l1 = *(rsm-1);
+            if (r == right_end)
+                break;
+            assert(r->first <= l1->first);
+            // find end of equal range: [r, rms)
+            It2 rsm = r+1;
+            while (rsm != right_end && r->first == rsm->first)
+                ++rsm;
+            if (r->first == l1->first) {
+                // assign this furthest element of its equal range to left
+                for (It1 li = l1; li != (lsm-1); --li) {
+                    *li = *(rsm-1);
                 }
-                l = lsm;
+            } else {
+                // only the right-most of the left equal range has r as its match
+                for (It1 li = l1-1; li != (lsm-1); --li) {
+                    *li = *l1;
+                }
+                *l1 = *(rsm-1);
             }
+            l = lsm;
         }
     }
     // TODO: should I also return the right iterator?

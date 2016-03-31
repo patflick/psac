@@ -47,8 +47,10 @@ void check_ansv(const std::vector<T>& in, const std::vector<size_t>& nsv, bool l
         if (nsv[i] == nonsv) {
             if (left && i > 0) {
                 // expect this is an overall minimum of the range [0, i]
-                T m = *minquery.query(in.cbegin(), in.cbegin()+i+1);
-                EXPECT_TRUE(in[i] == m || in[0] == m) << " at i=" << i;
+                //T m = *minquery.query(in.cbegin(), in.cbegin()+i+1);
+                auto mit = minquery.query(in.cbegin(), in.cbegin()+i+1);
+                T m = *mit;
+                EXPECT_TRUE(in[i] == m || in[0] == m) << " at i=" << i << ", in[i]=" << in[i] << ",m=" << m << ", mit=" << mit - in.begin();
             } else if (!left && i+1 < in.size()) {
                 T m = *minquery.query(in.cbegin()+i, in.cend());
                 EXPECT_TRUE(in[i] == m) << " at i=" << i;
@@ -325,14 +327,14 @@ PAR_GTEST_ANSV_RAND_PERM(hh_ansv);
 
 TEST(PsacANSV, ParallelANSVrand_special) {
     mxx::comm c;
-    for (size_t n : {40}) { // {13, 137, 1000, 26666}) {
+    for (size_t n : {43}) { // {13, 137, 1000, 26666}) {
         std::vector<size_t> in;
         if (c.rank() == 0) {
             in.resize(n);
             std::srand(7);
             std::generate(in.begin(), in.end(), [](){return std::rand() % 10;});
         }
-        PAR_TEST_GANSV(size_t, in, c, my_ansv_minpair_lbub, global_indexing, furthest_eq, furthest_eq);
+        PAR_TEST_GANSV(size_t, in, c, my_ansv_minpair_lbub, global_indexing, nearest_eq, furthest_eq);
         //par_test_gansv<size_t, nearest_sm, nearest_eq, global_indexing>(in, &my_ansv_minpair_lbub<size_t,nearest_sm,nearest_eq,global_indexing>, c);
     }
 }
