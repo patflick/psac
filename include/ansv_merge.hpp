@@ -332,12 +332,6 @@ It2 ansv_right_merge(It1 left_begin, It1 left_end, It2 right_begin, It2 right_en
 
 template <int left_type, int right_type, typename Iterator>
 std::pair<Iterator,Iterator> ansv_merge(Iterator left_begin, Iterator left_end, Iterator right_begin, Iterator right_end) {
-    typedef typename std::iterator_traits<Iterator>::value_type T;
-    // TODO: this was just for testing purposes
-    std::vector<T> left(left_begin, left_end);
-    auto l = ansv_left_merge<right_type>(left_begin, left_end, right_begin, right_end);
-    auto r = ansv_right_merge<left_type>(left.begin(), left.end(), right_begin, right_end);
-    return std::pair<Iterator,Iterator>(l, r);
-    //return ansv_merge<left_type, right_type>(left_begin, left_end, left_begin, left_begin, right_begin, right_end, right_end, right_end);
+    return ansv_merge<left_type, right_type>(left_begin, left_end, left_begin, left_begin, right_begin, right_end, right_end, right_end);
 }
 #endif // ANSV_MERGE_HPP

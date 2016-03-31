@@ -38,6 +38,7 @@
 void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm) {
     mxx::timer t;
 
+    /*
     {
     std::vector<size_t> left_nsv(local_input.size());
     std::vector<size_t> right_nsv;
@@ -80,6 +81,7 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     if (comm.rank() == 0)
         std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
+    */
 
     {
     std::vector<size_t> left_nsv;
