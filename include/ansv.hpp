@@ -1201,6 +1201,37 @@ void commpair_minpair(const std::vector<size_t>& in_counts, const std::vector<si
     }
 }
 
+void commpair_minpair_duplex(const std::vector<size_t>& in_counts,
+                             const std::vector<size_t>& in_recv_counts,
+                             std::vector<size_t>& min_send_counts,
+                             std::vector<size_t>& min_recv_counts,
+                             std::vector<bool>& bidir,
+                             const mxx::comm& comm) {
+    // output the minimum for each communication partner
+    // if equal, send to left
+    min_send_counts = in_counts;
+    min_recv_counts = in_recv_counts;
+    bidir = std::vector<bool>(comm.size(), false);
+    for (int i = 0; i < comm.size(); ++i) {
+        // choose the min and set the other one to 0
+        if (min_recv_counts[i] < min_send_counts[i]) {
+            if (min_recv_counts[i]*2 < min_send_counts[i])
+                min_send_counts[i] = 0;
+            else
+                bidir[i] = true;
+        } else if (min_recv_counts[i] == min_send_counts[i]) {
+            bidir[i] = true;
+        } else {
+            if (min_send_counts[i]*2 < min_recv_counts[i])
+                min_recv_counts[i] = 0;
+            else
+                bidir[i] = true;
+        }
+        assert(bidir[i] || (min_send_counts[i] == 0 || min_recv_counts[i] == 0));
+    }
+}
+
+
 template <typename T>
 void commpair_berkman(const std::vector<size_t>& in_counts, const std::vector<size_t>& in_recv_counts,
                       const std::vector<T>& allmins,
@@ -1244,9 +1275,15 @@ void commpair_berkman(const std::vector<size_t>& in_counts, const std::vector<si
     }
 }
 
+// methods for communication pairing
+constexpr int allpair = 0;
+constexpr int minpair = 1;
+constexpr int minpair_duplex = 2;
+constexpr int berkman = 3;
+// TODO: add more: e.g. minimize computation?
 
-template <typename T, int left_type, int right_type, int indexing_type = global_indexing>
-void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
+template <typename T, int left_type, int right_type, int indexing_type, int pair_type = berkman>
+void gansv_impl(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
     mxx::section_timer t(std::cerr, comm);
 
     size_t local_size = in.size();
@@ -1313,9 +1350,19 @@ void my_ansv_minpair_lbub(const std::vector<T>& in, std::vector<size_t>& left_ns
     std::vector<size_t> min_send_counts;
     std::vector<size_t> min_recv_counts;
 
-    // TODO: choose which method to use
-    commpair_berkman(in_counts, in_recv_counts, allmins, min_send_counts, min_recv_counts, comm);
-    //commpair_minpair(in_counts, in_recv_counts, min_send_counts, min_recv_counts, comm);
+    // choose method for determining direction of each communication
+    if (pair_type == allpair) {
+        // all communication partners are bi-directional
+        min_send_counts = in_counts;
+        min_recv_counts = in_recv_counts;
+        bidir = std::vector<bool>(comm.size(), true);
+    } else if (pair_type == minpair) {
+        commpair_minpair(in_counts, in_recv_counts, min_send_counts, min_recv_counts, comm);
+    } else if (pair_type == minpair_duplex) {
+        commpair_minpair_duplex(in_counts, in_recv_counts, min_send_counts, min_recv_counts, bidir, comm);
+    } else if (pair_type == berkman) {
+        commpair_berkman(in_counts, in_recv_counts, allmins, min_send_counts, min_recv_counts, comm);
+    }
 
     // calculate the actual communication paramters for inner and upper range
     std::vector<size_t> inub_send_counts(comm.size(), 0);

@@ -314,7 +314,7 @@ TEST(PsacANSV, ParallelANSVrandperm_ ## func_name) {  \
 }
 
 PAR_GTEST_GANSV_RAND(ansv);
-PAR_GTEST_GANSV_RAND(my_ansv_minpair_lbub);
+PAR_GTEST_GANSV_RAND(gansv_impl);
 
 PAR_GTEST_ANSV_RAND(my_ansv);
 // NOTE: these two variants fail if there are equal elements in the range
@@ -334,7 +334,7 @@ TEST(PsacANSV, ParallelANSVrand_special) {
             std::srand(7);
             std::generate(in.begin(), in.end(), [](){return std::rand() % 100;});
         }
-        PAR_TEST_GANSV(size_t, in, c, my_ansv_minpair_lbub, global_indexing, nearest_eq, nearest_sm);
+        PAR_TEST_GANSV(size_t, in, c, gansv_impl, global_indexing, nearest_eq, nearest_sm);
         //par_test_gansv<size_t, nearest_sm, nearest_eq, global_indexing>(in, &my_ansv_minpair_lbub<size_t,nearest_sm,nearest_eq,global_indexing>, c);
     }
 }

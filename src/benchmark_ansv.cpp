@@ -90,9 +90,50 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     size_t nonsv = std::numeric_limits<size_t>::max();
     comm.barrier();
     double start = t.elapsed();
-    my_ansv_minpair_lbub<size_t, nearest_sm, nearest_sm, local_indexing>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    gansv_impl<size_t, nearest_sm, nearest_sm, local_indexing, allpair>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
     double time = t.elapsed() - start;
-    std::string method_name = "minpair-lbub";
+    std::string method_name = "gansv-allpair";
+    if (comm.rank() == 0)
+        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
+
+    {
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    gansv_impl<size_t, nearest_sm, nearest_sm, local_indexing, minpair>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "gansv-minpair";
+    if (comm.rank() == 0)
+        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
+
+    {
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    gansv_impl<size_t, nearest_sm, nearest_sm, local_indexing, minpair_duplex>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "gansv-minpair-duplex";
+    if (comm.rank() == 0)
+        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
+    {
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    gansv_impl<size_t, nearest_sm, nearest_sm, local_indexing, berkman>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "gansv-berkman";
     if (comm.rank() == 0)
         std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
@@ -148,8 +189,8 @@ int main(int argc, char *argv[])
     cmd.add(iterArg);
     cmd.parse(argc, argv);
 
-    //std::vector<size_t> local_input = generate_input(100000000, comm);
-    std::vector<size_t> local_input = generate_input_procpeaks(80000000, comm);
+    std::vector<size_t> local_input = generate_input(100000000, comm);
+    //std::vector<size_t> local_input = generate_input_procpeaks(80000000, comm);
     /*
     if (fileArg.getValue() != "")
     {
