@@ -82,6 +82,19 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
         std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
     */
+    {
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    old_gansv<size_t, nearest_sm, nearest_sm, local_indexing>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "gansv-old";
+    if (comm.rank() == 0)
+        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
 
     {
     std::vector<size_t> left_nsv;

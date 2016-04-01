@@ -791,8 +791,8 @@ void ansv_local_finish_all(const std::vector<T>& in, const std::vector<std::pair
 // TODO: iterator version??
 // TODO: comparator type
 // TODO: more compact via index_t template instead of size_t
-template <typename T, int left_type = nearest_sm, int right_type = nearest_sm, int indexing_type = global_indexing>
-void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
+template <typename T, int left_type, int right_type, int indexing_type>
+void old_gansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
     mxx::section_timer t(std::cerr, comm);
 
     size_t local_size = in.size();
@@ -818,6 +818,7 @@ void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<s
     lr_mins = recved;
     t.end_section("ANSV: finish ansv local");
 }
+
 
 template <typename T>
 void my_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
@@ -2038,6 +2039,11 @@ void hh_ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vecto
     t.end_section("ANSV: finish ansv local");
     SDEBUG(left_nsv);
     SDEBUG(right_nsv);
+}
+
+template <typename T, int left_type = nearest_sm, int right_type = nearest_sm, int indexing_type = global_indexing>
+void ansv(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::vector<size_t>& right_nsv, std::vector<std::pair<T,size_t> >& lr_mins, const mxx::comm& comm, size_t nonsv = 0) {
+    gansv_impl<T, left_type, right_type, indexing_type, minpair>(in, left_nsv, right_nsv, lr_mins, comm, nonsv);
 }
 
 template <typename T, int left_type = nearest_sm, int right_type = nearest_sm>
