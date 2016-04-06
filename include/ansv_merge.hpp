@@ -139,14 +139,7 @@ std::pair<Iterator,Iterator> ansv_merge(Iterator left_begin, Iterator left_end, 
         if (right_type == nearest_sm) {
             for (Iterator li = l; li != left_begin; --li) {
                 assert(right_ext_begin->first < (li-1)->first);
-                //if (right_ext_begin->first < (li-1)->first) {
                 *(li-1) = *right_ext_begin;
-                /*
-                } else {
-                    l = li;
-                    break;
-                }
-                */
             }
             l = left_begin;
         } else if (right_type == nearest_eq) {
@@ -171,9 +164,7 @@ std::pair<Iterator,Iterator> ansv_merge(Iterator left_begin, Iterator left_end, 
         if (left_type == nearest_sm) {
             for (Iterator ri = r; ri != right_end; ++ri) {
                 assert((left_ext_end-1)->first < ri->first);
-                //if ((left_ext_end-1)->first < ri->first) {
-                    *ri = *(left_ext_end-1);
-                //}
+                *ri = *(left_ext_end-1);
             }
             r = right_end;
         } else if (left_type == nearest_eq) {

@@ -1547,11 +1547,10 @@ void gansv_impl(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::ve
                 pair_it l_in_begin = lr_mins.begin() + in_displs[i];
                 pair_it l_in_end = lr_mins.begin() + in_displs[i] + in_counts[i];
                 if (in_counts[i] == 0 && ub_counts[i] == 0) {
-                    l_in_begin = lr_mins.end();
-                    l_in_end = lr_mins.end();
-                }
-                // extended sequence can only be single equal range?
-                if (l_in_begin == l_in_end && l_in_end != lr_mins.end()) {
+                    assert(lb_counts[i] > 0);
+                    l_in_begin = lr_mins.begin() + lb_displs[i] + lb_counts[i];
+                    l_in_end = l_in_begin;
+                } else if (l_in_begin == l_in_end && l_in_end != lr_mins.end()) {
                     ++l_in_begin;
                     ++l_in_end;
                 }
@@ -1573,7 +1572,6 @@ void gansv_impl(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::ve
                     ++r_ub_end;
 
                 // first one-sided merge everything up to the in-range
-                //pair_it rx = ansv_right_merge<left_type>(recved.begin(), l_not_merged+1, r_not_merged, r_in_begin);
                 pair_it lx = ansv_left_merge<right_type>(l_in_end, l_not_merged+1, r_not_merged, recved.end());
                 assert(lx == l_in_end-1);
 
