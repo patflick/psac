@@ -82,6 +82,8 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
         std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
     */
+    size_t n = comm.size()*local_input.size();
+
     {
     std::vector<size_t> left_nsv;
     std::vector<size_t> right_nsv;
@@ -93,7 +95,7 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     double time = t.elapsed() - start;
     std::string method_name = "gansv-old";
     if (comm.rank() == 0)
-        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+        std::cout << n << ";" << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
 
     {
@@ -107,7 +109,36 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     double time = t.elapsed() - start;
     std::string method_name = "gansv-allpair";
     if (comm.rank() == 0)
-        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+        std::cout << n << ";" << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
+
+
+    {
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    gansv_impl<size_t, nearest_sm, nearest_sm, local_indexing, left>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "gansv-left";
+    if (comm.rank() == 0)
+        std::cout << n << ";" << comm.size() << ";" << method_name << ";" << time << std::endl;
+    }
+
+    {
+    std::vector<size_t> left_nsv;
+    std::vector<size_t> right_nsv;
+    std::vector<std::pair<size_t, size_t>> lr_mins;
+    size_t nonsv = std::numeric_limits<size_t>::max();
+    comm.barrier();
+    double start = t.elapsed();
+    gansv_impl<size_t, nearest_sm, nearest_sm, local_indexing, berkman>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
+    double time = t.elapsed() - start;
+    std::string method_name = "gansv-berkman";
+    if (comm.rank() == 0)
+        std::cout << n << ";" << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
 
     {
@@ -121,21 +152,7 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     double time = t.elapsed() - start;
     std::string method_name = "gansv-minpair";
     if (comm.rank() == 0)
-        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
-    }
-
-    {
-    std::vector<size_t> left_nsv;
-    std::vector<size_t> right_nsv;
-    std::vector<std::pair<size_t, size_t>> lr_mins;
-    size_t nonsv = std::numeric_limits<size_t>::max();
-    comm.barrier();
-    double start = t.elapsed();
-    gansv_impl<size_t, nearest_sm, nearest_sm, local_indexing, left>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
-    double time = t.elapsed() - start;
-    std::string method_name = "gansv-left";
-    if (comm.rank() == 0)
-        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+        std::cout << n << ";" << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
 
     {
@@ -149,30 +166,22 @@ void benchmark_all(const std::vector<size_t>& local_input, const mxx::comm& comm
     double time = t.elapsed() - start;
     std::string method_name = "gansv-minpair-duplex";
     if (comm.rank() == 0)
-        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
-    }
-    {
-    std::vector<size_t> left_nsv;
-    std::vector<size_t> right_nsv;
-    std::vector<std::pair<size_t, size_t>> lr_mins;
-    size_t nonsv = std::numeric_limits<size_t>::max();
-    comm.barrier();
-    double start = t.elapsed();
-    gansv_impl<size_t, nearest_sm, nearest_sm, local_indexing, berkman>(local_input, left_nsv, right_nsv, lr_mins, comm, nonsv);
-    double time = t.elapsed() - start;
-    std::string method_name = "gansv-berkman";
-    if (comm.rank() == 0)
-        std::cout << comm.size() << ";" << method_name << ";" << time << std::endl;
+        std::cout << n << ";" << comm.size() << ";" << method_name << ";" << time << std::endl;
     }
 }
 
 std::vector<size_t> generate_input(size_t n, const mxx::comm& c) {
-    std::vector<size_t> result;
+    size_t np = n/c.size();
+    std::vector<size_t> result(np);
+    std::srand(1337*c.rank());
+    std::generate(result.begin(), result.end(), [&n](){ return std::rand() % n; });
+    /*
     if (c.rank() == 0) {
         result.resize(n);
         std::generate(result.begin(), result.end(), [&n]() { return std::rand() % n; });
     }
     mxx::stable_distribute_inplace(result, c);
+    */
     return result;
 }
 
@@ -199,6 +208,31 @@ std::vector<size_t> generate_input_procpeaks(size_t n, const mxx::comm& c) {
     return local_els;
 }
 
+std::vector<size_t> generate_input_bitonic(size_t n, const mxx::comm& c) {
+    n -= n % c.size(); // make sure n is divisable by p
+    size_t np = n/c.size();
+    std::vector<size_t> local_els(np);
+
+    // first half processors have increasing sequence
+    // of even elements from 0 to n
+    if (c.rank() < c.size()/2) {
+        size_t offset = c.rank()*np*2;
+        for (size_t i = 0; i < np; ++i) {
+            local_els[i] = offset + 2*i;
+        }
+    }
+    // second half of processors have a decreasing sequence
+    // of odd elements from n to 0
+    if (c.rank() >= c.size()/2) {
+        size_t offset = n - (c.rank() - c.size()/2)*2*np;
+        for (size_t i = 0; i < np; ++i) {
+            local_els[i] = offset - 2*i + 1;
+        }
+    }
+    return local_els;
+}
+
+
 int main(int argc, char *argv[])
 {
     mxx::env e(argc, argv);
@@ -209,15 +243,33 @@ int main(int argc, char *argv[])
     TCLAP::CmdLine cmd("Benchmark different ANSV variants.");
     // TODO: benchmark for actual LCP numbers (-> read via file)
     // TCLAP::ValueArg<std::string> fileArg("f", "file", "Input filename.", true, "", "filename");
-    TCLAP::ValueArg<std::size_t> randArg("r", "random", "Random input size", true, 0, "size");
-    cmd.add(randArg);
+    TCLAP::ValueArg<std::size_t> sizeArg("n", "inputsize", "Input size of randomly generated sequence", true, 0, "size");
+    cmd.add(sizeArg);
     //cmd.xorAdd(fileArg, randArg);
     TCLAP::ValueArg<int> iterArg("i", "iterations", "Number of iterations to run", false, 1, "num");
     cmd.add(iterArg);
+    TCLAP::SwitchArg peaksArg("k", "peaks", "Using random peaks as benchmark input", false);
+    cmd.add(peaksArg);
+    TCLAP::SwitchArg uniArg("u", "uniform", "Using uniform random input", false);
+    cmd.add(uniArg);
+    TCLAP::SwitchArg bitonicArg("b", "bitonic", "Using bitonic sequence as benchmark input", false);
+    cmd.add(bitonicArg);
+
     cmd.parse(argc, argv);
 
+    size_t insize = sizeArg.getValue();
     //std::vector<size_t> local_input = generate_input(100000000, comm);
-    std::vector<size_t> local_input = generate_input_procpeaks(80000000, comm);
+    //insize = 80*1000*1000;
+    std::vector<size_t> local_input;
+    if (peaksArg.getValue()) {
+        local_input = generate_input_procpeaks(insize, comm);
+    } else if (uniArg.getValue()) {
+        local_input = generate_input(insize, comm);
+    } else if (bitonicArg.getValue()) {
+        local_input = generate_input_bitonic(insize, comm);
+    }
+    // TODO: potentially load data from a file
+    // TODO: load from LCP?
     /*
     if (fileArg.getValue() != "")
     {
