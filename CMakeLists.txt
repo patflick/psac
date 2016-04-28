@@ -99,7 +99,10 @@ endif(ENABLE_PROFILING_SCOREP)
 ### Test Coverage
 OPTION(ENABLE_COVERAGE "Enable code coverage reporting" OFF)
 if(ENABLE_COVERAGE)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
+  # turn off stack protection for gcov coverage, because the stack protector shows
+  # up as a never taken branch, and thus turns any last statement in a function
+  # with a stack procetor into a partially covered statement.
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage -fno-stack-protector")
 endif(ENABLE_COVERAGE)
 
 ###### Executable and Libraries
