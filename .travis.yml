@@ -67,7 +67,7 @@ before_script:
     - mkdir build
     - cd build
     # build with coverage reporting
-    - cmake -DENABLE_COVERAGE=ON -DMPI_C_COMPILER=$HOME/local/$MPI/bin/mpicc -DMPI_CXX_COMPILER=$HOME/local/$MPI/bin/mpicxx ../
+    - cmake -DENABLE_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug -DMPI_C_COMPILER=$HOME/local/$MPI/bin/mpicc -DMPI_CXX_COMPILER=$HOME/local/$MPI/bin/mpicxx ../
 
 script:
     # build mxx and run tests
