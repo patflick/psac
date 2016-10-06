@@ -116,8 +116,15 @@ bulk_rma(InputIter local_begin, InputIter local_end,
 constexpr int edgechar_twophase_all2all = 1;
 constexpr int edgechar_bulk_rma = 2;
 constexpr int edgechar_mpi_osc_rma = 3;
+constexpr int edgechar_rma_shared = 4;
 
-template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_bulk_rma>
+#if SHARED_MEM
+constexpr int edgechar_default = edgechar_rma_shared;
+#else
+constexpr int edgechar_default = edgechar_bulk_rma;
+#endif
+
+template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
 std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
     // get input sizes
@@ -339,8 +346,6 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     }
     t.end_section("locally calc parents");
 
-    // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
-    // TODO: use constexpr for different methods (rather than #defines)
     // TODO: plus distinguish between dollar/parent req only for the first method
     typedef typename std::iterator_traits<InputIterator>::value_type CharT;
     std::vector<CharT> edge_chars;
@@ -353,12 +358,14 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         remote_reqs = std::vector<Tp>();
         t.end_section("bulk_rma: send to parent");
 
-        // TODO: only query for those with offset != global_size
+        // only query for those with offset != global_size
         // bucket by target processor of the character request
         auto dollar_begin = std::partition(parent_reqs.begin(), parent_reqs.end(), [&global_size](const Tp& x){return std::get<2>(x) < global_size;});
         dollar_reqs = std::vector<Tp>(dollar_begin, parent_reqs.end());
         parent_reqs.resize(std::distance(parent_reqs.begin(), dollar_begin));
         t.end_section("bulk_rma: partition dollars");
+        // bucket the String index by target processor (the character we need for this edge)
+        // as a pre-step for the bulk_rma (which requires things to be bucketed by target processor)
         std::vector<size_t> send_counts = mxx::bucketing(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) { return part.target_processor(std::get<2>(t));}, comm.size());
         t.end_section("bulk_rma: bucketing by char index");
         // create request address vector
@@ -371,6 +378,11 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         edge_chars = bulk_rma(sa.input_begin, sa.input_end, global_indexes, send_counts, comm);
         t.end_section("bulk_rma: bulk_rma");
     } else if (edgechar_method == edgechar_twophase_all2all) {
+        // This is a slower method, because it sends all edges to the position
+        // of the character first, and then back to the position of the parent.
+        // Most parents are on the same processor as the child node, thus
+        // this requires a lot more communication then necessary
+        // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
         mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
         // send all requests to the process on which the character for the
         // character request lies
@@ -432,6 +444,53 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         MPI_Win_free(&win);
 
         t.end_section("RMA read chars");
+    } else if (edgechar_method == edgechar_rma_shared) {
+        // use MPI shared memory windows (only works on shared memory systems)
+        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        // send those edges for which the parent lies on a remote processor
+        mxx::all2all_func(remote_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
+        parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
+        t.end_section("all2all_func: send to parent");
+
+        // create MPI_Win for input string, create character array for size of parents
+        // and use RMA to request (read) all characters which are not `$`
+        MPI_Win win;
+        CharT* charwin;
+        MPI_Win_allocate_shared (local_size, 1, MPI_INFO_NULL, comm, &charwin, &win);
+        /* copy string into shared memory window */
+        std::copy(sa.input_begin, sa.input_end, charwin);
+        MPI_Win_sync(win);
+        MPI_Win_fence(0, win);
+
+        /* create table of pointers for shared memory access */
+        std::vector<CharT*> shptrs(comm.size());
+        for (int i = 0; i < comm.size(); ++i) {
+            MPI_Aint winsize;
+            int windispls;
+            MPI_Win_shared_query(win, i, &winsize, &windispls, &shptrs[i]);
+        }
+
+        // read characters here!
+        edge_chars.resize(parent_reqs.size());
+        for (size_t i = 0; i < parent_reqs.size(); ++i) {
+            size_t offset = std::get<2>(parent_reqs[i]);
+            // read global index offset
+            if (offset == global_size) {
+                // TODO: handle specially?
+                edge_chars[i] = 0;
+            } else {
+                int proc = part.target_processor(offset);
+                size_t proc_offset = offset - part.excl_prefix_size(proc);
+                // read at pos proc_offset from processor `proc` in window win
+                edge_chars[i] = *(shptrs[proc] + proc_offset);
+            }
+        }
+        // fence to complete all requests
+        MPI_Win_sync(win);
+        MPI_Win_fence(0, win);
+        MPI_Win_free(&win);
+
+        t.end_section("RMA shared read chars");
     }
 
     // TODO: (alternatives for full lookup table in each node:)
@@ -450,8 +509,12 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         if (edgechar_method == edgechar_twophase_all2all) {
             c = std::get<2>(parent_reqs[i]);
         } else {
-            char x = edge_chars[i];
-            c = sa.alphabet_mapping[x];
+            CharT x = edge_chars[i];
+            if (x == 0) {
+                c = 0;
+            } else {
+                c = sa.alphabet_mapping[x];
+            }
         }
         MXX_ASSERT(0 <= c && c < sa.sigma+1);
         size_t cell_idx = node_idx + c;
@@ -467,6 +530,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
 
     t.end_section("locally: create internal nodes");
 
+    // This stuff is all done (look above)
     // TODO:
     // - get character for internal nodes (first character of suffix starting at
     //   the node S[SA[i]+LCP[i]]) [i.e. requesting a full permutation] needed for
