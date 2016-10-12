@@ -14,7 +14,7 @@ add_executable(test-ansv test_ansv.cpp)
 target_link_libraries(test-ansv mxx-gtest-main)
 
 add_executable(test-suffixtree test_suffixtree.cpp)
-target_link_libraries(test-suffixtree mxx-gtest-main)
+target_link_libraries(test-suffixtree mxx-gtest-main rt)
 
 # Parallel tests
 add_executable(test-psac test_psac.cpp)

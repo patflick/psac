@@ -25,8 +25,12 @@
 #include <suffix_array.hpp>
 #include <ansv.hpp>
 
-template <typename Q, typename Func>
+// for posix sm
+#include <unistd.h>
+#include <sys/mman.h>
+#include <fcntl.h>
 
+template <typename Q, typename Func>
 std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector<Q>& queries, Func f, const std::vector<size_t>& send_counts, const mxx::comm& comm) {
     // type of the query results
     typedef typename std::result_of<Func(Q)>::type T;
@@ -112,20 +116,324 @@ bulk_rma(InputIter local_begin, InputIter local_end,
     return bulk_rma(local_begin, local_end, global_indexes, send_counts, comm);
 }
 
+template <typename InputIter>
+std::vector<typename std::iterator_traits<InputIter>::value_type>
+bulk_rma_mpiwin(InputIter local_begin, InputIter local_end,
+         const std::vector<size_t>& global_indexes, const mxx::comm& comm) {
+    using value_type = typename std::iterator_traits<InputIter>::value_type;
+
+    // get local and global size
+    size_t local_size = std::distance(local_begin, local_end);
+    size_t global_size = mxx::allreduce(local_size, comm);
+    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+
+    // create MPI_Win for input string, create character array for size of parents
+    // and use RMA to request (read) all characters which are not `$`
+    MPI_Win win;
+    MPI_Win_create(&(*local_begin), local_size, sizeof(value_type), MPI_INFO_NULL, comm, &win);
+    MPI_Win_fence(0, win);
+
+    mxx::datatype dt = mxx::get_datatype<value_type>();
+
+    // read characters here!
+    std::vector<value_type> results(global_indexes.size());
+    for (size_t i = 0; i < results.size(); ++i) {
+        size_t offset = global_indexes[i];
+        // read global index offset
+        if (offset < global_size) {
+            int proc = part.target_processor(offset);
+            size_t proc_offset = offset - part.excl_prefix_size(proc);
+            // request proc_offset from processor `proc` in window win
+            MPI_Get(&results[i], 1, dt.type(), proc, proc_offset, 1, dt.type(), win);
+        }
+    }
+    // fence to complete all requests
+    //MPI_Win_fence(MPI_MODE_NOSTORE | MPI_MODE_NOPUT | MPI_MODE_NOSUCCEED, win);
+    MPI_Win_fence(0, win);
+    MPI_Win_free(&win);
+
+    return results;
+}
+
+template <typename InputIter>
+std::vector<typename std::iterator_traits<InputIter>::value_type>
+bulk_rma_shm_mpi(InputIter local_begin, InputIter local_end,
+         const std::vector<size_t>& global_indexes, const mxx::comm& comm) {
+    mxx::section_timer t(std::cerr, comm);
+    using value_type = typename std::iterator_traits<InputIter>::value_type;
+
+    // get local and global size
+    size_t local_size = std::distance(local_begin, local_end);
+    size_t prefix = mxx::exscan(local_size, comm);
+    size_t global_size = mxx::allreduce(local_size, comm);
+    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+
+    mxx::datatype dt = mxx::get_datatype<value_type>();
+
+    // create MPI_Win for input string, create character array for size of parents
+    // and use RMA to request (read) all characters which are not `$`
+    MPI_Win win;
+    value_type* charwin;
+    MPI_Info info;
+    MPI_Info_create(&info);
+    MPI_Info_set(info, "alloc_shared_noncontig", "true");
+    if (comm.rank() == 0) {
+        MPI_Win_allocate_shared(global_size, sizeof(value_type), info, comm, &charwin, &win);
+    } else {
+        MPI_Win_allocate_shared(0, sizeof(value_type), info, comm, &charwin, &win);
+    }
+    t.end_section("alloc window");
+
+    /* create table of pointers for shared memory access */
+    //std::vector<CharT*> shptrs(comm.size());
+    /*
+       for (int i = 0; i < comm.size(); ++i) {
+       MPI_Aint winsize;
+       int windispls;
+       MPI_Win_shared_query(win, i, &winsize, &windispls, &shptrs[i]);
+       }
+       */
+
+    value_type* shptr;
+    MPI_Aint winsize; int windispls;
+    MPI_Win_shared_query(win, 0, &winsize, &windispls, &shptr);
+    t.end_section("get ptrs via shared_query");
+
+    /* copy string into shared memory window */
+    memcpy(shptr+prefix, &(*local_begin), local_size*sizeof(value_type));
+    t.end_section("copy input string into shared win");
+    MPI_Win_sync(win);
+    MPI_Win_fence(0, win);
+    t.end_section("sync");
+
+    // read characters here!
+    std::vector<value_type> results(global_indexes.size());
+    for (size_t i = 0; i < results.size(); ++i) {
+        size_t offset = global_indexes[i];
+        // read global index offset
+        if (offset < global_size) {
+            results[i] = *(shptr + offset);
+        }
+    }
+    t.end_section("get all characters");
+
+    // fence to complete all requests
+    //MPI_Win_sync(win);
+    //MPI_Win_fence(0, win);
+    comm.barrier();
+    t.end_section(" barrier");
+    MPI_Win_free(&win);
+
+    return results;
+}
+
+template <typename InputIter>
+std::vector<typename std::iterator_traits<InputIter>::value_type>
+bulk_rma_shm_posix(InputIter local_begin, InputIter local_end,
+         const std::vector<size_t>& global_indexes, const mxx::comm& comm) {
+    mxx::section_timer t(std::cerr, comm);
+    using value_type = typename std::iterator_traits<InputIter>::value_type;
+
+    // get local and global size
+    size_t local_size = std::distance(local_begin, local_end);
+    size_t global_size = mxx::allreduce(local_size, comm);
+
+    // create MPI_Win for input string, create character array for size of parents
+    // and use RMA to request (read) all characters which are not `$`
+    value_type* shptr;
+    int sm_fd;
+    if (comm.rank() == 0) {
+        sm_fd = shm_open("/my_shmem", O_CREAT | O_RDWR, 438);
+        if (sm_fd == -1) {
+            std::cerr << "couldn't open sm file" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        if (ftruncate(sm_fd, sizeof(value_type)*global_size) == -1) {
+            std::cerr << "couldn't truncate sm file" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        shptr = (value_type*) mmap(NULL, sizeof(value_type)*global_size, PROT_READ | PROT_WRITE, MAP_SHARED, sm_fd, 0);
+    }
+    t.end_section("shm_open+alloc");
+
+    // gather string into shmem page
+    std::vector<size_t> recv_sizes = mxx::gather(local_size, 0, comm);
+    mxx::gatherv(&(*local_begin), local_size, shptr, recv_sizes, 0, comm);
+    t.end_section("gather string to master");
+
+    // open shared memory pages for the string
+    if (comm.rank() != 0) {
+        sm_fd = shm_open("/my_shmem", O_RDONLY, 438);
+        if (sm_fd == -1) {
+            std::cerr << "couldn't open sm file on slave process" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        shptr = (value_type*) mmap(NULL, sizeof(value_type)*global_size, PROT_READ, MAP_SHARED, sm_fd, 0);
+    }
+    comm.barrier();
+    t.end_section("open shmem on rank != 0");
+
+    // read characters here!
+    std::vector<value_type> results(global_indexes.size());
+    for (size_t i = 0; i < results.size(); ++i) {
+        size_t offset = global_indexes[i];
+        // read global index offset
+        if (offset < global_size) {
+            results[i] = *(shptr + offset);
+        }
+    }
+    t.end_section("get all characters");
+
+    comm.barrier();
+    t.end_section(" barrier");
+    // clean up shmem
+    //munmap(shptr, sizeof(CharT)*global_size);
+    if (comm.rank() == 0)
+        shm_unlink("/my_shmem");
+    t.end_section(" unlink");
+
+    return results;
+}
+
+// TODO: wrap the shared memory window thing into a class with deref opertor etc
+
+template <typename InputIter>
+std::vector<typename std::iterator_traits<InputIter>::value_type>
+bulk_rma_shm_posix_split(InputIter local_begin, InputIter local_end,
+         const std::vector<size_t>& global_indexes, const mxx::comm& comm) {
+    mxx::section_timer t(std::cerr, comm);
+    using value_type = typename std::iterator_traits<InputIter>::value_type;
+
+    // get local and global size
+    size_t local_size = std::distance(local_begin, local_end);
+    size_t global_size = mxx::allreduce(local_size, comm);
+
+
+    /* split communicator into groups */
+
+    int num_groups = 4; // split communicator into 4 subgroups
+    if (num_groups > comm.size()) {
+        num_groups = 1;
+    }
+    int group_size = comm.size() / num_groups;
+    // number of group
+    int group_idx = comm.rank() / group_size;
+    // create subcommunicator (TODO: use hierarchical communicator/or 2D grid comm)
+    mxx::comm subcomm = comm.split(group_idx);
+    MXX_ASSERT(subcomm.rank() == comm.rank() % group_size);
+
+
+    /* get data size for each group */
+
+    std::vector<value_type*> shptrs(num_groups);
+
+    size_t group_data_size = mxx::allreduce(local_size, subcomm);
+    // allgather group sizes
+    mxx::comm span_comm = comm.split(subcomm.rank() == 0);
+    std::vector<size_t> group_data_sizes;
+    if (subcomm.rank() == 0) {
+        group_data_sizes = mxx::allgather(group_data_size, span_comm);
+    }
+    mxx::bcast(group_data_sizes, 0, subcomm);
+    t.end_section("create groups");
+
+
+    /* open shared memory on each group master */
+
+    std::vector<int> sm_fds(num_groups);
+    if (subcomm.rank() == 0) {
+        char sh_name[20];
+        sprintf(sh_name, "/my_shmem_%d", group_idx);
+
+        sm_fds[group_idx] = shm_open(sh_name, O_CREAT | O_RDWR, 438);
+        if (sm_fds[group_idx] == -1) {
+            std::cerr << "couldn't open sm file" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        if (ftruncate(sm_fds[group_idx], sizeof(value_type)*group_data_size) == -1) {
+            std::cerr << "couldn't truncate sm file" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        shptrs[group_idx] = (value_type*) mmap(NULL, sizeof(value_type)*group_data_size, PROT_READ | PROT_WRITE, MAP_SHARED, sm_fds[group_idx], 0);
+    }
+    t.end_section("shm_open+alloc");
+
+    // gather string into shmem page
+    std::vector<size_t> recv_sizes = mxx::gather(local_size, 0, subcomm);
+    mxx::gatherv(&(*local_begin), local_size, shptrs[group_idx], recv_sizes, 0, subcomm);
+    t.end_section("gather+convert string to group master");
+
+    if (subcomm.rank() == 0) {
+        char sh_name[20];
+        sprintf(sh_name, "/my_shmem_%d", group_idx);
+        // reopen shared mem in readonly mode
+        munmap(shptrs[group_idx], sizeof(value_type)*group_data_size);
+        close(sm_fds[group_idx]);
+    }
+    t.end_section("shm close on group-master");
+
+    // open shared memory pages for the string
+    for (int i = 0; i < num_groups; ++i) {
+        char sh_name[20];
+        sprintf(sh_name, "/my_shmem_%d", i);
+        sm_fds[i] = shm_open(sh_name, O_RDONLY, 438);
+        if (sm_fds[i] == -1) {
+            std::cerr << "couldn't open sm file on slave process" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        shptrs[i] = (value_type*) mmap(NULL, sizeof(value_type)*group_data_sizes[i], PROT_READ, MAP_SHARED, sm_fds[i], 0);
+    }
+    comm.barrier();
+    t.end_section("open shmem on group masters");
+
+    // read characters here!
+    std::vector<value_type> results(global_indexes.size());
+    for (size_t i = 0; i < global_indexes.size(); ++i) {
+        size_t offset = global_indexes[i];
+        // read global index offset
+        if (offset < global_size) {
+            for (int g = 0; g < num_groups; ++g) {
+                if (offset < group_data_sizes[g]) {
+                    results[i] = *(shptrs[g] + offset);
+                    break;
+                } else {
+                    offset -= group_data_sizes[g];
+                }
+            }
+        }
+    }
+    t.end_section("get all characters");
+    comm.barrier();
+    t.end_section(" barrier");
+    // clean up shmem
+    //munmap(shptr, sizeof(CharT)*global_size);
+    if (subcomm.rank() == 0) {
+        char sh_name[20];
+        sprintf(sh_name, "/my_shmem_%d", group_idx);
+        shm_unlink(sh_name);
+    }
+    t.end_section(" unlink");
+
+    return results;
+}
 
 constexpr int edgechar_twophase_all2all = 1;
 constexpr int edgechar_bulk_rma = 2;
 constexpr int edgechar_mpi_osc_rma = 3;
 constexpr int edgechar_rma_shared = 4;
+constexpr int edgechar_posix_sm = 5;
+constexpr int edgechar_posix_sm_split = 6;
 
-#if SHARED_MEM
-constexpr int edgechar_default = edgechar_rma_shared;
+//#if SHARED_MEM
+constexpr int edgechar_default = edgechar_bulk_rma;
+/*
 #else
 constexpr int edgechar_default = edgechar_bulk_rma;
 #endif
+*/
 
-template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
-std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+template <typename Func, typename InputIterator, typename index_t = std::size_t>
+void for_each_parent(const suffix_array<InputIterator, index_t, true>& sa, Func func, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
     // get input sizes
     size_t local_size = sa.local_SA.size();
@@ -145,25 +453,6 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     // ANSV with furthest eq for left and smallest for right
     ansv<index_t, furthest_eq, nearest_sm, local_indexing>(sa.local_LCP, left_nsv, right_nsv, lr_mins, comm, nonsv);
     t.end_section("ansv");
-
-    //const size_t sigma = 4; // TODO determine sigma or use local hashing
-    // at most `n` internal nodes?
-    // we represent only internal nodes. if a child pointer points to {total-size + X}, its a leaf
-    // leafs are not represented as tree nodes inside the suffix tree structure
-    // edges contain starting character? and/or length?
-    //std::vector<size_t> tree_nodes(sigma*local_size); // TODO: determine real size
-
-    // each SA[i] lies between two LCP values
-    // LCP[i] = lcp(S[SA[i-1]], S[SA[i]])
-    // leaf nodes are the suffix array positions. Their parent is the either their left or their right
-    // LCP, depending on which one is larger
-
-    std::vector<std::tuple<size_t, size_t, size_t>> parent_reqs;
-    parent_reqs.reserve(2*local_size);
-    // parent request where the character is the last `$`/`0` character
-    // these don't have to be requested, but are locally fulfilled
-    std::vector<std::tuple<size_t, size_t, size_t>> dollar_reqs;
-    std::vector<std::tuple<size_t, size_t, size_t>> remote_reqs;
 
     // get the first LCP value of the next processor
     index_t next_first_lcp = mxx::left_shift(sa.local_LCP[0], comm);
@@ -237,20 +526,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
                     lcp_val = sa.local_LCP[i+1];
             }
         }
-        if (edgechar_method == edgechar_twophase_all2all) {
-            if (sa.local_SA[i] + lcp_val >= global_size) {
-                MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-                dollar_reqs.emplace_back(parent, global_size + prefix + i, 0);
-            } else {
-                parent_reqs.emplace_back(parent, global_size + prefix + i, sa.local_SA[i] + lcp_val);
-            }
-        } else {
-            if (prefix <= parent && parent < prefix + local_size) {
-                parent_reqs.emplace_back(parent, global_size + prefix + i, sa.local_SA[i] + lcp_val);
-            } else {
-                remote_reqs.emplace_back(parent, global_size + prefix + i, sa.local_SA[i] + lcp_val);
-            }
-        }
+        func(i, global_size + prefix + i, parent, lcp_val);
     }
 
     // get parents of internal nodes (via LCP)
@@ -329,21 +605,49 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
                 }
             }
         }
+        func(i, prefix + i, parent, lcp_val);
+    }
+}
+
+template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
+std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+    mxx::section_timer t(std::cerr, comm);
+    // get input sizes
+    size_t local_size = sa.local_SA.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
+    size_t prefix = mxx::exscan(local_size, comm);
+    // assert n >= p, or rather at least one element per process
+    MXX_ASSERT(mxx::all_of(local_size >= 1, comm));
+
+
+    // each SA[i] lies between two LCP values
+    // LCP[i] = lcp(S[SA[i-1]], S[SA[i]])
+    // leaf nodes are the suffix array positions. Their parent is the either their left or their right
+    // LCP, depending on which one is larger
+
+    std::vector<std::tuple<size_t, size_t, size_t>> parent_reqs;
+    parent_reqs.reserve(2*local_size);
+    // parent request where the character is the last `$`/`0` character
+    // these don't have to be requested, but are locally fulfilled
+    std::vector<std::tuple<size_t, size_t, size_t>> dollar_reqs;
+    std::vector<std::tuple<size_t, size_t, size_t>> remote_reqs;
+
+    for_each_parent(sa, [&](size_t i, size_t gidx, size_t parent, size_t lcp_val) {
         if (edgechar_method == edgechar_twophase_all2all) {
             if (sa.local_SA[i] + lcp_val >= global_size) {
                 MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-                dollar_reqs.emplace_back(parent, prefix + i, 0);
+                dollar_reqs.emplace_back(parent, gidx, 0);
             } else {
-                parent_reqs.emplace_back(parent, prefix + i, sa.local_SA[i] + lcp_val);
+                parent_reqs.emplace_back(parent, gidx, sa.local_SA[i] + lcp_val);
             }
         } else {
             if (prefix <= parent && parent < prefix + local_size) {
-                parent_reqs.emplace_back(parent, prefix + i, sa.local_SA[i] + lcp_val);
+                parent_reqs.emplace_back(parent, gidx, sa.local_SA[i] + lcp_val);
             } else {
-                remote_reqs.emplace_back(parent, prefix + i, sa.local_SA[i] + lcp_val);
+                remote_reqs.emplace_back(parent, gidx, sa.local_SA[i] + lcp_val);
             }
         }
-    }
+    }, comm);
     t.end_section("locally calc parents");
 
     // TODO: plus distinguish between dollar/parent req only for the first method
@@ -417,32 +721,14 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
         t.end_section("all2all_func: send to parent");
 
-        // create MPI_Win for input string, create character array for size of parents
-        // and use RMA to request (read) all characters which are not `$`
-        MPI_Win win;
-        MPI_Win_create(&(*sa.input_begin), local_size, 1, MPI_INFO_NULL, comm, &win);
-        MPI_Win_fence(0, win);
-
-        // read characters here!
-        edge_chars.resize(parent_reqs.size());
+        std::vector<size_t> global_indexes(parent_reqs.size());
         for (size_t i = 0; i < parent_reqs.size(); ++i) {
-            size_t offset = std::get<2>(parent_reqs[i]);
-            // read global index offset
-            if (offset == global_size) {
-                // TODO: handle specially?
-                edge_chars[i] = 0;
-            } else {
-                int proc = part.target_processor(offset);
-                size_t proc_offset = offset - part.excl_prefix_size(proc);
-                // request proc_offset from processor `proc` in window win
-                MPI_Get(&edge_chars[i], 1, MPI_CHAR, proc, proc_offset, 1, MPI_CHAR, win);
-            }
+            global_indexes[i] = std::get<2>(parent_reqs[i]);
         }
-        // fence to complete all requests
-        //MPI_Win_fence(MPI_MODE_NOSTORE | MPI_MODE_NOPUT | MPI_MODE_NOSUCCEED, win);
-        MPI_Win_fence(0, win);
-        MPI_Win_free(&win);
+        t.end_section("create global_indexes");
 
+        // TODO: bulk_rma_mpi only for non-dollar
+        edge_chars = bulk_rma_mpiwin(sa.input_begin, sa.input_end, global_indexes, comm);
         t.end_section("RMA read chars");
     } else if (edgechar_method == edgechar_rma_shared) {
         // use MPI shared memory windows (only works on shared memory systems)
@@ -452,45 +738,49 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
         t.end_section("all2all_func: send to parent");
 
-        // create MPI_Win for input string, create character array for size of parents
-        // and use RMA to request (read) all characters which are not `$`
-        MPI_Win win;
-        CharT* charwin;
-        MPI_Win_allocate_shared (local_size, 1, MPI_INFO_NULL, comm, &charwin, &win);
-        /* copy string into shared memory window */
-        std::copy(sa.input_begin, sa.input_end, charwin);
-        MPI_Win_sync(win);
-        MPI_Win_fence(0, win);
-
-        /* create table of pointers for shared memory access */
-        std::vector<CharT*> shptrs(comm.size());
-        for (int i = 0; i < comm.size(); ++i) {
-            MPI_Aint winsize;
-            int windispls;
-            MPI_Win_shared_query(win, i, &winsize, &windispls, &shptrs[i]);
-        }
-
-        // read characters here!
-        edge_chars.resize(parent_reqs.size());
+        std::vector<size_t> global_indexes(parent_reqs.size());
         for (size_t i = 0; i < parent_reqs.size(); ++i) {
-            size_t offset = std::get<2>(parent_reqs[i]);
-            // read global index offset
-            if (offset == global_size) {
-                // TODO: handle specially?
-                edge_chars[i] = 0;
-            } else {
-                int proc = part.target_processor(offset);
-                size_t proc_offset = offset - part.excl_prefix_size(proc);
-                // read at pos proc_offset from processor `proc` in window win
-                edge_chars[i] = *(shptrs[proc] + proc_offset);
-            }
+            global_indexes[i] = std::get<2>(parent_reqs[i]);
         }
-        // fence to complete all requests
-        MPI_Win_sync(win);
-        MPI_Win_fence(0, win);
-        MPI_Win_free(&win);
+        t.end_section("create global_indexes");
 
-        t.end_section("RMA shared read chars");
+        // TODO: bulk_rma_mpi only for non-dollar
+        edge_chars = bulk_rma_shm_mpi(sa.input_begin, sa.input_end, global_indexes, comm);
+        t.end_section("RMA read chars");
+    } else if (edgechar_method == edgechar_posix_sm) {
+        // use MPI shared memory windows (only works on shared memory systems)
+        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        // send those edges for which the parent lies on a remote processor
+        mxx::all2all_func(remote_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
+        parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
+        t.end_section("all2all_func: send to parent");
+
+        std::vector<size_t> global_indexes(parent_reqs.size());
+        for (size_t i = 0; i < parent_reqs.size(); ++i) {
+            global_indexes[i] = std::get<2>(parent_reqs[i]);
+        }
+        t.end_section("create global_indexes");
+
+        // TODO: bulk_rma_mpi only for non-dollar
+        edge_chars = bulk_rma_shm_posix(sa.input_begin, sa.input_end, global_indexes, comm);
+        t.end_section("RMA read chars");
+    } else if (edgechar_method == edgechar_posix_sm_split) {
+        // use MPI shared memory windows (only works on shared memory systems)
+        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        // send those edges for which the parent lies on a remote processor
+        mxx::all2all_func(remote_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
+        parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
+        t.end_section("all2all_func: send to parent");
+
+        std::vector<size_t> global_indexes(parent_reqs.size());
+        for (size_t i = 0; i < parent_reqs.size(); ++i) {
+            global_indexes[i] = std::get<2>(parent_reqs[i]);
+        }
+        t.end_section("create global_indexes");
+
+        // TODO: bulk_rma_mpi only for non-dollar
+        edge_chars = bulk_rma_shm_posix_split(sa.input_begin, sa.input_end, global_indexes, comm);
+        t.end_section("RMA read chars");
     }
 
     // TODO: (alternatives for full lookup table in each node:)
@@ -529,32 +819,6 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     }
 
     t.end_section("locally: create internal nodes");
-
-    // This stuff is all done (look above)
-    // TODO:
-    // - get character for internal nodes (first character of suffix starting at
-    //   the node S[SA[i]+LCP[i]]) [i.e. requesting a full permutation] needed for
-    //   all edges, i.e. up to 2n-1 (SA and LCP aligned)
-    //
-    // TODO:
-    // need character S[SA[i]+maxLCP[i]] for each edge (leaf + internal node)
-    // maxLCP is equal to LCP[parent]
-    // but `parent` might not be local
-    // -> can also be retrieved at `parent` when sending edges
-    // SA[i] is local, we can send that, along with `i` since edge is (parent,i)
-    // so at least needs sending (parent, i, SA[i])
-    // OR: (parent, i, c) if `c` is retrieved before sending edges to `parent`
-    // clue: we are sending exactly as many edge elements as in ANSV
-    // whereas requesting `c` is full all2all_msgs/queries/RMA?
-    //
-
-
-    // TODO: probably best to send a character S[SA[i]+maxLCP[i]] along for edge labeling
-    // each internal node: at LCP index, LCP gives string depth already
-    //                     children edges: either by fixed size sigma*n lookup table
-    //                     or by hashtable (lcp-index, character)->child-index
-    //                     The LCP indeces are predictable [n/p*rank,n/p*(rank+1))
-    //                     -> be careful with hash function!
 
     return internal_nodes;
 }
