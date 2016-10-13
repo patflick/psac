@@ -93,6 +93,7 @@ template <typename InputIter>
 std::vector<typename std::iterator_traits<InputIter>::value_type>
 bulk_rma(InputIter local_begin, InputIter local_end,
          const std::vector<size_t>& global_indexes, const mxx::comm& comm) {
+    typedef typename std::iterator_traits<InputIter>::value_type value_type;
     // get local and global size
     size_t local_size = std::distance(local_begin, local_end);
     size_t global_size = mxx::allreduce(local_size, comm);
@@ -105,16 +106,31 @@ bulk_rma(InputIter local_begin, InputIter local_end,
     // get send counts by linear scan (TODO: could get for free with the bucketing)
     // or cheaper with p*log(n)
     std::vector<size_t> send_counts(comm.size(), 0);
-    int cur_p = 0;
-    for (size_t i = 0; i < local_size; ++i) {
+    for (size_t i = 0; i < global_indexes.size(); ++i) {
         int t = part.target_processor(global_indexes[i]);
-        MXX_ASSERT(cur_p <= t);
         ++send_counts[t];
-        cur_p = t;
+    }
+    std::vector<size_t> offsets = mxx::local_exscan(send_counts);
+    std::vector<size_t> bucketed_indexes(global_indexes.size());
+    std::vector<size_t> original_pos(global_indexes.size());
+    for (size_t i = 0; i < global_indexes.size(); ++i) {
+        int t = part.target_processor(global_indexes[i]);
+        bucketed_indexes[offsets[t]] = global_indexes[i];
+        original_pos[offsets[t]] = i;
+        offsets[t]++;
     }
 
-    return bulk_rma(local_begin, local_end, global_indexes, send_counts, comm);
+    std::vector<value_type> results = bulk_rma(local_begin, local_end, bucketed_indexes, send_counts, comm);
+    // reorder back into original order
+    std::vector<value_type> results2(results.size());
+    MXX_ASSERT(results2.size() == global_indexes.size());
+    for (size_t i = 0; i < global_indexes.size(); ++i) {
+        results2[original_pos[i]] = results[i];
+    }
+
+    return results2;
 }
+
 
 template <typename InputIter>
 std::vector<typename std::iterator_traits<InputIter>::value_type>
@@ -789,10 +805,12 @@ std::vector<size_t> construct_st_2phase(const suffix_array<InputIterator, index_
     }
 
     t.end_section("locally: create internal nodes");
+
+    return internal_nodes;
 }
 
 template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
-std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+std::vector<size_t> construct_suffix_tree_1(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
     // get input sizes
     size_t local_size = sa.local_SA.size();
@@ -904,6 +922,126 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
             size_t node_idx = (parent - prefix)*(sa.sigma+1);
             internal_nodes[node_idx] = std::get<1>(dollar_reqs[i]);
         }
+    }
+
+    t.end_section("locally: create internal nodes");
+
+    return internal_nodes;
+}
+
+struct edge {
+    size_t parent;
+    size_t gidx;
+
+    edge() = default;
+    edge(const edge& o) = default;
+    edge(edge&& o) = default;
+    edge(size_t parent, size_t gidx) : parent(parent), gidx(gidx) {};
+
+    edge& operator=(const edge& o) = default;
+    edge& operator=(edge&& o) = default;
+};
+
+MXX_CUSTOM_STRUCT(edge, parent, gidx);
+
+template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
+std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+    mxx::section_timer t(std::cerr, comm);
+
+    // get input sizes
+    size_t local_size = sa.local_SA.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
+    size_t prefix = mxx::exscan(local_size, comm);
+    // assert n >= p, or rather at least one element per process
+    MXX_ASSERT(mxx::all_of(local_size >= 1, comm));
+
+    std::vector<edge> edges;
+    edges.reserve(2*local_size);
+
+    std::vector<size_t> char_indexes;
+    char_indexes.reserve(2*local_size);
+
+    // parent request where the character is the last `$`/`0` character
+    // these don't have to be requested, but are locally fulfilled
+    std::vector<edge> dollar_edges;
+    std::vector<std::pair<edge, size_t>> remote_edges;
+    //std::vector<size_t> remote_char_indexes;
+
+    for_each_parent(sa, [&](size_t i, size_t gidx, size_t parent, size_t lcp_val) {
+        size_t char_idx = sa.local_SA[i] + lcp_val;
+        // remote or local?
+        if (prefix <= parent && parent < prefix + local_size) {
+            if (char_idx < global_size) {
+                edges.emplace_back(parent, gidx);
+                char_indexes.push_back(char_idx);
+            } else {
+                dollar_edges.emplace_back(parent, gidx);
+            }
+        } else {
+            remote_edges.emplace_back(edge(parent, gidx), char_idx);
+        }
+    }, comm);
+    t.end_section("locally calc parents");
+
+    mxx::sync_cout(comm) << "regular edges: " << edges.size() << "/" << 2*local_size << ", dollar: " << dollar_edges.size() << ", remote: " << remote_edges.size() << std::endl;
+
+    // TODO: plus distinguish between dollar/parent req only for the first method
+    typedef typename std::iterator_traits<InputIterator>::value_type CharT;
+    std::vector<CharT> edge_chars;
+
+    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    // send those edges for which the parent lies on a remote processor
+    mxx::all2all_func(remote_edges, [&part](const std::pair<edge,size_t>& e) {return part.target_processor(e.first.parent);}, comm);
+    for (auto& p : remote_edges) {
+        if (p.second < global_size) {
+            edges.emplace_back(p.first);
+            char_indexes.push_back(p.second);
+        } else {
+            dollar_edges.emplace_back(p.first);
+        }
+    }
+    t.end_section("bulk_rma: send to parent");
+
+    if (edgechar_method == edgechar_bulk_rma) {
+        // use global bulk RMA for getting the corresponding characters
+        edge_chars = bulk_rma(sa.input_begin, sa.input_end, char_indexes, comm);
+        t.end_section("bulk_rma: bulk_rma");
+    } else {
+        if (edgechar_method == edgechar_mpi_osc_rma) {
+            edge_chars = bulk_rma_mpiwin(sa.input_begin, sa.input_end, char_indexes, comm);
+        } else if (edgechar_method == edgechar_rma_shared) {
+            edge_chars = bulk_rma_shm_mpi(sa.input_begin, sa.input_end, char_indexes, comm);
+        } else if (edgechar_method == edgechar_posix_sm) {
+            edge_chars = bulk_rma_shm_posix(sa.input_begin, sa.input_end, char_indexes, comm);
+        } else if (edgechar_method == edgechar_posix_sm_split) {
+            edge_chars = bulk_rma_shm_posix_split(sa.input_begin, sa.input_end, char_indexes, comm);
+        }
+        t.end_section("RMA read chars");
+    }
+
+    // TODO: (alternatives for full lookup table in each node:)
+    // local hashing key=(node-idx, char), value=(child idx)
+    //            or multimap key=(node-idx), value=(char, child idx)
+    //            2nd enables iteration over children, but not direct lookup
+    //            of specific child
+    //            2nd no different than fixed std::vector<std::list>
+
+    // one internal node for each LCP entry, each internal node is sigma cells
+    std::vector<size_t> internal_nodes((sa.sigma+1)*local_size);
+    for (size_t i = 0; i < edges.size(); ++i) {
+        size_t node_idx = (edges[i].parent - prefix)*(sa.sigma+1);
+        CharT x = edge_chars[i];
+        uint16_t c = sa.alphabet_mapping[x];
+        MXX_ASSERT(0 <= c && c < sa.sigma+1);
+        size_t cell_idx = node_idx + c;
+        internal_nodes[cell_idx] = edges[i].gidx;
+    }
+
+    // process dollar edges
+    for (size_t i = 0; i < dollar_edges.size(); ++i) {
+        size_t parent = dollar_edges[i].parent;
+        size_t node_idx = (parent - prefix)*(sa.sigma+1);
+        internal_nodes[node_idx] = dollar_edges[i].gidx;
     }
 
     t.end_section("locally: create internal nodes");
