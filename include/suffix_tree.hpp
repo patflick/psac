@@ -155,13 +155,10 @@ bulk_rma_mpiwin(InputIter local_begin, InputIter local_end,
     std::vector<value_type> results(global_indexes.size());
     for (size_t i = 0; i < results.size(); ++i) {
         size_t offset = global_indexes[i];
-        // read global index offset
-        if (offset < global_size) {
-            int proc = part.target_processor(offset);
-            size_t proc_offset = offset - part.excl_prefix_size(proc);
-            // request proc_offset from processor `proc` in window win
-            MPI_Get(&results[i], 1, dt.type(), proc, proc_offset, 1, dt.type(), win);
-        }
+        int proc = part.target_processor(offset);
+        size_t proc_offset = offset - part.excl_prefix_size(proc);
+        // request proc_offset from processor `proc` in window win
+        MPI_Get(&results[i], 1, dt.type(), proc, proc_offset, 1, dt.type(), win);
     }
     // fence to complete all requests
     //MPI_Win_fence(MPI_MODE_NOSTORE | MPI_MODE_NOPUT | MPI_MODE_NOSUCCEED, win);
@@ -464,10 +461,7 @@ bulk_rma_shm_mpi(InputIter local_begin, InputIter local_end,
     std::vector<value_type> results(global_indexes.size());
     for (size_t i = 0; i < results.size(); ++i) {
         size_t offset = global_indexes[i];
-        // read global index offset
-        if (offset < win.global_size) {
-            results[i] = win.get(offset);
-        }
+        results[i] = win.get(offset);
     }
     t.end_section("get all characters");
 
@@ -489,9 +483,7 @@ bulk_rma_shm_posix(InputIter local_begin, InputIter local_end,
     std::vector<value_type> results(global_indexes.size());
     for (size_t i = 0; i < results.size(); ++i) {
         // read global index offset
-        if (global_indexes[i] < win.global_size) {
-            results[i] = win.get(global_indexes[i]);
-        }
+        results[i] = win.get(global_indexes[i]);
     }
     t.end_section("get all characters");
 
@@ -516,9 +508,7 @@ bulk_rma_shm_posix_split(InputIter local_begin, InputIter local_end,
     std::vector<value_type> results(global_indexes.size());
     for (size_t i = 0; i < results.size(); ++i) {
         // read global index offset
-        if (global_indexes[i] < win.global_size) {
-            results[i] = win.get(global_indexes[i]);
-        }
+        results[i] = win.get(global_indexes[i]);
     }
     t.end_section("get all characters");
     comm.barrier();
@@ -718,7 +708,7 @@ constexpr int edgechar_posix_sm = 5;
 constexpr int edgechar_posix_sm_split = 6;
 
 //#if SHARED_MEM
-constexpr int edgechar_default = edgechar_posix_sm_split;
+constexpr int edgechar_default = edgechar_posix_sm;
 /*
 #else
 constexpr int edgechar_default = edgechar_bulk_rma;
@@ -942,10 +932,14 @@ struct edge {
     edge& operator=(edge&& o) = default;
 };
 
+std::ostream& operator<<(std::ostream& os, const edge& e) {
+    return os << "(" << e.parent << "," << e.gidx << ")";
+}
+
 MXX_CUSTOM_STRUCT(edge, parent, gidx);
 
 template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
-std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+std::vector<size_t> construct_suffix_tree_edges(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
 
     // get input sizes
@@ -1045,6 +1039,181 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     }
 
     t.end_section("locally: create internal nodes");
+
+    return internal_nodes;
+}
+
+// interleave SA and LCP and get index after
+inline size_t interleaved_val(size_t idx, size_t global_size) {
+    return (idx >= global_size) ? (2*(idx-global_size)+1) : 2*idx;
+}
+
+class stopwatch {
+    std::chrono::steady_clock::time_point start_time;
+    typedef std::chrono::steady_clock::time_point::duration duration;
+    duration elapsed;
+
+public:
+    stopwatch() : elapsed(duration::zero()) {};
+
+    void start() {
+        start_time = std::chrono::steady_clock::now();
+    }
+
+    void pause() {
+        elapsed += duration(std::chrono::steady_clock::now()-start_time);
+    }
+
+    template <typename dur = std::chrono::duration<double, std::milli>>
+    typename dur::rep total() const {
+        return dur(elapsed).count();
+    }
+};
+
+template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
+std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+    mxx::section_timer t(std::cerr, comm);
+    typedef typename std::iterator_traits<InputIterator>::value_type CharT;
+
+    // get input sizes
+    size_t local_size = sa.local_SA.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
+    size_t prefix = mxx::exscan(local_size, comm);
+    // assert n >= p, or rather at least one element per process
+    MXX_ASSERT(mxx::all_of(local_size >= 1, comm));
+
+    std::vector<edge> edges;
+    //edges.reserve(2*local_size);
+
+    std::vector<size_t> char_indexes;
+    //char_indexes.reserve(2*local_size);
+
+    // parent request where the character is the last `$`/`0` character
+    // these don't have to be requested, but are locally fulfilled
+    std::vector<edge> dollar_edges;
+    std::vector<std::pair<edge, size_t>> remote_edges;
+
+    // create shared memory window over input string
+    shmem_window_posix_split<CharT> win(sa.input_begin, sa.input_end, comm);
+    t.end_section("create shared mem window");
+
+    size_t sigma = sa.sigma+1;
+    std::vector<size_t> internal_nodes(sigma*local_size);
+
+    for_each_parent(sa, [&](size_t i, size_t gidx, size_t parent, size_t lcp_val) {
+        size_t char_idx = sa.local_SA[i] + lcp_val;
+        // remote or local?
+        if (prefix <= parent && parent < prefix + local_size) {
+            if (char_idx < global_size) {
+                // fill node without internal node ordering
+                size_t local_nodeidx = sigma*(parent-prefix);
+
+                CharT x = win.get(char_idx);
+                uint16_t cval = sa.alphabet_mapping[x];
+                internal_nodes[local_nodeidx+cval] = gidx;
+                // insert into next open slot in node
+                /*
+                for (size_t a = 1; a < sigma; ++a) {
+                    if (internal_nodes[local_nodeidx+a] == 0) {
+                        internal_nodes[local_nodeidx+a] = gidx;
+                        break;
+                    }
+                }
+                */
+            } else {
+                size_t local_nodeidx = sigma*(parent-prefix);
+                internal_nodes[local_nodeidx + 0] = gidx;
+            }
+        } else {
+            remote_edges.emplace_back(edge(parent, gidx), char_idx);
+        }
+    }, comm);
+    t.end_section("locally calc parents");
+
+
+    /* process all nodes and request chars if needed */
+    /*
+    std::vector<CharT> chars(sigma);
+    std::vector<size_t> node_copy(sigma-1);
+    stopwatch timer_find;
+    stopwatch timer_sort;
+    stopwatch timer_get_char;
+    stopwatch timer_fill;
+    for (size_t node = 0; node < local_size*sigma; node+=sigma) {
+        // skip empty nodes
+        if (internal_nodes[node+1] == 0)
+            continue;
+        unsigned int a = 1; // count characters (must be at least 2)
+        for (; a < sigma; ++a) {
+            if (internal_nodes[node+a] == 0)
+                break;
+        }
+        if (a == sigma) {
+            // full node, don't need to request characters: sort by interleaved value
+            std::sort(internal_nodes.begin()+node+1, internal_nodes.begin()+node+a,
+                [global_size](size_t i1, size_t i2) {
+                    return interleaved_val(i1, global_size) < interleaved_val(i2, global_size);
+            });
+        } else {
+            // get all characters
+            std::copy(internal_nodes.begin()+node+1, internal_nodes.begin()+node+sigma, node_copy.begin());
+            for (size_t c = 1; c < a; ++c) {
+                size_t gidx = internal_nodes[node+c];
+                size_t lidx = (gidx >= global_size) ? gidx - global_size - prefix : gidx - prefix;
+                chars[c] = win.get(sa.local_SA[lidx]+sa.local_LCP[node/sigma]);
+            }
+            std::fill(internal_nodes.begin()+node+1, internal_nodes.begin()+node+sigma, 0);
+
+            for (size_t c = 1; c < a; ++c) {
+                CharT x = chars[c];
+                uint16_t cval = sa.alphabet_mapping[x];
+                internal_nodes[node+cval] = node_copy[c-1];
+            }
+        }
+    }
+    t.end_section("order edges in nodes");
+    */
+    //mxx::sync_cout(comm) << "time breakdown: find: " << timer_find.total() << "\tsort: " << timer_sort.total() << "\tget_char: " << timer_get_char.total() << "\tfill: " << timer_fill.total() << std::endl;
+
+    /* process remote edges */
+
+    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    // send those edges for which the parent lies on a remote processor
+    mxx::all2all_func(remote_edges, [&part](const std::pair<edge,size_t>& e) {return part.target_processor(e.first.parent);}, comm);
+    for (auto& p : remote_edges) {
+        if (p.second < global_size) {
+            size_t local_nodeidx = sigma*(p.first.parent-prefix);
+            CharT x = win.get(p.second);
+            uint16_t cval = sa.alphabet_mapping[x];
+            internal_nodes[local_nodeidx + cval] = p.first.gidx;
+        } else {
+            size_t local_nodeidx = sigma*(p.first.parent-prefix);
+            internal_nodes[local_nodeidx + 0] = p.first.gidx;
+        }
+    }
+    t.end_section("send and process remote edges");
+    // TODO: (alternatives for full lookup table in each node:)
+    // local hashing key=(node-idx, char), value=(child idx)
+    //            or multimap key=(node-idx), value=(char, child idx)
+    //            2nd enables iteration over children, but not direct lookup
+    //            of specific child
+    //            2nd no different than fixed std::vector<std::list>
+
+
+    /*
+    std::vector<size_t> node_full_hist(sigma+1, 0);
+    for (size_t i = 0; i < local_size; ++i) {
+        size_t edge_count = 0;
+        for (unsigned int a = 0; a < sigma; ++a) {
+            if (internal_nodes[i*sigma + a] != 0) {
+                edge_count++;
+            }
+        }
+        ++node_full_hist[edge_count];
+    }
+    mxx::sync_cout(comm) << "Internal nodes (total: " << local_size << ") fullness histogram: " << node_full_hist << std::endl;
+    t.end_section("check internal nodes");
+    */
 
     return internal_nodes;
 }

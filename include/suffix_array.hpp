@@ -524,6 +524,8 @@ std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
     // get mapping table and alphabet sizes
     alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
     sigma = alphabet_unique_chars(alphabet_hist);
+    if(comm.rank() == 0)
+        std::cout << "Alphabet: " << alphabet_unique_char_vec(alphabet_hist) << std::endl;
     // bits per character: set l=ceil(log(sigma))
     unsigned int l = alphabet_bits_per_char(sigma);
     // number of characters per word => the `k` in `k-mer`

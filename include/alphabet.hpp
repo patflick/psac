@@ -81,6 +81,17 @@ unsigned int alphabet_unique_chars(const std::vector<index_t>& global_hist) {
     return unique_count;
 }
 
+template <typename index_t>
+std::vector<char> alphabet_unique_char_vec(const std::vector<index_t>& global_hist) {
+    std::vector<char> v;
+    for (std::size_t c = 0; c < 256; ++c) {
+        if (global_hist[c] != 0) {
+            v.push_back(c);
+        }
+    }
+    return v;
+}
+
 
 unsigned int alphabet_bits_per_char(unsigned int sigma) {
     // since we have to account for the `0` character, we use ceil(log(unique_chars + 1))
