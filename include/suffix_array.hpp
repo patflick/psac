@@ -97,14 +97,77 @@ template <typename T>
 class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 }
 
-template <typename InputIterator, typename index_t>
-std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, const mxx::comm& comm) {
-    static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, char>::value, "Iterator must be of value type `char`.");
-    // get local histogram of alphabet characters
-    std::vector<index_t> hist = get_histogram<index_t>(begin, end, 256);
-    std::vector<index_t> out_hist = mxx::allreduce(hist, comm);
-    return out_hist;
+
+template <typename word_type, typename InputIterator>
+std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm = mxx::comm()) {
+    size_t local_size = std::distance(begin, end);
+    unsigned int l = alpha.bits_per_char();
+    // get k-mer mask
+    word_type kmer_mask = ((static_cast<word_type>(1) << (l*k)) - static_cast<word_type>(1));
+    if (kmer_mask == 0)
+        kmer_mask = ~static_cast<word_type>(0);
+
+    // fill first k-mer (until k-1 positions) and send to left processor
+    // filling k-mer with first character = MSBs for lexicographical ordering
+    InputIterator str_it = begin;
+    word_type kmer = 0;
+    for (unsigned int i = 0; i < k-1; ++i) {
+        kmer <<= l;
+        word_type s = (unsigned char)(*str_it);
+        kmer |= alpha.encode(s);
+        ++str_it;
+    }
+
+    // send first kmer to left processor
+    // TODO: use async left shift!
+    word_type last_kmer = mxx::left_shift(kmer, comm);
+
+    // init output
+    std::vector<word_type> kmers(local_size);
+    auto buk_it = kmers.begin();
+    // continue to create all k-mers and add into histogram count
+    while (str_it != end) {
+        // get next kmer
+        kmer <<= l;
+        word_type s = (unsigned char)(*str_it);
+        kmer |= alpha.encode(s);
+        kmer &= kmer_mask;
+        // add to bucket number array
+        *buk_it = kmer;
+        // iterate
+        ++str_it;
+        ++buk_it;
+    }
+
+    // finish the receive to get the last k-1 k-kmers with string data from the
+    // processor to the right
+    // if not last processor
+    if (comm.rank() < comm.size()-1) {
+        // TODO: use mxx::future to handle this async left shift
+        // wait for the async receive to finish
+        //MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
+        //req.wait();
+    } else {
+        // in this case the last k-mers contains shifting `$` signs
+        // we assume this to be the `\0` value
+        last_kmer = 0;
+    }
+
+
+    // construct last (k-1) k-mers
+    for (unsigned int i = 0; i < k-1; ++i) {
+        kmer <<= l;
+        kmer |= (last_kmer >> (l*(k-i-2)));
+        kmer &= kmer_mask;
+
+        // add to bucket number array
+        *buk_it = kmer;
+        ++buk_it;
+    }
+
+    return kmers;
 }
+
 
 // distributed suffix array
 template <typename InputIterator, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
@@ -124,9 +187,6 @@ public:
         // assert a block decomposition
         if (part.local_size() != local_size)
             throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
-
-        // get MPI type
-        //mpi_index_t = index_mpi_dt.type();
     }
     virtual ~suffix_array() {}
 private:
@@ -142,9 +202,6 @@ private:
 
     /// number of processes = size of the communicator
     int p;
-    /// The MPI datatype for the templated type `index_t`.
-    //mxx::datatype<index_t> index_mpi_dt;
-    //MPI_Datatype mpi_index_t;
 
     // The block decomposition for the suffix array
     mxx::partition::block_decomposition_buffered<index_t> part;
@@ -155,14 +212,18 @@ public:
     /// End iterator for local input string
     InputIterator input_end;
 
+    using char_type = typename std::iterator_traits<InputIterator>::value_type;
+    using alphabet_type = alphabet<char_type>;
+    alphabet_type alpha;
+
 public:
     /// mapping the ascii char to a "compressed" integer
-    /// uses only ceillog(sigma+1) bits
-    std::vector<uint16_t> alphabet_mapping;
+    /// using at most ceillog(sigma+1) bits
+    //std::vector<uint16_t> alphabet_mapping;
 
     /// the number of unique characters in the input string
     /// (does not account for the special `0` character)
-    unsigned int sigma;
+    //unsigned int sigma;
 
     /// "compressed" integer to ascii
 
@@ -299,6 +360,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
 }
 
 // generalized to more than "doubling" (e.g. prefix-trippling with L=3)
+// NOTE: this implementation doesn't support building the LCP (SA + ISA only)
 template <std::size_t L = 2>
 void construct_arr(bool fast_resolval = true) {
     SAC_TIMER_START();
@@ -492,7 +554,6 @@ void construct_fast() {
     cpy_SA.clear();
     cpy_SA.shrink_to_fit();
 
-
     if (comm.rank() == 0)
         INFO("Starting Bucket chasing algorithm");
     construct_msgs(local_B_SA, local_B, k);
@@ -511,105 +572,44 @@ void construct_fast() {
 
 private:
 
-/*********************************************************************
- *                         Initial Bucketing                         *
- *********************************************************************/
-// TODO: externalize some code as "k-mer generation"
-std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
-{
-    std::size_t min_local_size = part.local_size(p-1);
 
-    // get global alphabet histogram
-    std::vector<index_t> alphabet_hist = alphabet_histogram<InputIterator, index_t>(input_begin, input_end, comm);
-    // get mapping table and alphabet sizes
-    alphabet_mapping = alphabet_mapping_tbl(alphabet_hist);
-    sigma = alphabet_unique_chars(alphabet_hist);
-    if(comm.rank() == 0)
-        std::cout << "Alphabet: " << alphabet_unique_char_vec(alphabet_hist) << std::endl;
-    // bits per character: set l=ceil(log(sigma))
-    unsigned int l = alphabet_bits_per_char(sigma);
+unsigned int get_optimal_k(const alphabet_type& a, unsigned int k = 0) {
     // number of characters per word => the `k` in `k-mer`
-    unsigned int opt_k = alphabet_chars_per_word<index_t>(l);
-    if (k == 0 || k > opt_k) {
-        if (k > opt_k)
-            std::cerr << "[WARNING] given `k` value of " << k << " is too large, setting k=" << opt_k << " instead." << std::endl;
-        k = opt_k;
+    unsigned int max_k = a.template chars_per_word<index_t>();
+    if (k == 0 || k > max_k) {
+        if (k > max_k)
+             INFO("[WARNING] given `k` value of " << k << " is too large, setting k=" << max_k << " instead.");
+        k = max_k;
     }
     // if the input is too small for `k`, choose a smaller `k`
+    std::size_t min_local_size = part.local_size(p-1);
     if (k >= min_local_size) {
         k = min_local_size;
         if (comm.size() == 1 && k > 1)
             k--;
     }
+    return k;
+}
+
+/*********************************************************************
+ *                         Initial Bucketing                         *
+ *********************************************************************/
+std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
+{
+    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
+
+    // TODO: move into alphabet itself!
+    if(comm.rank() == 0)
+        std::cout << "Alphabet: " << alpha.unique_chars() << std::endl;
+
+    // bits per character: set l=ceil(log(sigma))
+    unsigned int l = alpha.bits_per_char();
+    k = get_optimal_k(alpha, k);
 
     if (comm.rank() == 0)
-        INFO("Detecting sigma=" << sigma << " => l=" << l << ", k=" << k);
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << l << ", k=" << k);
 
-    // get k-mer mask
-    index_t kmer_mask = ((static_cast<index_t>(1) << (l*k)) - static_cast<index_t>(1));
-    if (kmer_mask == 0)
-        kmer_mask = ~static_cast<index_t>(0);
-
-    // sliding window k-mer (for prototype only using ASCII alphabet)
-
-    // fill first k-mer (until k-1 positions) and send to left processor
-    // filling k-mer with first character = MSBs for lexicographical ordering
-    InputIterator str_it = input_begin;
-    index_t kmer = 0;
-    for (unsigned int i = 0; i < k-1; ++i) {
-        kmer <<= l;
-        index_t s = (unsigned char)(*str_it);
-        kmer |= alphabet_mapping[s];
-        ++str_it;
-    }
-
-    // send first kmer to left processor
-    // TODO: use async left shift!
-    index_t last_kmer = mxx::left_shift(kmer, comm);
-
-    // init output
-    if (local_B.size() != local_size)
-        local_B.resize(local_size);
-    auto buk_it = local_B.begin();
-    // continue to create all k-mers and add into histogram count
-    while (str_it != input_end) {
-        // get next kmer
-        kmer <<= l;
-        index_t s = (unsigned char)(*str_it);
-        kmer |= alphabet_mapping[s];
-        kmer &= kmer_mask;
-        // add to bucket number array
-        *buk_it = kmer;
-        // increase iterators
-        ++str_it;
-        ++buk_it;
-    }
-
-    // finish the receive to get the last k-1 k-kmers with string data from the
-    // processor to the right
-    // if not last processor
-    if (comm.rank() < comm.size()-1) {
-        // TODO: use mxx::future to handle this async left shift
-        // wait for the async receive to finish
-        //MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-        //req.wait();
-    } else {
-        // in this case the last k-mers contains shifting `$` signs
-        // we assume this to be the `\0` value
-        last_kmer = 0;
-    }
-
-
-    // construct last (k-1) k-mers
-    for (unsigned int i = 0; i < k-1; ++i) {
-        kmer <<= l;
-        kmer |= (last_kmer >> (l*(k-i-2)));
-        kmer &= kmer_mask;
-
-        // add to bucket number array
-        *buk_it = kmer;
-        ++buk_it;
-    }
+    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
 
     // return the number of characters which are part of each bucket number
     // (i.e., k-mer)
@@ -627,6 +627,7 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2) {
 
     // init B2
     if (local_B2.size() != local_size){
+        // increase iterators
         local_B2.clear();
         local_B2.resize(local_size, 0);
     }
@@ -648,6 +649,7 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2) {
             // only receive if the source is not myself (i.e., `rank`)
             // [otherwise results are directly written instead of MPI_Sended]
             assert(p1_recv_cnt < std::numeric_limits<int>::max());
+        // increase iterators
             int recv_cnt = p1_recv_cnt;
             MPI_Irecv(&local_B2[0],recv_cnt, mpi_index_t, p1,
                       PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
@@ -873,7 +875,7 @@ void isa_2b_to_sa(std::vector<index_t>& local_B2) {
     local_B2.resize(local_size);
     local_SA.resize(local_size);
 
-    // back convert array of structs into struct of arrays
+    // back-convert array of structs into struct of arrays
 
     // read back into input vectors
     for (std::size_t i = 0; i < local_size; ++i) {
@@ -1038,8 +1040,8 @@ std::pair<size_t,size_t> rebucket(std::vector<index_t>& local_B2, bool count_unf
         firstDiff = true;
     }
 
-    // set local_B1 to `1` if previous entry is different:
-    // i.e., mark start of buckets
+    // set local_B1 to `(prefix+i)` if previous entry is different:
+    // i.e., mark start of buckets, otherwise: set to 0
     bool nextDiff = firstDiff;
     for (std::size_t i = 0; i+1 < local_B.size(); ++i) {
         bool setOne = nextDiff;
@@ -1123,8 +1125,8 @@ std::pair<size_t,size_t> rebucket_arr(std::vector<std::array<index_t, L+1> >& tu
 
     foreach_pair(tuples.begin(), tuples.end(), [&](const std::array<index_t, L+1>& prev, std::array<index_t, L+1>& cur, size_t i) {
         if (!std::equal(&prev[1], &prev[1]+L, &cur[1])) {
-            local_B[i] = prefix + i + 1;
             local_max = prefix + i + 1;
+            local_B[i] = local_max;
         } else {
             local_B[i] = 0;
         }

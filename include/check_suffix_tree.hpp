@@ -35,14 +35,15 @@
 #endif
 
 #include "suffix_array.hpp"
+#include "alphabet.hpp"
 #include "rmq.hpp"
 #include "check_suffix_array.hpp"
 
 void check_suffix_tree(const std::string& s, const std::vector<size_t>& sa, const std::vector<size_t>& lcp, const std::vector<size_t>& nodes, bool& success) {
     // recreate alphabet mapping
     std::vector<size_t> hist = get_histogram<size_t>(s.begin(), s.end(), 256);
-    std::vector<uint16_t> alphabet_map = alphabet_mapping_tbl(hist);
-    unsigned int sigma = alphabet_unique_chars(hist);
+    alphabet<char> alpha = alphabet<char>::from_hist(hist);
+    unsigned int sigma = alpha.sigma();
 
     success = false;
 
@@ -74,7 +75,7 @@ void check_suffix_tree(const std::string& s, const std::vector<size_t>& sa, cons
                 c = 0;
             } else {
                 ASSERT_GT(s.size(), sa[i] + prev_min);
-                c = alphabet_map[s[sa[i]+prev_min]];
+                c = alpha.encode(s[sa[i]+prev_min]);
             }
             size_t node_offset = (sigma+1)*prev_pos;
             leafs_visited[i] = true;
@@ -108,7 +109,7 @@ void check_suffix_tree(const std::string& s, const std::vector<size_t>& sa, cons
                     c = 0;
                 } else {
                     ASSERT_GT(s.size(), sa[i] + prev_min);
-                    c = alphabet_map[s[sa[i] + prev_min]];
+                    c = alpha.encode(s[sa[i] + prev_min]);
                 }
                 size_t node_offset = (sigma+1)*prev_pos;
                 edges_visited[node_offset+c] = true;

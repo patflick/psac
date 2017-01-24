@@ -279,7 +279,7 @@ std::vector<size_t> construct_st_2phase(const suffix_array<InputIterator, index_
             std::get<2>(parent_reqs[i]) = 0;
         } else {
             // get character from that global string position
-            std::get<2>(parent_reqs[i]) = sa.alphabet_mapping[static_cast<size_t>(*(sa.input_begin+(std::get<2>(parent_reqs[i])-prefix)))];
+            std::get<2>(parent_reqs[i]) = sa.alpha.encode(static_cast<size_t>(*(sa.input_begin+(std::get<2>(parent_reqs[i])-prefix))));
         }
     }
     // append the "dollar" requests
@@ -293,12 +293,12 @@ std::vector<size_t> construct_st_2phase(const suffix_array<InputIterator, index_
     t.end_section("all2all_func: send to parent");
 
     // one internal node for each LCP entry, each internal node is sigma cells
-    std::vector<size_t> internal_nodes((sa.sigma+1)*local_size);
+    std::vector<size_t> internal_nodes((sa.alpha.sigma()+1)*local_size);
     for (size_t i = 0; i < parent_reqs.size(); ++i) {
         size_t parent = std::get<0>(parent_reqs[i]);
-        size_t node_idx = (parent - prefix)*(sa.sigma+1);
+        size_t node_idx = (parent - prefix)*(sa.alpha.sigma()+1);
         uint16_t c = std::get<2>(parent_reqs[i]);
-        MXX_ASSERT(0 <= c && c < sa.sigma+1);
+        MXX_ASSERT(0 <= c && c < sa.alpha.sigma()+1);
         size_t cell_idx = node_idx + c;
         internal_nodes[cell_idx] = std::get<1>(parent_reqs[i]);
     }
@@ -401,25 +401,25 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     //            2nd no different than fixed std::vector<std::list>
 
     // one internal node for each LCP entry, each internal node is sigma cells
-    std::vector<size_t> internal_nodes((sa.sigma+1)*local_size);
+    std::vector<size_t> internal_nodes((sa.alpha.sigma()+1)*local_size);
     for (size_t i = 0; i < parent_reqs.size(); ++i) {
         size_t parent = std::get<0>(parent_reqs[i]);
-        size_t node_idx = (parent - prefix)*(sa.sigma+1);
+        size_t node_idx = (parent - prefix)*(sa.alpha.sigma()+1);
         uint16_t c;
         CharT x = edge_chars[i];
         if (x == 0) {
             c = 0;
         } else {
-            c = sa.alphabet_mapping[x];
+            c = sa.alpha.encode(x);
         }
-        MXX_ASSERT(0 <= c && c < sa.sigma+1);
+        MXX_ASSERT(0 <= c && c < sa.alpha.sigma()+1);
         size_t cell_idx = node_idx + c;
         internal_nodes[cell_idx] = std::get<1>(parent_reqs[i]);
     }
     if (edgechar_method == edgechar_bulk_rma) {
         for (size_t i = 0; i < dollar_reqs.size(); ++i) {
             size_t parent = std::get<0>(dollar_reqs[i]);
-            size_t node_idx = (parent - prefix)*(sa.sigma+1);
+            size_t node_idx = (parent - prefix)*(sa.alpha.sigma()+1);
             internal_nodes[node_idx] = std::get<1>(dollar_reqs[i]);
         }
     }
@@ -524,13 +524,15 @@ std::vector<size_t> construct_suffix_tree_edges(const suffix_array<InputIterator
         t.end_section("RMA read chars");
     }
 
+    unsigned int sigma = sa.alpha.sigma();
+
     // one internal node for each LCP entry, each internal node is sigma cells
-    std::vector<size_t> internal_nodes((sa.sigma+1)*local_size);
+    std::vector<size_t> internal_nodes((sigma+1)*local_size);
     for (size_t i = 0; i < edges.size(); ++i) {
-        size_t node_idx = (edges[i].parent - prefix)*(sa.sigma+1);
+        size_t node_idx = (edges[i].parent - prefix)*(sigma+1);
         CharT x = edge_chars[i];
-        uint16_t c = sa.alphabet_mapping[x];
-        MXX_ASSERT(0 <= c && c < sa.sigma+1);
+        uint16_t c = sa.alpha.encode(x);
+        MXX_ASSERT(0 <= c && c < sigma+1);
         size_t cell_idx = node_idx + c;
         internal_nodes[cell_idx] = edges[i].gidx;
     }
@@ -538,7 +540,7 @@ std::vector<size_t> construct_suffix_tree_edges(const suffix_array<InputIterator
     // process dollar edges
     for (size_t i = 0; i < dollar_edges.size(); ++i) {
         size_t parent = dollar_edges[i].parent;
-        size_t node_idx = (parent - prefix)*(sa.sigma+1);
+        size_t node_idx = (parent - prefix)*(sigma+1);
         internal_nodes[node_idx] = dollar_edges[i].gidx;
     }
 
@@ -614,7 +616,7 @@ std::vector<size_t> construct_suffix_tree_sm(const suffix_array<InputIterator, i
                 size_t local_nodeidx = sigma*(parent-prefix);
 
                 CharT x = win.get(char_idx);
-                uint16_t cval = sa.alphabet_mapping[x];
+                uint16_t cval = sa.alpha.encode(x);
                 internal_nodes[local_nodeidx+cval] = gidx;
                 // insert into next open slot in node
                 /*
@@ -674,7 +676,7 @@ std::vector<size_t> construct_suffix_tree_sm(const suffix_array<InputIterator, i
                 uint16_t cval = sa.alphabet_mapping[x];
                 internal_nodes[node+cval] = node_copy[c-1];
             }
-        }
+         }
     }
     t.end_section("order edges in nodes");
     */
@@ -689,7 +691,7 @@ std::vector<size_t> construct_suffix_tree_sm(const suffix_array<InputIterator, i
         if (p.second < global_size) {
             size_t local_nodeidx = sigma*(p.first.parent-prefix);
             CharT x = win.get(p.second);
-            uint16_t cval = sa.alphabet_mapping[x];
+            uint16_t cval = sa.alpha.encode(x);
             internal_nodes[local_nodeidx + cval] = p.first.gidx;
         } else {
             size_t local_nodeidx = sigma*(p.first.parent-prefix);
