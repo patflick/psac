@@ -22,3 +22,6 @@ target_link_libraries(test-psac mxx-gtest-main)
 target_link_libraries(test-psac divsufsort)
 target_link_libraries(test-psac divsufsort64)
 
+# standalone tests
+add_executable(test-ss test_stringset.cpp)
+target_link_libraries(test-ss ${EXTRA_LIBS} rt)

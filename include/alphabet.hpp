@@ -79,7 +79,7 @@ public:
     /// executes the given function on every char in the alphabet
     /// (eg, for iterating through characters used within the alphabet)
     template <typename Func>
-    inline void for_each_char(Func f) {
+    inline void for_each_char(Func f) const {
         for (uchar_type c = 0; ; ++c) {
             if (chars_used[c]) {
                 f(c);
@@ -178,7 +178,7 @@ public:
         return mapping_table[index];
     }
 
-    inline std::vector<char_type> unique_chars() {
+    inline std::vector<char_type> unique_chars() const {
         std::vector<char_type> result;
         for_each_char([&](uchar_type c) {
             result.push_back(c);
@@ -186,6 +186,11 @@ public:
         return result;
     }
 };
+
+template <typename char_type>
+std::ostream& operator<<(std::ostream& os, const alphabet<char_type>& a) {
+     return os << "{sigma=" << a.sigma() << ", l=" << a.bits_per_char() << ", A=" << a.unique_chars() << "}";
+}
 
 
 #endif // ALPHABET_HPP

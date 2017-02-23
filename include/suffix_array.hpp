@@ -22,7 +22,9 @@
 #include <cstring> // memcmp
 
 #include "alphabet.hpp"
+#include "kmer.hpp"
 #include "par_rmq.hpp"
+#include "shifting.hpp"
 
 #include <mxx/datatypes.hpp>
 #include <mxx/shift.hpp>
@@ -98,75 +100,12 @@ class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 }
 
 
-template <typename word_type, typename InputIterator>
-std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm = mxx::comm()) {
-    size_t local_size = std::distance(begin, end);
-    unsigned int l = alpha.bits_per_char();
-    // get k-mer mask
-    word_type kmer_mask = ((static_cast<word_type>(1) << (l*k)) - static_cast<word_type>(1));
-    if (kmer_mask == 0)
-        kmer_mask = ~static_cast<word_type>(0);
-
-    // fill first k-mer (until k-1 positions) and send to left processor
-    // filling k-mer with first character = MSBs for lexicographical ordering
-    InputIterator str_it = begin;
-    word_type kmer = 0;
-    for (unsigned int i = 0; i < k-1; ++i) {
-        kmer <<= l;
-        word_type s = (unsigned char)(*str_it);
-        kmer |= alpha.encode(s);
-        ++str_it;
+// class representing distributed buckets/subranges
+// TODO TODO TODO TODO TODO TODO TODO
+class dbuckets {
+    dbuckets(const mxx::comm& comm) {
     }
-
-    // send first kmer to left processor
-    // TODO: use async left shift!
-    word_type last_kmer = mxx::left_shift(kmer, comm);
-
-    // init output
-    std::vector<word_type> kmers(local_size);
-    auto buk_it = kmers.begin();
-    // continue to create all k-mers and add into histogram count
-    while (str_it != end) {
-        // get next kmer
-        kmer <<= l;
-        word_type s = (unsigned char)(*str_it);
-        kmer |= alpha.encode(s);
-        kmer &= kmer_mask;
-        // add to bucket number array
-        *buk_it = kmer;
-        // iterate
-        ++str_it;
-        ++buk_it;
-    }
-
-    // finish the receive to get the last k-1 k-kmers with string data from the
-    // processor to the right
-    // if not last processor
-    if (comm.rank() < comm.size()-1) {
-        // TODO: use mxx::future to handle this async left shift
-        // wait for the async receive to finish
-        //MPI_Wait(&recv_req, MPI_STATUS_IGNORE);
-        //req.wait();
-    } else {
-        // in this case the last k-mers contains shifting `$` signs
-        // we assume this to be the `\0` value
-        last_kmer = 0;
-    }
-
-
-    // construct last (k-1) k-mers
-    for (unsigned int i = 0; i < k-1; ++i) {
-        kmer <<= l;
-        kmer |= (last_kmer >> (l*(k-i-2)));
-        kmer &= kmer_mask;
-
-        // add to bucket number array
-        *buk_it = kmer;
-        ++buk_it;
-    }
-
-    return kmers;
-}
+};
 
 
 // distributed suffix array
@@ -216,17 +155,6 @@ public:
     using alphabet_type = alphabet<char_type>;
     alphabet_type alpha;
 
-public:
-    /// mapping the ascii char to a "compressed" integer
-    /// using at most ceillog(sigma+1) bits
-    //std::vector<uint16_t> alphabet_mapping;
-
-    /// the number of unique characters in the input string
-    /// (does not account for the special `0` character)
-    //unsigned int sigma;
-
-    /// "compressed" integer to ascii
-
 
 public: // TODO: make private again and provide some iterator and query access
     /// The local suffix array
@@ -242,6 +170,44 @@ private:
     static const int PSAC_TAG_SHIFT = 2;
 
 public:
+
+// TODO: first we need yet another tuple based construction algo, similar to
+// std::array based but fixed to 2 (for easier LCP etc), and then extend this to
+// multiple sequences
+template <typename StringSet>
+void construct_ss(const StringSet& ss) {
+    SAC_TIMER_START();
+    /***********************
+     *  Initial bucketing  *
+     ***********************/
+
+    // detect alphabet and get encoding
+    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
+    unsigned int bits_per_char = alpha.bits_per_char();
+    unsigned int k = get_optimal_k(alpha);
+    if(comm.rank() == 0) {
+        INFO("Alphabet: " << alpha.unique_chars());
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
+    }
+    SAC_TIMER_END_SECTION("alphabet detection");
+
+    // create initial k-mers and use these as the initial bucket numbers
+    // for each character position
+    local_B = kmer_generation<index_t>(ss, k, alpha, comm);
+    SAC_TIMER_END_SECTION("kmer generation");
+
+    size_t shift_by;
+    for (shift_by = k; shift_by < n; shift_by <<= 1) {
+        // 1) doubling by shifting into tuples (2BSA kind of structure)
+        std::vector<index_t> B2 = shift_buckets_ss(ss);
+        // 2) sort by (B1, B2)
+        // 2) LCP
+        // 3) rebucket (B1, B2) -> B1
+        // 4) reverse order to SA order
+    }
+}
+
+
 void construct(bool fast_resolval = true, unsigned int k = 0) {
     SAC_TIMER_START();
 
@@ -249,13 +215,18 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
      *  Initial bucketing  *
      ***********************/
 
+    // detect alphabet and get encoding
+    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
+    unsigned int bits_per_char = alpha.bits_per_char();
+    k = get_optimal_k(alpha, k);
+    if(comm.rank() == 0) {
+        INFO("Alphabet: " << alpha.unique_chars());
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
+    }
+
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
-    // `k` depends on the alphabet size and the word size of each suffix array
-    // element. `k` is choosen to maximize the number of alphabet characters
-    // that fit into one machine word
-    unsigned int bits_per_char;
-    std::tie(k, bits_per_char) = initial_bucketing(k);
+    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
     SAC_TIMER_END_SECTION("initial-bucketing");
 
     // init local_SA
@@ -274,11 +245,10 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
     for (shift_by = k; shift_by < n; shift_by <<= 1) {
         SAC_TIMER_LOOP_START();
         /**************************************************
-         *  Pairing buckets by shifting `shift_by` = 2^k  *
+         *  Pairing buckets by shifting `shift_by` = 2^i  *
          **************************************************/
-        // shift the B1 buckets by 2^k to the left => equals B2
-        std::vector<index_t> local_B2;
-        shift_buckets(shift_by, local_B2);
+        // shift the B1 buckets by 2^i to the left => equals B2
+        std::vector<index_t> local_B2 = shift_buckets(shift_by);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets");
 
         /*************
@@ -369,14 +339,18 @@ void construct_arr(bool fast_resolval = true) {
      *  Initial bucketing  *
      ***********************/
 
+    // detect alphabet and get encoding
+    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
+    unsigned int bits_per_char = alpha.bits_per_char();
+    unsigned int k = get_optimal_k(alpha);
+    if(comm.rank() == 0) {
+        INFO("Alphabet: " << alpha.unique_chars());
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
+    }
+
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
-    // `k` depends on the alphabet size and the word size of each suffix array
-    // element. `k` is choosen to maximize the number of alphabet characters
-    // that fit into one machine word
-    unsigned int k;
-    unsigned int bits_per_char;
-    std::tie(k, bits_per_char) = initial_bucketing();
+    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
     SAC_TIMER_END_SECTION("initial-bucketing");
 
     // init local_SA
@@ -518,22 +492,24 @@ void construct_fast() {
      *  Initial bucketing  *
      ***********************/
 
+    // detect alphabet and get encoding
+    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
+    unsigned int bits_per_char = alpha.bits_per_char();
+    unsigned int k = get_optimal_k(alpha);
+    if(comm.rank() == 0) {
+        INFO("Alphabet: " << alpha.unique_chars());
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
+    }
+
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
-    // `k` depends on the alphabet size and the word size of each suffix array
-    // element. `k` is choosen to maximize the number of alphabet characters
-    // that fit into one machine word
-    unsigned int k;
-    unsigned int bits_per_char;
-    std::tie(k, bits_per_char) = initial_bucketing();
-
+    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
     SAC_TIMER_END_SECTION("initial-bucketing");
 
     // init local_SA
     if (local_SA.size() != local_B.size()) {
         local_SA.resize(local_B.size());
     }
-
 
     kmer_sorting();
     SAC_TIMER_END_SECTION("kmer-sorting");
@@ -572,7 +548,6 @@ void construct_fast() {
 
 private:
 
-
 unsigned int get_optimal_k(const alphabet_type& a, unsigned int k = 0) {
     // number of characters per word => the `k` in `k-mer`
     unsigned int max_k = a.template chars_per_word<index_t>();
@@ -591,46 +566,206 @@ unsigned int get_optimal_k(const alphabet_type& a, unsigned int k = 0) {
     return k;
 }
 
-/*********************************************************************
- *                         Initial Bucketing                         *
- *********************************************************************/
-std::pair<unsigned int, unsigned int> initial_bucketing(unsigned int k = 0)
-{
-    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
-
-    // TODO: move into alphabet itself!
-    if(comm.rank() == 0)
-        std::cout << "Alphabet: " << alpha.unique_chars() << std::endl;
-
-    // bits per character: set l=ceil(log(sigma))
-    unsigned int l = alpha.bits_per_char();
-    k = get_optimal_k(alpha, k);
-
-    if (comm.rank() == 0)
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << l << ", k=" << k);
-
-    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
-
-    // return the number of characters which are part of each bucket number
-    // (i.e., k-mer)
-    return std::make_pair(k, l);
-}
-
 
 /*********************************************************************
  *               Shifting buckets (i -> i + 2^l) => B2               *
  *********************************************************************/
-void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2) {
+template <typename StringSet>
+std::vector<index_t> shift_buckets_ss_nosplit(const StringSet& ss, const std::vector<index_t>& vec, std::size_t dist) {
+    // if strings are not split accross processors: easy, no communication
+    // necessary, just 0 fill once outside string
+    std::vector<index_t> result(vec.size());
+
+    // for each string: memcopy segments backward in input and std::fill rest with 0
+    auto oit = result.begin();
+    auto iit = vec.begin();
+    for (auto& s : ss) {
+        size_t ssize = s.size();
+        if (dist < ssize) {
+            std::copy(iit+dist, iit+ssize, oit);
+            // not necessary because vector is initialized with `0`
+            // std::fill(oit+(ssize-dist), oit+ssize, static_cast<index_t>(0));
+        } else {
+            // not necessary because vector is initialized with `0`
+            // std::fill(oit, oit+ssize, static_cast<index_t>(0));
+        }
+        oit += ssize;
+        iit += ssize;
+    }
+    return result;
+}
+
+template <typename drange>
+class dbuckets {
+    const drange& dr;
+    std::vector<size_t> local_begins;
+    std::vector<std::pair<size_t,size_t>> split_buckets;
+
+    std::pair<size_t, size_t> inner_buckets;
+    //dbuckets(drange, func) {}
+    dbuckets(const drange& dr, const std::vector<size_t>& local_begins) : dr(dr), local_begins(local_begins) {}
+
+    void init_split_buckets(const std::vector<size_t>& local_begins) {
+        // for each bucket that is split across this processors boundary,
+        // we save the [begin, end) global indexes
+        //enum split_types {NO_SPLITS=0, LEFT_SPLIT=1, RIGHT_SPLIT=2, BOTH_SPLIT=3};
+        //split_types split_type;
+
+        // assume array of global indexes as "bucket splitters"
+        size_t last_bucket_start, first_bucket_end;
+        if (local_begins.size() == 0) {
+            first_bucket_end = std::numeric_limits<size_t>::max();
+            last_bucket_start = 0;
+            if (dr.comm().rank() == dr.comm().size() - 1) {
+                first_bucket_end = dr.global_size();
+            }
+        } else {
+            first_bucket_end = local_begins.front();
+            last_bucket_start = local_begins.back();
+        }
+
+        size_t left_last_start = mxx::exscan(last_bucket_start, mxx::max<size_t>(), dr.comm());
+        size_t right_first_end = mxx::exscan(first_bucket_end, mxx::min<size_t>(), dr.comm().reverse());
+
+        // check how sequences are split
+        //split_type = NO_SPLITS;
+
+        // First check if the sequence extends beyond left and right process
+        if (dr.comm().rank() != 0 && dr.comm().rank() != dr.comm().size() - 1 && local_begins.empty() && right_first_end != dr.iprefix()) {
+            // bucket extends to left and right processes
+            split_buckets.emplace_back(left_last_start, right_first_end);
+            //split_type = BOTH_SPLIT;
+            // no inner buckets
+            inner_buckets.first = inner_buckets.second = 0;
+        } else {
+            // check if left-most bucket extends to previous processor
+            if (dr.comm().rank() != 0 && first_bucket_end != dr.eprefix()) {
+                split_buckets.emplace_back(left_last_start, first_bucket_end);
+            }
+
+            // check if right-most bucket extends to next processor
+            if (dr.comm().rank() != dr.comm().size() - 1 && right_first_end != dr.iprefix()) {
+                split_buckets.emplace_back(last_bucket_start, right_first_end);
+            }
+        }
+    }
+
+    size_t local_num_splits() {
+    }
+
+    bool local_has_splits() {
+    }
+
+    inline std::vector<std::pair<size_t, size_t>> local_split_buckets() const {
+        return split_buckets;
+    }
+};
+
+
+template <typename StringSet>
+std::vector<index_t> shift_buckets_ss_wsplit(const StringSet& ss, const std::vector<index_t>& vec, std::size_t dist) {
+    size_t prefix = part.excl_prefix_size();
+
+    // for each bucket: shift
+    std::vector<index_t> result(vec.size());
+
+    dvector_const_wrapper<index_t, blk_dist> src(vec, comm);
+    dvector_wrapper<index_t, blk_dist> dst(result, comm);
+
+    // for each bucket which is split across processors, use global range communication
+    mxx::requests req;
+    for (auto s : dbuckets.split_buckets()) {
+        // icopy range based on bucket range and distance
+        size_t ssize = s.second - s.first;
+        if (dist < ssize) {
+            req.insert(icopy_global_range(src, s.first + dist, s.second, dst, s.first, s.second - dist));
+        }
+        // otherwise fill with 0?
+    }
+
+    // for all purely internal buckets: shift using simple std::copy
+
+
+    // TODO: (re)move the stuff below
+
+    // Generally [seq_begin+dist, seq_end) => [seq_begin, seq_end-dist)
+    size_t src_begin = std::min<size_t>(seq_begin + dist, seq_end);
+    size_t src_end = seq_end;
+
+    size_t dst_begin = seq_begin;
+    size_t dst_end = std::max<size_t>((seq_end >= dist) ? seq_end - dist : 0, dst_begin);
+
+
+
+    // TODO: truncate only my part (both send and receive)
+
+
+    // =>  [my_begin+dist, min(seq_end, my_end+dist))   -> [my_begin, min(my_end, seq_end-dist))
+
+    if (ss.local_starts() == 0 && first_split && last_split) {
+
+        /* TODO special case when no range start/end on this processor */
+        {
+            size_t mystart = std::max<size_t>(first_range_start + dist, prefix);
+            size_t target_start = mystart - dist;
+
+            // end of range i send depends on whether there are any splits in local range
+            // i'm not sure what to do here!?
+            // need to send to left, and receive from right, for same sequence!
+            size_t myend = std::min<size_t>(last_range_end, prefix+local_size);
+            size_t target_end = myend - dist;
+
+            if (mystart < myend) {
+                // send vec[mystart,myend) -> result[target_start, target_end)
+                r.insert(isend_to_global_range(vec, mystart, myend, target_start, target_end));
+            }
+        }
+
+        // receive from right
+        {
+            
+        }
+    } else {
+        if (first_split) {
+            size_t mystart = std::max<size_t>(first_range_start + dist, prefix);
+            size_t target_start = mystart - dist; // either first_range_start or prefix - dist
+
+            // end of range i send depends on whether there are any splits in local range
+            size_t myend = std::min<size_t>(first_range_end, prefix+local_size);
+            size_t target_end = myend - dist;
+
+            if (mystart < myend) {
+                // send vec[mystart,myend) -> result[target_start, target_end)
+                r.insert(isend_to_global_range(vec, mystart, myend, target_start, target_end));
+            }
+        }
+
+        if (last_split) {
+            // receive a range from the right (possibly from more than one processor)
+            size_t mystart = last_range_start;
+            size_t rend = (last_range_end >= dist) ? last_range_end - dist : 0;
+            size_t myend = std::min<size_t>(prefix + local_size, rend);
+
+            if (mystart < myend) {
+                r.insert(irecv_from_global_range(result, mystart+dist, myend+dist, mystart, myend));
+                // receive from vec[mystart+dist, myend+dist) -> result[mystart, myend)
+            }
+        }
+
+        // TODO do internal ranges (if any)
+    }
+
+
+
+
+    r.waitall();
+}
+
+std::vector<index_t> shift_buckets(std::size_t dist) {
     // get # elements to the left
+    std::vector<index_t> result(local_size);
     std::size_t prev_size = part.excl_prefix_size();
     assert(local_size == local_B.size());
-
-    // init B2
-    if (local_B2.size() != local_size){
-        // increase iterators
-        local_B2.clear();
-        local_B2.resize(local_size, 0);
-    }
 
     mxx::datatype mxxindex_t = mxx::get_datatype<index_t>();
     MPI_Datatype mpi_index_t = mxxindex_t.type();
@@ -651,7 +786,7 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2) {
             assert(p1_recv_cnt < std::numeric_limits<int>::max());
         // increase iterators
             int recv_cnt = p1_recv_cnt;
-            MPI_Irecv(&local_B2[0],recv_cnt, mpi_index_t, p1,
+            MPI_Irecv(&result[0],recv_cnt, mpi_index_t, p1,
                       PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
         }
 
@@ -666,7 +801,7 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2) {
             assert(p2_recv_cnt < std::numeric_limits<int>::max());
             int recv_cnt = p2_recv_cnt;
             // send to `p1` (which is necessarily different from `rank`)
-            MPI_Irecv(&local_B2[0] + p1_recv_cnt, recv_cnt, mpi_index_t, p2,
+            MPI_Irecv(&result[0] + p1_recv_cnt, recv_cnt, mpi_index_t, p2,
                       PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
         }
     }
@@ -707,13 +842,14 @@ void shift_buckets(std::size_t dist, std::vector<index_t>& local_B2) {
             assert(local_split == dist);
             // locally reassign
             for (std::size_t i = local_split; i < local_size; ++i) {
-                local_B2[i-local_split] = local_B[i];
+                result[i-local_split] = local_B[i];
             }
         }
     }
 
     // wait for successful receive:
     MPI_Waitall(n_irecvs, recv_reqs, MPI_STATUS_IGNORE);
+    return result;
 }
 
 // shifting with arrays (custom data types)
@@ -1346,11 +1482,6 @@ void reorder_sa_to_isa(std::vector<index_t>& SA) {
         local_B[out_idx] = recv_B[i];
     }
 
-    // reassign the SA
-    std::size_t global_offset = part.excl_prefix_size();
-    for (std::size_t i = 0; i < SA.size(); ++i) {
-        SA[i] = global_offset + i;
-    }
     SAC_TIMER_END_SECTION("sa2isa_rearrange");
 }
 
