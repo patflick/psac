@@ -20,6 +20,11 @@
 #include <string>
 #include <vector>
 
+// generate a distributed string set with splits
+void random_dstringset() {
+    // TODO
+}
+
 
 // example class for string sets
 // required operations
@@ -84,5 +89,6 @@ public:
 
     // convert between (i,j) <-> gidx
 };
+
 
 #endif // STRINGSET_HPP

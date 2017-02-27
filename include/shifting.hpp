@@ -546,4 +546,110 @@ void copy_global_range(const DRangeSrc& src, size_t src_begin, size_t src_end, D
     icopy_global_range(src, src_begin, src_end, dst, dst_begin, dst_end).waitall();
 }
 
+template <typename drange>
+class dbuckets {
+    const drange& dr;
+    std::vector<size_t> local_begins;
+    std::vector<std::pair<size_t,size_t>> split_buckets;
+
+    std::pair<size_t, size_t> inner_buckets;
+    //dbuckets(drange, func) {}
+    dbuckets(const drange& dr, const std::vector<size_t>& local_begins) : dr(dr), local_begins(local_begins) {}
+
+    void init_split_buckets(const std::vector<size_t>& local_begins) {
+        // for each bucket that is split across this processors boundary,
+        // we save the [begin, end) global indexes
+        //enum split_types {NO_SPLITS=0, LEFT_SPLIT=1, RIGHT_SPLIT=2, BOTH_SPLIT=3};
+        //split_types split_type;
+
+        // assume array of global indexes as "bucket splitters"
+        size_t last_bucket_start, first_bucket_end;
+        if (local_begins.size() == 0) {
+            first_bucket_end = std::numeric_limits<size_t>::max();
+            last_bucket_start = 0;
+            if (dr.comm().rank() == dr.comm().size() - 1) {
+                first_bucket_end = dr.global_size();
+            }
+        } else {
+            first_bucket_end = local_begins.front();
+            last_bucket_start = local_begins.back();
+        }
+
+        size_t left_last_start = mxx::exscan(last_bucket_start, mxx::max<size_t>(), dr.comm());
+        size_t right_first_end = mxx::exscan(first_bucket_end, mxx::min<size_t>(), dr.comm().reverse());
+
+        // check how sequences are split
+        //split_type = NO_SPLITS;
+
+        // First check if the sequence extends beyond left and right process
+        if (dr.comm().rank() != 0 && dr.comm().rank() != dr.comm().size() - 1 && local_begins.empty() && right_first_end != dr.iprefix()) {
+            // bucket extends to left and right processes
+            split_buckets.emplace_back(left_last_start, right_first_end);
+            //split_type = BOTH_SPLIT;
+            // no inner buckets
+            inner_buckets.first = inner_buckets.second = 0;
+        } else {
+            // check if left-most bucket extends to previous processor
+            if (dr.comm().rank() != 0 && first_bucket_end != dr.eprefix()) {
+                split_buckets.emplace_back(left_last_start, first_bucket_end);
+            }
+
+            // check if right-most bucket extends to next processor
+            if (dr.comm().rank() != dr.comm().size() - 1 && right_first_end != dr.iprefix()) {
+                split_buckets.emplace_back(last_bucket_start, right_first_end);
+            }
+        }
+    }
+
+    size_t local_num_splits() {
+    }
+
+    bool local_has_splits() {
+    }
+
+    // TODO: rename?
+    inline std::vector<std::pair<size_t, size_t>> local_split_buckets() const {
+        return split_buckets;
+    }
+};
+
+// TODO: test and use-cases for distributed buckets!
+// TODO: test and use case for distributed strings (with splits!)
+
+
+template <typename StringSet>
+std::vector<index_t> shift_buckets_ss_wsplit(const StringSet& ss, const std::vector<index_t>& vec, std::size_t dist) {
+    size_t prefix = part.excl_prefix_size();
+
+    // for each bucket: shift
+    std::vector<index_t> result(vec.size());
+
+    dvector_const_wrapper<index_t, blk_dist> src(vec, comm);
+    dvector_wrapper<index_t, blk_dist> dst(result, comm);
+
+    // for each bucket which is split across processors, use global range communication
+    mxx::requests req;
+    for (auto s : dbuckets.split_buckets()) {
+        // icopy range based on bucket range and distance
+        size_t ssize = s.second - s.first;
+        if (dist < ssize) {
+            req.insert(icopy_global_range(src, s.first + dist, s.second, dst, s.first, s.second - dist));
+        }
+        // otherwise fill with 0?
+    }
+
+    // for all purely internal buckets: shift using simple std::copy
+    for (auto s : dbuckets.internal_buckets()) {
+        size_t ssize = s.size();
+
+        if (dist < ssize) {
+            std::copy(iit+dist, iit+ssize, oit);
+        }
+    }
+
+
+
+    r.waitall();
+}
+
 #endif // SHIFTING_HPP
