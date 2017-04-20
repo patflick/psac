@@ -153,6 +153,10 @@ public:
         return alphabet::from_hist(alphabet_hist);
     }
 
+    static alphabet from_string(const std::string& str, const mxx::comm& comm = mxx::comm()) {
+        return alphabet::from_sequence(str.begin(), str.end(), comm);
+    }
+
     inline unsigned int sigma() const {
         return m_sigma;
     }

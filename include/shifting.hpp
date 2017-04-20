@@ -166,8 +166,6 @@ class blk_dist : public dist_base {
 
 using blk_dist = blk_dist_buf;
 
-class cyl_dist {
-};
 
 // simplified block distr: equal number of elements on each processor:
 // exactly n/p (e.g.: the required input to bitonic sort)
@@ -546,110 +544,195 @@ void copy_global_range(const DRangeSrc& src, size_t src_begin, size_t src_end, D
     icopy_global_range(src, src_begin, src_end, dst, dst_begin, dst_end).waitall();
 }
 
-template <typename drange>
-class dbuckets {
-    const drange& dr;
-    std::vector<size_t> local_begins;
-    std::vector<std::pair<size_t,size_t>> split_buckets;
 
-    std::pair<size_t, size_t> inner_buckets;
-    //dbuckets(drange, func) {}
-    dbuckets(const drange& dr, const std::vector<size_t>& local_begins) : dr(dr), local_begins(local_begins) {}
+class dist_seqs_base {
 
-    void init_split_buckets(const std::vector<size_t>& local_begins) {
-        // for each bucket that is split across this processors boundary,
-        // we save the [begin, end) global indexes
-        //enum split_types {NO_SPLITS=0, LEFT_SPLIT=1, RIGHT_SPLIT=2, BOTH_SPLIT=3};
-        //split_types split_type;
+protected:
+    // inner range [first_sep, last_sep)
+    /// whether there are sequence separators on this processor
+    bool has_local_seps;
+    size_t first_sep;
+    size_t last_sep;
 
-        // assume array of global indexes as "bucket splitters"
-        size_t last_bucket_start, first_bucket_end;
-        if (local_begins.size() == 0) {
-            first_bucket_end = std::numeric_limits<size_t>::max();
-            last_bucket_start = 0;
+    /// possibly remove sequence separators for subsequences which have
+    /// elements on this processor but also on other processors
+    bool is_init_splits;
+    size_t left_sep;
+    size_t right_sep;
+
+public:
+    /*
+    dist_seqs_base(const dist& dr) : dr(dr), has_local_seps(false) {
+        init_split_sequences();
+    }
+
+    dist_seqs_base(dist&& dr) : dr(dr), has_local_seps(false) {
+        init_split_sequences();
+    }
+
+    dist_seqs_base(const dist& dr, size_t first_sep, size_t last_sep)
+        : dr(dr), has_local_seps(true), first_sep(first_sep), last_sep(last_sep) {
+        init_split_sequences();
+    }
+
+    dist_seqs_base(dist&& dr, size_t first_sep, size_t last_sep)
+        : dr(dr), has_local_seps(true), first_sep(first_sep), last_sep(last_sep) {
+        init_split_sequences();
+    }
+
+    dist_seqs_base(const dist& dr, const std::vector<size_t>& seps)
+        : dr(dr), has_local_seps(!seps.empty()) {
+        if (!seps.empty()) {
+            first_sep = seps.front();
+            last_sep = seps.back();
+        }
+        init_split_sequences();
+    }
+
+    dist_seqs_base(dist&& dr, const std::vector<size_t>& seps)
+        : dr(dr), has_local_seps(!seps.empty()) {
+        if (!seps.empty()) {
+            first_sep = seps.front();
+            last_sep = seps.back();
+        }
+        init_split_sequences();
+    }
+    */
+
+    /// !collective
+    /// Given that the first and last separators are set, this initializes the
+    template <typename Dist>
+    void init_split_sequences(Dist dr) {
+        if (!has_local_seps) {
+            first_sep = std::numeric_limits<size_t>::max();
+            last_sep = 0;
             if (dr.comm().rank() == dr.comm().size() - 1) {
-                first_bucket_end = dr.global_size();
+                first_sep = dr.global_size();
             }
-        } else {
-            first_bucket_end = local_begins.front();
-            last_bucket_start = local_begins.back();
         }
 
-        size_t left_last_start = mxx::exscan(last_bucket_start, mxx::max<size_t>(), dr.comm());
-        size_t right_first_end = mxx::exscan(first_bucket_end, mxx::min<size_t>(), dr.comm().reverse());
+        left_sep = mxx::exscan(last_sep, mxx::max<size_t>(), dr.comm());
+        right_sep = mxx::exscan(first_sep, mxx::min<size_t>(), dr.comm().reverse());
+        if (dr.comm().rank() == dr.comm().size() - 1) {
+            right_sep = dr.iprefix();
+        }
+        if (right_sep == dr.iprefix()) {
+            last_sep = right_sep;
+        }
+        if (dr.comm().rank() == 0) {
+            first_sep = 0;
+        }
+        if (first_sep == dr.eprefix()) {
+            left_sep = first_sep;
+        }
+        is_init_splits = true;
+    }
 
-        // check how sequences are split
-        //split_type = NO_SPLITS;
-
-        // First check if the sequence extends beyond left and right process
-        if (dr.comm().rank() != 0 && dr.comm().rank() != dr.comm().size() - 1 && local_begins.empty() && right_first_end != dr.iprefix()) {
-            // bucket extends to left and right processes
-            split_buckets.emplace_back(left_last_start, right_first_end);
-            //split_type = BOTH_SPLIT;
-            // no inner buckets
-            inner_buckets.first = inner_buckets.second = 0;
+    /// returns whether any subsequence is split across processor boundaries
+    /// either to the left, the right, or both
+    bool has_split_seqs() const {
+        if (has_local_seps) {
+            return left_sep < first_sep || last_sep < right_sep;
         } else {
-            // check if left-most bucket extends to previous processor
-            if (dr.comm().rank() != 0 && first_bucket_end != dr.eprefix()) {
-                split_buckets.emplace_back(left_last_start, first_bucket_end);
-            }
-
-            // check if right-most bucket extends to next processor
-            if (dr.comm().rank() != dr.comm().size() - 1 && right_first_end != dr.iprefix()) {
-                split_buckets.emplace_back(last_bucket_start, right_first_end);
-            }
+            return true;
         }
     }
 
-    size_t local_num_splits() {
+    /// returns whether this processor has any subsequences that lie
+    /// exclusively on this processor
+    bool has_inner_seqs() {
+        if (has_local_seps) {
+            return first_sep < last_sep;
+        } else {
+            return false;
+        }
     }
 
-    bool local_has_splits() {
+    /// returns all those subsequences which are split across processor
+    /// boundaries (not fully contained on this processor)
+    /// Each of those subsequences is represented by their half-open
+    /// global-index range [gidx_begin, gidx_end) returned in the form of a
+    /// std::pair
+    std::vector<std::pair<size_t, size_t>> split_seqs() const {
+        std::vector<std::pair<size_t, size_t>> result;
+        if (has_local_seps) {
+            if (left_sep < first_sep) {
+                result.emplace_back(left_sep, first_sep);
+            }
+            if (last_sep < right_sep) {
+                result.emplace_back(last_sep, right_sep);
+            }
+        } else {
+            result.emplace_back(left_sep, right_sep);
+        }
+        return result;
     }
 
-    // TODO: rename?
-    inline std::vector<std::pair<size_t, size_t>> local_split_buckets() const {
-        return split_buckets;
+    std::pair<size_t, size_t> inner_seqs_range() const {
+        if (has_local_seps) {
+            return std::pair<size_t, size_t>(first_sep, last_sep);
+        } else {
+            return std::pair<size_t, size_t>(0, 0);
+        }
     }
+};
+
+
+struct dist_seqs_prefix_sizes {
+    std::vector<size_t> prefix_sizes;
+    bool shadow_initialized;
 };
 
 // TODO: test and use-cases for distributed buckets!
 // TODO: test and use case for distributed strings (with splits!)
 
 
-template <typename StringSet>
-std::vector<index_t> shift_buckets_ss_wsplit(const StringSet& ss, const std::vector<index_t>& vec, std::size_t dist) {
-    size_t prefix = part.excl_prefix_size();
+template <typename DistSeqs, typename T>
+std::vector<T> shift_buckets_ss_wsplit(const DistSeqs& ss, const std::vector<T>& vec, std::size_t shift_by, const mxx::comm& comm, T fill = T()) {
+    //size_t prefix = part.excl_prefix_size();
 
     // for each bucket: shift
-    std::vector<index_t> result(vec.size());
+    std::vector<T> result(vec.size(), fill);
 
-    dvector_const_wrapper<index_t, blk_dist> src(vec, comm);
-    dvector_wrapper<index_t, blk_dist> dst(result, comm);
+    dvector_const_wrapper<T, blk_dist> src(vec, comm);
+    dvector_wrapper<T, blk_dist> dst(result, comm);
 
     // for each bucket which is split across processors, use global range communication
     mxx::requests req;
-    for (auto s : dbuckets.split_buckets()) {
+    mxx::sync_cout(comm) << "split_seps = " << ss.split_seqs() << std::endl;
+    for (auto s : ss.split_seqs()) {
         // icopy range based on bucket range and distance
         size_t ssize = s.second - s.first;
-        if (dist < ssize) {
-            req.insert(icopy_global_range(src, s.first + dist, s.second, dst, s.first, s.second - dist));
+        if (shift_by < ssize) {
+            req.insert(icopy_global_range(src, s.first + shift_by, s.second, dst, s.first, s.second - shift_by));
         }
-        // otherwise fill with 0?
     }
 
     // for all purely internal buckets: shift using simple std::copy
-    for (auto s : dbuckets.internal_buckets()) {
-        size_t ssize = s.size();
+    if (ss.seq_seps.size() > 0) {
+        size_t sb = ss.seq_seps[0] - ss.d().eprefix();
+        auto iit = vec.begin() + sb;
+        auto oit = result.begin() + sb;
+        for (size_t i = 0; i < ss.seq_seps.size()-1; ++i) {
+            size_t ssize = ss.seq_seps[i+1] - ss.seq_seps[i];
 
-        if (dist < ssize) {
-            std::copy(iit+dist, iit+ssize, oit);
+            if (shift_by < ssize) {
+                std::copy(iit+shift_by, iit+ssize, oit);
+            }
+            iit += ssize;
+            oit += ssize;
+        }
+        if (comm.rank() == comm.size()-1) {
+            if (shift_by < std::distance(iit, vec.end())) {
+                std::copy(iit+shift_by, vec.end(), oit);
+            }
         }
     }
 
+    req.waitall();
 
-
-    r.waitall();
+    return result;
 }
+
 
 #endif // SHIFTING_HPP

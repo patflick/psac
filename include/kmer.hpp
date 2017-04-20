@@ -21,6 +21,25 @@
 #include <iterator>
 #include "alphabet.hpp"
 
+// get max-mer size for a given alphabet and local input size
+template<typename word_type, typename CharType>
+unsigned int get_optimal_k(const alphabet<CharType>& a, size_t local_size, const mxx::comm& comm, unsigned int k = 0) {
+    // number of characters per word => the `k` in `k-mer`
+    unsigned int max_k = a.template chars_per_word<word_type>();
+    if (k == 0 || k > max_k) {
+        k = max_k;
+    }
+    // if the input is too small for `k`, choose a smaller `k`
+    size_t min_local_size = mxx::allreduce(local_size, mxx::min<size_t>(), comm);
+    if (k >= min_local_size) {
+        k = min_local_size;
+        if (comm.size() == 1 && k > 1)
+            k--;
+    }
+    return k;
+}
+
+
 template <typename word_type, typename InputIterator>
 std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm = mxx::comm()) {
     size_t local_size = std::distance(begin, end);

@@ -119,12 +119,51 @@ void test_shift_buckets() {
     // 3) init distributed buckets by value
 }
 
+#define SDEBUG(x) mxx::sync_cerr(c) << "[" << c.rank() << "]: " #x " = " << (x) << std::endl
+
+void test_dist_ss() {
+    mxx::comm c;
+    std::string randseq = random_dstringset(20, c);
+    //mxx::sync_cout(c) << "[" << c.rank() << "] str = " << randseq << std::endl;
+    simple_dstringset ss(randseq.begin(), randseq.end(), c);
+
+    SDEBUG(randseq);
+    SDEBUG(ss.sizes);
+
+
+    mxx::sync_cout(c) << ss;
+    mxx::sync_cout(c) << std::endl;
+
+    SDEBUG(ss.left_size);
+    SDEBUG(ss.right_size);
+
+    // TODO: print out for every substring, its length (once, where it starts)
+    // -> inner ranges?
+    for (size_t i = 0; i < ss.sizes.size(); ++i) {
+        if (i == 0 && ss.first_split) {
+            // do nothing
+        } else {
+            if (i == ss.sizes.size()-1 && ss.last_split) {
+                std::cout << "(" << c.rank() << "," << i << "," << ss.sizes[i]+ss.right_size << ")" << std::endl;
+            } else {
+                std::cout << "(" << c.rank() << "," << i << "," << ss.sizes[i] << ")" << std::endl;
+            }
+        }
+    }
+
+    // TODO: generate random bucket numbers and test shifting
+    //std::vector<char> x(randseq.begin(), randseq.end());
+    //std::vector<char> y = shift_buckets_ss_wsplit(ss, x, 1, c, '0');
+    //mxx::sync_cout(c) << "[" << c.rank() << "] shifted = " << y << std::endl;
+}
+
 int main(int argc, char *argv[]) {
 
     mxx::env e(argc, argv);
 
     //test_shift();
-    test_global_copy();
+    //test_global_copy();
+    test_dist_ss();
 
     return 0;
 }

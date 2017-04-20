@@ -184,7 +184,7 @@ void construct_ss(const StringSet& ss) {
     // detect alphabet and get encoding
     alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
     unsigned int bits_per_char = alpha.bits_per_char();
-    unsigned int k = get_optimal_k(alpha);
+    unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
         INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
@@ -218,7 +218,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
     // detect alphabet and get encoding
     alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
     unsigned int bits_per_char = alpha.bits_per_char();
-    k = get_optimal_k(alpha, k);
+    k = get_optimal_k<index_t>(alpha, local_size, comm, k);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
         INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
@@ -342,7 +342,7 @@ void construct_arr(bool fast_resolval = true) {
     // detect alphabet and get encoding
     alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
     unsigned int bits_per_char = alpha.bits_per_char();
-    unsigned int k = get_optimal_k(alpha);
+    unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
         INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
@@ -495,7 +495,7 @@ void construct_fast() {
     // detect alphabet and get encoding
     alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
     unsigned int bits_per_char = alpha.bits_per_char();
-    unsigned int k = get_optimal_k(alpha);
+    unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
         INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
@@ -547,24 +547,6 @@ void construct_fast() {
 
 
 private:
-
-unsigned int get_optimal_k(const alphabet_type& a, unsigned int k = 0) {
-    // number of characters per word => the `k` in `k-mer`
-    unsigned int max_k = a.template chars_per_word<index_t>();
-    if (k == 0 || k > max_k) {
-        if (k > max_k)
-             INFO("[WARNING] given `k` value of " << k << " is too large, setting k=" << max_k << " instead.");
-        k = max_k;
-    }
-    // if the input is too small for `k`, choose a smaller `k`
-    std::size_t min_local_size = part.local_size(p-1);
-    if (k >= min_local_size) {
-        k = min_local_size;
-        if (comm.size() == 1 && k > 1)
-            k--;
-    }
-    return k;
-}
 
 
 /*********************************************************************
