@@ -678,7 +678,11 @@ public:
 };
 
 
+// TODO: create this representation from the stringset
+//       but equally distributed base sequence (buckets)
 struct dist_seqs_prefix_sizes {
+    mxx::partition::block_decomposition_buffered<size_t> part;
+    size_t global_size;
     std::vector<size_t> prefix_sizes;
     bool shadow_initialized;
 };

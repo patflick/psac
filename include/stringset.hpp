@@ -163,6 +163,34 @@ public:
     }
 };
 
+// equal distributed (re-distributed) prefix_size, from there things become simple?
+// mxx::stable_distribute_inplace()...
+//
+//
+//
+
+// TODO: create this representation from the stringset
+//       but equally distributed base sequence (buckets)
+struct dist_seqs_prefix_sizes {
+    mxx::partition::block_decomposition_buffered<size_t> part;
+    size_t global_size;
+    std::vector<size_t> prefix_sizes;
+    bool shadow_initialized;
+
+
+    void init_from_dss(simple_dstringset& dss, const mxx::comm& comm) {
+        size_t ss_local_size = std::accumulate(dss.sizes.begin(), dss.sizes().end(), static_cast<size_t>(0));
+        size_t ss_global_size = mxx::allreduce(ss_local_size, comm);
+
+        part = mxx::partition::block_decomposition_buffered(ss_global_size, comm.size(), comm.rank());
+        
+    }
+
+    dist_seqs_prefix_sizes(simple_dstringset& dss) {
+    }
+};
+
+
 // for use with mxx::sync_cout
 std::ostream& operator<<(std::ostream& os, const simple_dstringset& ss) {
     for (size_t i = 0; i < ss.sizes.size(); ++i) {

@@ -130,7 +130,6 @@ void test_dist_ss() {
     SDEBUG(randseq);
     SDEBUG(ss.sizes);
 
-
     mxx::sync_cout(c) << ss;
     mxx::sync_cout(c) << std::endl;
 
