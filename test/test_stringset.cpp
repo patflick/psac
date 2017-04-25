@@ -121,9 +121,56 @@ void test_shift_buckets() {
 
 #define SDEBUG(x) mxx::sync_cerr(c) << "[" << c.rank() << "]: " #x " = " << (x) << std::endl
 
+std::string rand_dna(size_t size) {
+    std::string result;
+    result.resize(size);
+    char alpha[4] = {'a', 'c', 't', 'g'};
+    for (size_t i = 0; i < size; ++i) {
+        result[i] = alpha[rand() % sizeof(alpha)];
+    }
+    return result;
+}
+
+std::string flatten_strings(const std::vector<std::string>& v, const char sep = '$') {
+    std::string result;
+    size_t outsize = 0;
+    for (auto s : v) {
+        outsize += s.size() + 1;
+    }
+    result.resize(outsize);
+    auto outit = result.begin();
+    for (auto s : v) {
+        outit = std::copy(s.begin(), s.end(), outit);
+        *outit = sep;
+        ++outit;
+    }
+    return result;
+}
+
 void test_dist_ss() {
     mxx::comm c;
-    std::string randseq = random_dstringset(20, c);
+    // TODO: alternative random string input: generate strings via sizes predefined (or generated)
+    //std::string randseq = random_dstringset(20, c);
+    //
+    std::vector<size_t> ssizes = {26, 57, 8, 20, 20, 12, 11};
+    std::string randseq; 
+    if (c.rank() == 0) {
+        std::vector<std::string> strs;
+        for (size_t s : ssizes) {
+            strs.emplace_back(rand_dna(s));
+        }
+
+        std::cout << strs << std::endl;
+        std::string flatstr = flatten_strings(strs);
+        std::cout << "Flat str: \"" << flatstr << "\"" << std::endl;
+        // vec of string to strings seperated by $
+        randseq = flatstr;
+    }
+
+    randseq = mxx::stable_distribute(randseq, c);
+
+
+
     //mxx::sync_cout(c) << "[" << c.rank() << "] str = " << randseq << std::endl;
     simple_dstringset ss(randseq.begin(), randseq.end(), c);
 
@@ -136,7 +183,7 @@ void test_dist_ss() {
     SDEBUG(ss.left_size);
     SDEBUG(ss.right_size);
 
-    // TODO: print out for every substring, its length (once, where it starts)
+    // print out for every substring, its length (once, where it starts)
     // -> inner ranges?
     for (size_t i = 0; i < ss.sizes.size(); ++i) {
         if (i == 0 && ss.first_split) {
@@ -147,6 +194,20 @@ void test_dist_ss() {
             } else {
                 std::cout << "(" << c.rank() << "," << i << "," << ss.sizes[i] << ")" << std::endl;
             }
+        }
+    }
+
+
+    dist_seqs ds = dist_seqs::from_dss(ss, c);
+    mxx::sync_cout(c) << ds << std::endl;
+    mxx::sync_cout(c) << ds.sizes() << std::endl;
+
+    // double check sizes
+    // TODO: fix test cases and check this via GTEST
+    std::vector<std::string> sv = {"acaadabddabdbdbdcdcabaccaa", "bbdaadcdaacccccabbdddcdbcdbadbdacddbcbbadcbaddcaabacacccb", "bbadaddc", "badbddccaaacabcdbcbc", "abccadbddcccccbdccda", "cdadbbbbbdcc", "bcadbdaacba"};
+    if (c.rank() == 0) {
+        for (auto s: sv) {
+            std::cout << s.size() << std::endl;
         }
     }
 

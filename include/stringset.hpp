@@ -21,6 +21,8 @@
 #include <vector>
 #include <algorithm>
 
+#include <cxx-prettyprint/prettyprint.hpp>
+
 #include <mxx/comm.hpp>
 #include "shifting.hpp"
 
@@ -146,6 +148,8 @@ public:
             return result;
         }, comm.reverse());
 
+        left_size = 0;
+        right_size = 0;
         if (first_split) {
             left_size = left_sums.second;
         }
@@ -169,27 +173,183 @@ public:
 //
 //
 
-// TODO: create this representation from the stringset
-//       but equally distributed base sequence (buckets)
-struct dist_seqs_prefix_sizes {
-    mxx::partition::block_decomposition_buffered<size_t> part;
-    size_t global_size;
-    std::vector<size_t> prefix_sizes;
-    bool shadow_initialized;
+class dist_seqs_base {
 
+public:
+    // inner range [first_sep, last_sep)
+    /// whether there are sequence separators on this processor
+    bool has_local_seps;
+    size_t first_sep;
+    size_t last_sep;
 
-    void init_from_dss(simple_dstringset& dss, const mxx::comm& comm) {
-        size_t ss_local_size = std::accumulate(dss.sizes.begin(), dss.sizes().end(), static_cast<size_t>(0));
-        size_t ss_global_size = mxx::allreduce(ss_local_size, comm);
+    /// possibly remove sequence separators for subsequences which have
+    /// elements on this processor but also on other processors
+    bool is_init_splits;
+    size_t left_sep;
+    size_t right_sep;
 
-        part = mxx::partition::block_decomposition_buffered(ss_global_size, comm.size(), comm.rank());
-        
+    /// !collective
+    /// Given that the first and last separators are set, this initializes the
+    template <typename Dist>
+    void init_split_sequences(Dist dist, const mxx::comm& comm) {
+        if (!has_local_seps) {
+            first_sep = std::numeric_limits<size_t>::max();
+            last_sep = 0;
+            if (comm.rank() == comm.size() - 1) {
+                first_sep = dist.global_size();
+            }
+        }
+
+        left_sep = mxx::exscan(last_sep, mxx::max<size_t>(), comm);
+        right_sep = mxx::exscan(first_sep, mxx::min<size_t>(), comm.reverse());
+        if (comm.rank() == comm.size() - 1) {
+            //right_sep = dist.iprefix();
+            right_sep = dist.prefix_size();
+        }
+        if (right_sep == dist.prefix_size()) {
+            last_sep = right_sep;
+        }
+        if (comm.rank() == 0) {
+            first_sep = 0;
+        }
+        if (first_sep == dist.excl_prefix_size()) {
+            left_sep = first_sep;
+        }
+        is_init_splits = true;
     }
 
-    dist_seqs_prefix_sizes(simple_dstringset& dss) {
+    /// returns whether any subsequence is split across processor boundaries
+    /// either to the left, the right, or both
+    bool has_split_seqs() const {
+        if (has_local_seps) {
+            return left_sep < first_sep || last_sep < right_sep;
+        } else {
+            return true;
+        }
+    }
+
+    /// returns whether this processor has any subsequences that lie
+    /// exclusively on this processor
+    bool has_inner_seqs() {
+        if (has_local_seps) {
+            return first_sep < last_sep;
+        } else {
+            return false;
+        }
+    }
+
+    /// returns all those subsequences which are split across processor
+    /// boundaries (not fully contained on this processor)
+    /// Each of those subsequences is represented by their half-open
+    /// global-index range [gidx_begin, gidx_end) returned in the form of a
+    /// std::pair
+    std::vector<std::pair<size_t, size_t>> split_seqs() const {
+        std::vector<std::pair<size_t, size_t>> result;
+        if (has_local_seps) {
+            if (left_sep < first_sep) {
+                result.emplace_back(left_sep, first_sep);
+            }
+            if (last_sep < right_sep) {
+                result.emplace_back(last_sep, right_sep);
+            }
+        } else {
+            result.emplace_back(left_sep, right_sep);
+        }
+        return result;
+    }
+
+    std::pair<size_t, size_t> inner_seqs_range() const {
+        if (has_local_seps) {
+            return std::pair<size_t, size_t>(first_sep, last_sep);
+        } else {
+            return std::pair<size_t, size_t>(0, 0);
+        }
     }
 };
 
+
+// equally distributed prefix sizes
+// with shadow elements for left and right processor boundaries
+struct dist_seqs : public dist_seqs_base {
+    mxx::partition::block_decomposition_buffered<size_t> part;
+    size_t global_size;
+    std::vector<size_t> prefix_sizes;
+    //bool shadow_initialized;
+
+    void init_from_dss(simple_dstringset& dss, const mxx::comm& comm) {
+        // input distributed stringset might not be (equally) block distributed
+        // with regards to character count. Thus we redistribute prefix_size
+        // seqeuences so that they are
+        size_t ss_local_size = std::accumulate(dss.sizes.begin(), dss.sizes.end(), static_cast<size_t>(0));
+        size_t ss_global_size = mxx::allreduce(ss_local_size, comm);
+        size_t ss_prefix = mxx::exscan(ss_local_size, comm);
+
+        part = mxx::partition::block_decomposition_buffered<size_t>(ss_global_size, comm.size(), comm.rank());
+        global_size = ss_global_size;
+
+        std::vector<size_t> send_counts(comm.size(), 0);
+        // for all sequence starts: ps[i] = gidx_sum[i-1] + size[i]
+        // TODO: do across procs boundaries/split sequences
+        std::vector<size_t> gidx;
+        gidx.reserve(dss.sizes.size());
+        size_t size_sum = ss_prefix;
+        int pi;
+        if (!dss.first_split) {
+            pi = part.target_processor(ss_prefix);
+            ++send_counts[pi];
+            gidx.emplace_back(size_sum);
+        } else {
+            pi = part.target_processor(ss_prefix+dss.sizes[0]);
+        }
+        size_t pi_end = part.prefix_size(pi);
+
+        // create prefix sums and keep track the processor id for their target
+        for (size_t i = 0; i < dss.sizes.size()-1; ++i) {
+            size_sum += dss.sizes[i];
+            while (size_sum >= pi_end) {
+                ++pi;
+                pi_end = part.prefix_size(pi);
+            }
+            gidx.emplace_back(size_sum);
+            ++send_counts[pi];
+        }
+
+        // XXX: possibly optimize this communication (expected very low volume, and only neighbor comm)
+        prefix_sizes = mxx::all2allv(gidx, send_counts, comm);
+    }
+
+    static dist_seqs from_dss(simple_dstringset& dss, const mxx::comm& comm) {
+        dist_seqs res;
+        res.init_from_dss(dss, comm);
+        if (!res.prefix_sizes.empty()) {
+            res.first_sep = res.prefix_sizes.front();
+            res.last_sep = res.prefix_sizes.back();
+            res.has_local_seps = true;
+        } else {
+            res.has_local_seps = false;
+        }
+        res.init_split_sequences(res.part, comm);
+        return res;
+    }
+
+    // returns the size of the subsequences starting (owned by) this processor
+    std::vector<size_t> sizes() {
+        std::vector<size_t> result(prefix_sizes.size());
+        for (size_t i = 0; i < prefix_sizes.size(); ++i) {
+            if (i+1 < prefix_sizes.size()) {
+                result[i] = prefix_sizes[i+1] - prefix_sizes[i];
+            } else {
+                result[i] = right_sep - prefix_sizes[i];
+            }
+        }
+        return result;
+    }
+
+};
+
+std::ostream& operator<<(std::ostream& os, const dist_seqs& ds) {
+    return os << "(" << ds.left_sep << "), " << ds.prefix_sizes << ", (" << ds.right_sep << ")";
+}
 
 // for use with mxx::sync_cout
 std::ostream& operator<<(std::ostream& os, const simple_dstringset& ss) {
@@ -203,40 +363,11 @@ std::ostream& operator<<(std::ostream& os, const simple_dstringset& ss) {
             os << "\", ";
         }
     }
+    os.flush();
     return os;
 }
 
 
-
-/*
-class ds_stringset : public dist_seqs_base<blk_dist> {
-
-public:
-    std::string local_str;
-    std::vector<size_t> seq_seps;
-
-    template <typename Iterator>
-    static std::vector<size_t> parse_seps(Iterator begin, Iterator end, char sep, const mxx::comm& comm) {
-        std::vector<size_t> seps;
-
-        size_t local_size = std::distance(begin, end);
-        size_t prefix = mxx::exscan(local_size, comm);
-        // parse string, and insert seprator for each string separator character
-        size_t gidx = prefix;
-        for (Iterator it = begin; it != end; ++it, ++gidx) {
-            if (*it == sep) {
-                seps.push_back(gidx+1);
-            }
-        }
-        return seps;
-    }
-
-    ds_stringset(const std::string& lstr, std::vector<size_t>&& seps, const mxx::comm& c) : dist_seqs_base(blk_dist(c, lstr.size()), seps), local_str(lstr), seq_seps(seps) {
-    }
-
-    ds_stringset(const std::string& lstr, const mxx::comm& c) : ds_stringset(lstr, parse_seps(lstr.begin(), lstr.end(), '$', c), c) {}
-};
-*/
 
 
 // example class for string sets
