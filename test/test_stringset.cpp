@@ -149,9 +149,10 @@ std::string flatten_strings(const std::vector<std::string>& v, const char sep = 
 
 void test_dist_ss() {
     mxx::comm c;
-    // TODO: alternative random string input: generate strings via sizes predefined (or generated)
     //std::string randseq = random_dstringset(20, c);
-    //
+
+    // generate strings of given sizes on master node, join into single string
+    // with '$' as seperator and distribute equally among processors
     std::vector<size_t> ssizes = {88, 57, 8, 20, 3, 4, 1, 1, 11};
     std::string randseq;
     if (c.rank() == 0) {
@@ -166,10 +167,10 @@ void test_dist_ss() {
         // vec of string to strings seperated by $
         randseq = flatstr;
     }
-
     randseq = mxx::stable_distribute(randseq, c);
 
-   //mxx::sync_cout(c) << "[" << c.rank() << "] str = " << randseq << std::endl;
+    // construct distribute stringset by parsing the string according to
+    // '$' separating character
     simple_dstringset ss(randseq.begin(), randseq.end(), c);
 
     SDEBUG(randseq);
@@ -179,15 +180,20 @@ void test_dist_ss() {
 
     //mxx::sync_cout(c) << ss;
 
+    // create the distributed sequences prefix_sizes format (with shadow els)
     dist_seqs ds = dist_seqs::from_dss(ss, c);
-    mxx::sync_cout(c) << ds << std::endl;
+
+    // gather sizes and print
+    // TODO: gtest for checking of size array is same as the one defined above
     std::vector<size_t> all_sizes = mxx::allgatherv(ds.sizes(), c);
-    //mxx::sync_cout(c) << ds.sizes() << std::endl;
+    mxx::sync_cout(c) << ds << std::endl;
     if (c.rank() == 0) {
         std::cout << all_sizes << std::endl;
     }
 
-    // TODO: test if the redistribution works properly
+    // TODO: more test cases, test cases with lots of inbalance, etc
+
+    // TODO: test if the redistribution works properly: use chars as bucket and see if it reproduces original strings
     // TODO: test shifting next
     // TODO: kmer generation for stringset
 }
