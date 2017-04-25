@@ -383,8 +383,10 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         // TODO: bulk_rma_mpi only for non-dollar
         if (edgechar_method == edgechar_mpi_osc_rma) {
             edge_chars = bulk_rma_mpiwin(sa.input_begin, sa.input_end, global_indexes, comm);
+#if MPI_VERSION > 2
         } else if (edgechar_method == edgechar_rma_shared) {
             edge_chars = bulk_rma_shm_mpi(sa.input_begin, sa.input_end, global_indexes, comm);
+#endif
         } else if (edgechar_method == edgechar_posix_sm) {
             edge_chars = bulk_rma_shm_posix(sa.input_begin, sa.input_end, global_indexes, comm);
         } else if (edgechar_method == edgechar_posix_sm_split) {

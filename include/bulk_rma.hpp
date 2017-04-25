@@ -148,6 +148,7 @@ bulk_rma_mpiwin(InputIter local_begin, InputIter local_end,
     return results;
 }
 
+#if MPI_VERSION > 2
 // TODO: separate further into Window and the global indexing stuff
 //       ie: seprate into: global_array and backend implementation 
 // FIXME enable only for MPI Version >= 3
@@ -224,6 +225,8 @@ public:
         MPI_Win_free(&win);
     }
 };
+
+#endif
 
 template <typename T>
 class shmem_window_posix {
@@ -429,6 +432,7 @@ public:
     }
 };
 
+#if MPI_VERSION > 2
 template <typename InputIter>
 std::vector<typename std::iterator_traits<InputIter>::value_type>
 bulk_rma_shm_mpi(InputIter local_begin, InputIter local_end,
@@ -450,6 +454,7 @@ bulk_rma_shm_mpi(InputIter local_begin, InputIter local_end,
 
     return results;
 }
+#endif
 
 template <typename InputIter>
 std::vector<typename std::iterator_traits<InputIter>::value_type>

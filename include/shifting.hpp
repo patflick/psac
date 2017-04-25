@@ -424,7 +424,7 @@ mxx::requests isend_to_global_range(const DRange<T, D>& dr, size_t src_begin, si
         size_t pend = std::min<size_t>(dst_end, dr.iprefix(p));
         size_t send_cnt = pend - recv_begin;
         mxx::datatype dt = mxx::get_datatype<T>();
-        MPI_Isend(dr.data_at(send_begin-prefix), send_cnt, dt.type(), p, 0, dr.comm(), &r.add());
+        MPI_Isend(const_cast<T*>(dr.data_at(send_begin-prefix)), send_cnt, dt.type(), p, 0, dr.comm(), &r.add());
         recv_begin += send_cnt;
         send_begin += send_cnt;
         send_size -= send_cnt;

@@ -153,7 +153,12 @@ void test_dist_ss() {
 
     // generate strings of given sizes on master node, join into single string
     // with '$' as seperator and distribute equally among processors
-    std::vector<size_t> ssizes = {88, 57, 8, 20, 3, 4, 1, 1, 11};
+    std::vector<size_t> ssizes;
+    if (c.rank() == 0) {
+        ssizes = {88, 57, 8, 20, 3, 4, 1, 1, 11};
+    }
+    mxx::stable_distribute_inplace(ssizes, c);
+    //ssizes = mxx::distribute
     std::string randseq;
     if (c.rank() == 0) {
         std::vector<std::string> strs;
