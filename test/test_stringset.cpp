@@ -152,8 +152,8 @@ void test_dist_ss() {
     // TODO: alternative random string input: generate strings via sizes predefined (or generated)
     //std::string randseq = random_dstringset(20, c);
     //
-    std::vector<size_t> ssizes = {26, 57, 8, 20, 20, 12, 11};
-    std::string randseq; 
+    std::vector<size_t> ssizes = {88, 57, 8, 20, 3, 4, 1, 1, 11};
+    std::string randseq;
     if (c.rank() == 0) {
         std::vector<std::string> strs;
         for (size_t s : ssizes) {
@@ -169,52 +169,27 @@ void test_dist_ss() {
 
     randseq = mxx::stable_distribute(randseq, c);
 
-
-
-    //mxx::sync_cout(c) << "[" << c.rank() << "] str = " << randseq << std::endl;
+   //mxx::sync_cout(c) << "[" << c.rank() << "] str = " << randseq << std::endl;
     simple_dstringset ss(randseq.begin(), randseq.end(), c);
 
     SDEBUG(randseq);
     SDEBUG(ss.sizes);
-
-    mxx::sync_cout(c) << ss;
-    mxx::sync_cout(c) << std::endl;
-
     SDEBUG(ss.left_size);
     SDEBUG(ss.right_size);
 
-    // print out for every substring, its length (once, where it starts)
-    // -> inner ranges?
-    for (size_t i = 0; i < ss.sizes.size(); ++i) {
-        if (i == 0 && ss.first_split) {
-            // do nothing
-        } else {
-            if (i == ss.sizes.size()-1 && ss.last_split) {
-                std::cout << "(" << c.rank() << "," << i << "," << ss.sizes[i]+ss.right_size << ")" << std::endl;
-            } else {
-                std::cout << "(" << c.rank() << "," << i << "," << ss.sizes[i] << ")" << std::endl;
-            }
-        }
-    }
-
+    //mxx::sync_cout(c) << ss;
 
     dist_seqs ds = dist_seqs::from_dss(ss, c);
     mxx::sync_cout(c) << ds << std::endl;
-    mxx::sync_cout(c) << ds.sizes() << std::endl;
-
-    // double check sizes
-    // TODO: fix test cases and check this via GTEST
-    std::vector<std::string> sv = {"acaadabddabdbdbdcdcabaccaa", "bbdaadcdaacccccabbdddcdbcdbadbdacddbcbbadcbaddcaabacacccb", "bbadaddc", "badbddccaaacabcdbcbc", "abccadbddcccccbdccda", "cdadbbbbbdcc", "bcadbdaacba"};
+    std::vector<size_t> all_sizes = mxx::allgatherv(ds.sizes(), c);
+    //mxx::sync_cout(c) << ds.sizes() << std::endl;
     if (c.rank() == 0) {
-        for (auto s: sv) {
-            std::cout << s.size() << std::endl;
-        }
+        std::cout << all_sizes << std::endl;
     }
 
-    // TODO: generate random bucket numbers and test shifting
-    //std::vector<char> x(randseq.begin(), randseq.end());
-    //std::vector<char> y = shift_buckets_ss_wsplit(ss, x, 1, c, '0');
-    //mxx::sync_cout(c) << "[" << c.rank() << "] shifted = " << y << std::endl;
+    // TODO: test if the redistribution works properly
+    // TODO: test shifting next
+    // TODO: kmer generation for stringset
 }
 
 int main(int argc, char *argv[]) {

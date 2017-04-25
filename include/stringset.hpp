@@ -72,6 +72,9 @@ public:
 
         // parse
         Iterator it = begin;
+        // skip over separator characters
+        while(it != end && *it == '$')
+            ++it;
         while (it != end) {
             // find end of string
             Iterator e = it;
