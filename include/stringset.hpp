@@ -61,6 +61,7 @@ public:
     //const char* data_begin, data_end;
     std::vector<const char*> str_begins;
     std::vector<size_t> sizes;
+    size_t sum_sizes;
 
     template <typename Iterator>
     void parse(Iterator begin, Iterator end, const mxx::comm& comm) {
@@ -69,6 +70,7 @@ public:
         assert(local_size > 0);
         char left_char = mxx::right_shift(*(end-1), comm);
         char right_char = mxx::left_shift(*begin, comm);
+        sum_sizes = 0;
 
         // parse
         Iterator it = begin;
@@ -83,6 +85,7 @@ public:
 
             // found valid substring [it, e)
             sizes.emplace_back(std::distance(it, e));
+            sum_sizes += sizes.back();
             str_begins.emplace_back(&(*it));
 
             // skip over non string chars
@@ -221,6 +224,14 @@ public:
         is_init_splits = true;
     }
 
+    bool is_left_split() const {
+        return left_sep < first_sep;
+    }
+
+    bool is_right_split() const {
+        return last_sep < right_sep;
+    }
+
     /// returns whether any subsequence is split across processor boundaries
     /// either to the left, the right, or both
     bool has_split_seqs() const {
@@ -233,7 +244,7 @@ public:
 
     /// returns whether this processor has any subsequences that lie
     /// exclusively on this processor
-    bool has_inner_seqs() {
+    bool has_inner_seqs() const {
         if (has_local_seps) {
             return first_sep < last_sep;
         } else {
@@ -336,7 +347,7 @@ struct dist_seqs : public dist_seqs_base {
     }
 
     // returns the size of the subsequences starting (owned by) this processor
-    std::vector<size_t> sizes() {
+    std::vector<size_t> sizes() const {
         std::vector<size_t> result(prefix_sizes.size());
         for (size_t i = 0; i < prefix_sizes.size(); ++i) {
             if (i+1 < prefix_sizes.size()) {

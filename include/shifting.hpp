@@ -433,11 +433,33 @@ mxx::requests isend_to_global_range(const DRange<T, D>& dr, size_t src_begin, si
     return r;
 }
 
-/*
 template <typename T>
-mxx::requests irecv_from_global_range(std::vector<T>& dst, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
+mxx::requests isend_to_global_range(const std::vector<T>& src, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
+    assert(src_end > src_begin);
+    assert(dst_end > dst_begin);
+    assert(src_end - src_begin == dst_end - dst_begin);
+
+    size_t prefix = dist.excl_prefix_size();
+    //assert(dr.eprefix() <= src_begin && src_end <= dr.iprefix());
+
+    mxx::requests r;
+    size_t send_size = src_end - src_begin;
+    // possibly split [dst_begin, dst_end) by distribution
+    size_t recv_begin = dst_begin;
+    size_t send_begin = src_begin;
+    int p = dist.target_processor(dst_begin);
+    while (send_size > 0) {
+        size_t pend = std::min<size_t>(dst_end, dist.prefix_size(p));
+        size_t send_cnt = pend - recv_begin;
+        mxx::datatype dt = mxx::get_datatype<T>();
+        MPI_Isend(const_cast<T*>(&src[send_begin-prefix]), send_cnt, dt.type(), p, 0, comm, &r.add());
+        recv_begin += send_cnt;
+        send_begin += send_cnt;
+        send_size -= send_cnt;
+        ++p;
+    }
+    return r;
 }
-*/
 
 template <template<class, class> class DRange, typename T, typename D>
 mxx::requests irecv_from_global_range(DRange<T, D>& dr, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end) {
@@ -468,6 +490,37 @@ mxx::requests irecv_from_global_range(DRange<T, D>& dr, size_t src_begin, size_t
     }
     return r;
 }
+
+template <typename T>
+mxx::requests irecv_from_global_range(std::vector<T>& dst, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
+    assert(src_end > src_begin);
+    assert(dst_end > dst_begin);
+    assert(src_end - src_begin == dst_end - dst_begin);
+
+    size_t prefix = dist.excl_prefix_size();
+    size_t local_size = dist.local_size();
+    assert(prefix <= dst_begin && dst_end <= prefix + local_size);
+
+    mxx::requests r;
+    //size_t send_size = src_end - src_begin;
+    size_t recv_size = dst_end - dst_begin;
+    // possibly split [dst_begin, dst_end) by distribution
+    size_t recv_begin = dst_begin;
+    size_t send_begin = src_begin;
+    int p = dist.target_processor(send_begin);
+    while (recv_size > 0) {
+        size_t pend = std::min<size_t>(src_end, dist.prefix_size(p));
+        size_t recv_cnt = pend - send_begin;
+        mxx::datatype dt = mxx::get_datatype<T>();
+        MPI_Irecv(&dst[recv_begin-prefix], recv_cnt, dt.type(), p, 0, comm, &r.add());
+        recv_begin += recv_cnt;
+        send_begin += recv_cnt;
+        recv_size -= recv_cnt;
+        ++p;
+    }
+    return r;
+}
+
 
 
 
@@ -539,55 +592,82 @@ mxx::requests icopy_global_range(const DRangeSrc& src, size_t src_begin, size_t 
     return req;
 }
 
+template <typename T>
+mxx::requests icopy_global_range(const std::vector<T>& src, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, std::vector<T>& dst, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
+    assert(src_begin < src_end);
+    assert(dst_begin < dst_end);
+    assert(src_end - src_begin == dst_end - dst_begin);
+
+    mxx::requests req;
+
+    size_t eprefix = dist.excl_prefix_size();
+    size_t iprefix = dist.prefix_size();
+
+    // truncate for send
+    size_t my_src_begin = std::max(src_begin, eprefix);
+    size_t my_src_end = std::min(src_end, iprefix);
+    if (my_src_begin < my_src_end) {
+        // send
+        size_t re_dst_begin = (my_src_begin - src_begin) + dst_begin;
+        size_t re_dst_end = re_dst_begin + (my_src_end - my_src_begin);
+        req.insert(isend_to_global_range(src, dist, my_src_begin, my_src_end, re_dst_begin, re_dst_end, comm));
+    }
+
+    // truncate for receive
+    size_t my_dst_begin = std::max(dst_begin, eprefix);
+    size_t my_dst_end = std::min(dst_end, iprefix);
+    if (my_dst_begin < my_dst_end) {
+        // receive
+        size_t re_src_begin = (my_dst_begin - dst_begin) + src_begin;
+        size_t re_src_end = re_src_begin + (my_dst_end - my_dst_begin);
+        req.insert(irecv_from_global_range(dst, dist, re_src_begin, re_src_end, my_dst_begin, my_dst_end, comm));
+    }
+    return req;
+}
+
 template <typename DRangeSrc, typename DRangeDst>
 void copy_global_range(const DRangeSrc& src, size_t src_begin, size_t src_end, DRangeDst& dst, size_t dst_begin, size_t dst_end) {
     icopy_global_range(src, src_begin, src_end, dst, dst_begin, dst_end).waitall();
 }
 
 
-
-// TODO: test and use-cases for distributed buckets!
-// TODO: test and use case for distributed strings (with splits!)
-
-
 template <typename DistSeqs, typename T>
-std::vector<T> shift_buckets_ss_wsplit(const DistSeqs& ss, const std::vector<T>& vec, std::size_t shift_by, const mxx::comm& comm, T fill = T()) {
-    //size_t prefix = part.excl_prefix_size();
+std::vector<T> shift_buckets_ds(const DistSeqs& ss, const std::vector<T>& vec, std::size_t shift_by, const mxx::comm& comm, T fill = T()) {
 
     // for each bucket: shift
     std::vector<T> result(vec.size(), fill);
 
-    dvector_const_wrapper<T, blk_dist> src(vec, comm);
-    dvector_wrapper<T, blk_dist> dst(result, comm);
+    size_t local_size = vec.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
+    mxx::partition::block_decomposition_buffered<size_t> dist(global_size, comm.size(), comm.rank());
 
     // for each bucket which is split across processors, use global range communication
     mxx::requests req;
-    mxx::sync_cout(comm) << "split_seps = " << ss.split_seqs() << std::endl;
     for (auto s : ss.split_seqs()) {
         // icopy range based on bucket range and distance
         size_t ssize = s.second - s.first;
         if (shift_by < ssize) {
-            req.insert(icopy_global_range(src, s.first + shift_by, s.second, dst, s.first, s.second - shift_by));
+            req.insert(icopy_global_range(vec, dist, s.first + shift_by, s.second, result, s.first, s.second - shift_by, comm));
         }
     }
 
     // for all purely internal buckets: shift using simple std::copy
-    if (ss.seq_seps.size() > 0) {
-        size_t sb = ss.seq_seps[0] - ss.d().eprefix();
+    if (ss.has_inner_seqs() > 0) {
+        size_t sb = ss.prefix_sizes[0] - dist.excl_prefix_size();
         auto iit = vec.begin() + sb;
         auto oit = result.begin() + sb;
-        for (size_t i = 0; i < ss.seq_seps.size()-1; ++i) {
-            size_t ssize = ss.seq_seps[i+1] - ss.seq_seps[i];
-
+        for (size_t i = 0; i < ss.prefix_sizes.size()-1; ++i) {
+            size_t ssize = ss.prefix_sizes[i+1] - ss.prefix_sizes[i];
             if (shift_by < ssize) {
                 std::copy(iit+shift_by, iit+ssize, oit);
             }
             iit += ssize;
             oit += ssize;
         }
-        if (comm.rank() == comm.size()-1) {
-            if (shift_by < std::distance(iit, vec.end())) {
-                std::copy(iit+shift_by, vec.end(), oit);
+        if (!ss.is_right_split()) {
+            size_t ssize = ss.right_sep - ss.prefix_sizes.back();
+            if (shift_by < ssize) {
+                std::copy(iit+shift_by, iit+ssize, oit);
             }
         }
     }

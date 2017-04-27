@@ -39,9 +39,66 @@ unsigned int get_optimal_k(const alphabet<CharType>& a, size_t local_size, const
     return k;
 }
 
+/* TODO:
+ * - [ ] refactor kmer generation for less code duplication
+ * - [ ] kmer helper class?
+ */
+
+/* sequential kmer generation on purely local sequence (no communication) */
+template <typename word_type, typename InputIterator>
+std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha) {
+    assert(k > 0);
+    size_t size = std::distance(begin, end);
+    unsigned int l = alpha.bits_per_char();
+    // get k-mer mask
+    word_type kmer_mask = ((static_cast<word_type>(1) << (l*k)) - static_cast<word_type>(1));
+    if (kmer_mask == 0)
+        kmer_mask = ~static_cast<word_type>(0);
+
+    InputIterator str_it = begin;
+
+    // fill first k-1 mer
+    word_type kmer = 0;
+    for (size_t i = 0; i < std::min<size_t>(k-1, size); ++i) {
+        kmer <<= l;
+        word_type s = (unsigned char)(*str_it);
+        kmer |= alpha.encode(s);
+        ++str_it;
+    }
+    if (size < k-1) {
+        kmer <<= l*(k-1 - size);
+    }
+
+    // init output
+    std::vector<word_type> kmers(size);
+    auto buk_it = kmers.begin();
+    // continue to create all k-mers
+    while (str_it != end) {
+        // get next kmer
+        kmer <<= l;
+        word_type s = (unsigned char)(*str_it);
+        kmer |= alpha.encode(s);
+        kmer &= kmer_mask;
+        // add to bucket number array
+        *buk_it = kmer;
+        // iterate
+        ++str_it;
+        ++buk_it;
+    }
+
+    // last k-1 kmers are filled with 0
+    for (size_t i = 0; i < std::min<size_t>(k-1, size); ++i) {
+        kmer <<= l;
+        kmer &= kmer_mask;
+        *buk_it = kmer;
+        ++buk_it;
+    }
+
+    return kmers;
+}
 
 template <typename word_type, typename InputIterator>
-std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm = mxx::comm()) {
+std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm) {
     size_t local_size = std::distance(begin, end);
     unsigned int l = alpha.bits_per_char();
     // get k-mer mask
@@ -113,8 +170,6 @@ std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, u
 /// kmer generation from a stringset (for GSA, GST, etc)
 template <typename word_type, typename StringSet, typename char_type>
 std::vector<word_type> kmer_gen_stringset(const StringSet& ss, unsigned int k, const alphabet<char_type>& alpha, const mxx::comm& comm = mxx::comm()) {
-    // TODO: how to iterate through strings (fill with 0, etc)?
-    // TODO: design appropriate API for stringset
     // Two cases: strings are split accross boundaries, or not
 
     // get k-mer mask
@@ -123,44 +178,67 @@ std::vector<word_type> kmer_gen_stringset(const StringSet& ss, unsigned int k, c
     if (kmer_mask == 0)
         kmer_mask = ~static_cast<word_type>(0);
 
-    size_t total_length = ss.total_lengths();
+    MXX_ASSERT(ss.sum_sizes > 0);
+    MXX_ASSERT(k <= ss.sum_sizes);
 
-    std::vector<word_type> kmers(total_length);
+    // allocate output vector of kmers
+    std::vector<word_type> kmers(ss.sum_sizes);
     auto buk_it = kmers.begin();
-    if (!ss.is_split()) {
-        // easy, no communication necessary, simply iterate over strings and generate kmers and 0-fill at end
-        for (auto s : ss) {
-            size_t slen = s.size();
+    word_type right_kmer;
 
-            // fill first kmer
-            auto str_it = s.begin();
-            word_type kmer = 0;
-            for (unsigned int i = 0; i < std::min<size_t>(slen, k-1); ++i) {
+    // iterate over all subsequences (strings)
+    for (size_t s = 0; s < ss.sizes.size(); ++s) {
+        size_t slen = ss.sizes[s];
+
+        // fill first kmer
+        auto str_it = ss.str_begins[s];
+        auto send = str_it + slen;
+        word_type kmer = 0;
+        for (unsigned int i = 0; i < std::min<size_t>(slen, k-1); ++i) {
+            kmer <<= l;
+            word_type s = (unsigned char)(*str_it);
+            kmer |= alpha.encode(s);
+            ++str_it;
+        }
+        // if the string ends before k-1, then fill with 0
+        if (slen < k-1) {
+            kmer <<= l*(k-1 - slen);
+        }
+
+        if (s == 0) {
+            right_kmer = mxx::left_shift(kmer, comm);
+        }
+
+        if (slen >= k-1) { // XXX: maybe not necessary
+            // continue to create all k-mers
+            while (str_it != send) {
+                // get next kmer
                 kmer <<= l;
                 word_type s = (unsigned char)(*str_it);
                 kmer |= alpha.encode(s);
+                kmer &= kmer_mask;
+                // add to bucket number array
+                *buk_it = kmer;
+                // iterate
                 ++str_it;
+                ++buk_it;
             }
-            if (slen < k-1) {
-                kmer <<= l*(k-1 - slen);
-            } else {
-                // continue to create all k-mers
-                while (str_it != s.end()) {
-                    // get next kmer
-                    kmer <<= l;
-                    word_type s = (unsigned char)(*str_it);
-                    kmer |= alpha.encode(s);
-                    kmer &= kmer_mask;
-                    // add to bucket number array
-                    *buk_it = kmer;
-                    // iterate
-                    ++str_it;
-                    ++buk_it;
-                }
-            }
+        }
 
+        // construct last (k-1) k-mers
+        if (s == ss.sizes.size()-1 && ss.last_split) {
+            // if last string last is split:
+            // use received kmer to fill last few
+            for (unsigned int i = 0; i < k-1; ++i) {
+                kmer <<= l;
+                kmer |= (right_kmer >> (l*(k-i-2)));
+                kmer &= kmer_mask;
+                *buk_it = kmer;
+                ++buk_it;
+            }
+        } else {
+            // otherwise: fill with zero:
             for (unsigned int i = 0; i < std::min<size_t>(slen, k-1); ++i) {
-                // output last kmers
                 kmer <<= l;
                 kmer &= kmer_mask;
                 *buk_it = kmer;

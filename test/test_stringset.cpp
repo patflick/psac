@@ -32,9 +32,9 @@ void test_kmer() {
     std::string unique_chars = "abc";
     alphabet<char> alpha = alphabet<char>::from_sequence(unique_chars.begin(), unique_chars.end()); // TODO from vec of chars
     std::cout << "Alphabet: " << alpha << std::endl;
-    std::vector<uint16_t> kmers = kmer_gen_stringset<uint16_t>(ss, 3, alpha);
+    //std::vector<uint16_t> kmers = kmer_gen_stringset<uint16_t>(ss, 3, alpha);
 
-    std::cout << std::hex << kmers << std::endl;
+    //std::cout << std::hex << kmers << std::endl;
 }
 
 
@@ -147,18 +147,11 @@ std::string flatten_strings(const std::vector<std::string>& v, const char sep = 
     return result;
 }
 
-void test_dist_ss() {
-    mxx::comm c;
-    //std::string randseq = random_dstringset(20, c);
-
-    // generate strings of given sizes on master node, join into single string
-    // with '$' as seperator and distribute equally among processors
+std::string randseq_1(const mxx::comm& c) {
     std::vector<size_t> ssizes;
     if (c.rank() == 0) {
-        ssizes = {88, 57, 8, 20, 3, 4, 1, 1, 11};
+        ssizes = {88, 57, 8, 20, 3, 4, 1, 2, 3, 1, 1, 11};
     }
-    mxx::stable_distribute_inplace(ssizes, c);
-    //ssizes = mxx::distribute
     std::string randseq;
     if (c.rank() == 0) {
         std::vector<std::string> strs;
@@ -173,6 +166,38 @@ void test_dist_ss() {
         randseq = flatstr;
     }
     randseq = mxx::stable_distribute(randseq, c);
+    return randseq;
+}
+
+std::string randseq_2(const mxx::comm& c) {
+    std::vector<size_t> ssizes;
+    if (c.rank() == 0) {
+        ssizes = {88, 57, 8, 20, 3, 4, 1, 2, 3, 1, 1, 11};
+    }
+    mxx::stable_distribute_inplace(ssizes, c);
+    std::string randseq;
+    std::vector<std::string> strs;
+    for (size_t s : ssizes) {
+        strs.emplace_back(rand_dna(s));
+    }
+
+    std::cout << strs << std::endl;
+    std::string flatstr = flatten_strings(strs);
+    mxx::sync_cout(c) << "Flat str: \"" << flatstr << "\"" << std::endl;
+    // vec of string to strings seperated by $
+    randseq = flatstr;
+    //randseq = mxx::stable_distribute(randseq, c);
+    return randseq;
+}
+
+
+void test_dist_ss() {
+    mxx::comm c;
+    //std::string randseq = random_dstringset(20, c);
+    std::string randseq = randseq_1(c);
+
+    // generate strings of given sizes on master node, join into single string
+    // with '$' as seperator and distribute equally among processors
 
     // construct distribute stringset by parsing the string according to
     // '$' separating character
@@ -183,24 +208,143 @@ void test_dist_ss() {
     SDEBUG(ss.left_size);
     SDEBUG(ss.right_size);
 
+    // TODO; create vector from stringset (everything but the separating characters)
+    size_t num_b = std::accumulate(ss.sizes.begin(), ss.sizes.end(), 0);
+    //std::string vec;
+    std::vector<char> vec;
+    vec.resize(num_b);
+    auto oit = vec.begin();
+    for (size_t i = 0; i < ss.sizes.size(); ++i) {
+        oit = std::copy(ss.str_begins[i], ss.str_begins[i]+ss.sizes[i], oit);
+    }
+
     //mxx::sync_cout(c) << ss;
 
     // create the distributed sequences prefix_sizes format (with shadow els)
     dist_seqs ds = dist_seqs::from_dss(ss, c);
 
     // gather sizes and print
-    // TODO: gtest for checking of size array is same as the one defined above
-    std::vector<size_t> all_sizes = mxx::allgatherv(ds.sizes(), c);
+    std::vector<size_t> all_sizes = mxx::gatherv(ds.sizes(), 0, c);
     mxx::sync_cout(c) << ds << std::endl;
     if (c.rank() == 0) {
         std::cout << all_sizes << std::endl;
     }
 
-    // TODO: more test cases, test cases with lots of inbalance, etc
+    mxx::stable_distribute_inplace(vec, c);
 
-    // TODO: test if the redistribution works properly: use chars as bucket and see if it reproduces original strings
-    // TODO: test shifting next
-    // TODO: kmer generation for stringset
+    // try printing out original strings
+    mxx::sync_cout(c) << vec << std::endl;
+    // TODO: try to re-create strings via the dist_seqs object
+    // send string to owner of the sequence (where it starts)
+    // or rather: insert '$' at end of every string, and then just allgather?
+    std::vector<char> allstr = mxx::gatherv(vec, 0, c);
+    if (c.rank() == 0) {
+        std::vector<std::string> strings;
+        auto it = allstr.begin();
+        for (size_t i = 0; i < all_sizes.size(); ++i) {
+            strings.emplace_back(it, it + all_sizes[i]);
+            it += all_sizes[i];
+        }
+        std::cout << strings << std::endl;
+    }
+}
+
+template <typename T>
+std::vector<std::vector<T>> gather_dist_seq(const dist_seqs& ds, const std::vector<T>& vec, const mxx::comm& comm) {
+    // gather sizes of subsequences
+    std::vector<size_t> allsizes = mxx::gatherv(ds.sizes(), 0, comm);
+
+    // gather whole sequence to rank 0
+    std::vector<T> allvec = mxx::gatherv(vec, 0, comm);
+
+    // create the vectors per sequence
+    std::vector<std::vector<T>> result(allsizes.size());
+    auto it = allvec.begin();
+    for (size_t i = 0; i < allsizes.size(); ++i) {
+        result[i] = std::vector<T>(it, it + allsizes[i]);
+        it += allsizes[i];
+    }
+
+    return result;
+}
+
+void test_dist_kmer() {
+    mxx::comm c;
+
+    // create input
+    std::vector<std::string> strs;
+    std::string flatstrs;
+    if (c.rank() == 0) {
+        strs = {"cctgtggtataagagctttgggctttcgcagtcccgactagtctgaacttacccagactcccagtctgtagtgaataaggtgaaaaga", "tttggtttgcctcaaacatcccagacgccgcgcggacctctggaagacggtaagaca", "gtctgcgg", "aaactcataatgagggcgaa", "gca", "ggtc", "t", "gc", "cgc", "t", "a", "ggacaaggctt"};
+        //strs = {"accctgca", "aca", "t", "gct"};
+        flatstrs = flatten_strings(strs);
+    }
+    flatstrs = mxx::stable_distribute(flatstrs, c);
+    SDEBUG(flatstrs);
+
+    // create stringset, dist_seq
+    simple_dstringset ss(flatstrs.begin(), flatstrs.end(), c);
+    dist_seqs ds = dist_seqs::from_dss(ss, c);
+
+    unsigned int k = 4;
+    // create 4-mers
+    alphabet<char> a = alphabet<char>::from_string("actg");
+    std::vector<uint16_t> kmers = kmer_gen_stringset<uint16_t>(ss, k, a, c);
+
+    mxx::stable_distribute_inplace(kmers, c);
+
+    // gather everything to root and compare kmers for correctness
+    std::vector<uint16_t> all_kmers = mxx::gatherv(kmers, 0, c);
+    if (c.rank() == 0) {
+        // create kmers from original strings
+        auto chk_it = all_kmers.begin();
+        bool all_correct = true;
+        for (auto s : strs) {
+            std::vector<uint16_t> skmers = kmer_generation<uint16_t>(s.begin(), s.end(), k, a);
+            // check these kmers
+            for (uint16_t kmer : skmers) {
+                if (kmer != *chk_it) {
+                    all_correct = false;
+                    std::cout << "ERROR ERROR" << std::endl;
+                    std::cout << "in string " << s << ": " << kmer << " != " << *chk_it << std::endl;
+                }
+                ++chk_it;
+            }
+        }
+        if (all_correct) {
+            std::cout << "kmer gen: SUCCESS" << std::endl;
+        }
+    }
+
+    // next up: test shifting of kmers utilizing the dist_seqs representation
+    size_t shift_by = 3;
+    std::vector<uint16_t> b = shift_buckets_ds(ds, kmers, shift_by, c);
+    //
+    std::vector<std::vector<uint16_t>> kmer_vecs = gather_dist_seq(ds, kmers, c);
+    std::vector<std::vector<uint16_t>> shift_vecs = gather_dist_seq(ds, b, c);
+
+    // TODO: make proper GTEST
+    // EXPECT_EQ(kmer_vecs.size(), shift_vecs.size());
+    if (c.rank() == 0) {
+        std::cout << kmer_vecs << std::endl;
+        std::cout << shift_vecs << std::endl;
+        for (size_t i = 0; i < kmer_vecs.size(); ++i) {
+            // EXPECT_EQ(kmer_vecs[i].size(), shift_vecs[i].size());
+            if (kmer_vecs[i].size() != shift_vecs[i].size()) {
+                std::cout << "ERRROR!!!!!!!" << std::endl;
+            }
+            for (size_t j = shift_by; j < shift_vecs[i].size(); ++j) {
+                if (kmer_vecs[i][j] != shift_vecs[i][j-shift_by]) {
+                    std::cout << "shifting error" << std::endl;
+                }
+            }
+            for (size_t j = 0; j < std::min(shift_vecs[i].size(), shift_by); ++j) {
+                if (shift_vecs[i][shift_vecs[i].size()-j-1] != 0) {
+                    std::cout << "shifting 0 error" << std::endl;
+                }
+            }
+        }
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -209,7 +353,8 @@ int main(int argc, char *argv[]) {
 
     //test_shift();
     //test_global_copy();
-    test_dist_ss();
+    //test_dist_ss();
+    test_dist_kmer();
 
     return 0;
 }
