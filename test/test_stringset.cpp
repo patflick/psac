@@ -1,13 +1,11 @@
 
 #include <gtest/gtest.h>
+#include <mxx/comm.hpp>
+#include <mxx/distribution.hpp>
 
 #include <iostream>
 #include <vector>
 #include <string>
-
-#include <mxx/env.hpp>
-#include <mxx/comm.hpp>
-#include <mxx/distribution.hpp>
 
 #include <stringset.hpp>
 #include <shifting.hpp>
