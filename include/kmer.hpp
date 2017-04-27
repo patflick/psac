@@ -39,6 +39,28 @@ unsigned int get_optimal_k(const alphabet<CharType>& a, size_t local_size, const
     return k;
 }
 
+template <typename word_type, typename char_type>
+std::string decode_kmer(const word_type& kmer, unsigned int k, const alphabet<char_type>& alpha, char_type nullchar = '0') {
+    std::string result;
+    result.resize(k);
+    unsigned int l = alpha.bits_per_char();
+    for (unsigned int i = 0; i < k; ++i) {
+        result[k-i-1] = alpha.decode((kmer >> (i*l)) & ((1 << l) -1));
+        if (result[k-i-1] == '\0')
+            result[k-i-1] = nullchar;
+    }
+    return result;
+}
+
+template <typename word_type, typename char_type>
+std::vector<std::string> decode_kmers(const std::vector<word_type>& kmers, unsigned int k, const alphabet<char_type>& alpha, char_type nullchar = '0') {
+    std::vector<std::string> results(kmers.size());
+    for (size_t i = 0; i < kmers.size(); ++i) {
+        results[i] = decode_kmer(kmers[i], k, alpha, nullchar);
+    }
+    return results;
+}
+
 /* TODO:
  * - [ ] refactor kmer generation for less code duplication
  * - [ ] kmer helper class?
@@ -201,6 +223,7 @@ std::vector<word_type> kmer_gen_stringset(const StringSet& ss, unsigned int k, c
             ++str_it;
         }
         // if the string ends before k-1, then fill with 0
+        // unless its the last one and its split
         if (slen < k-1) {
             kmer <<= l*(k-1 - slen);
         }
@@ -229,9 +252,15 @@ std::vector<word_type> kmer_gen_stringset(const StringSet& ss, unsigned int k, c
         if (s == ss.sizes.size()-1 && ss.last_split) {
             // if last string last is split:
             // use received kmer to fill last few
-            for (unsigned int i = 0; i < k-1; ++i) {
+            size_t start_shift = 1; // how many chars we take for the first kmer
+            if (slen < k-1) {
+                start_shift = k-slen;
+            }
+            for (unsigned int i = start_shift; i <= k-1; ++i) {
                 kmer <<= l;
-                kmer |= (right_kmer >> (l*(k-i-2)));
+                // shift so that we have `i` chars left in the right_kmer
+                // assuming the right k-mer is a k-1 mer
+                kmer |= (right_kmer >> (l*(k-1 - i)));
                 kmer &= kmer_mask;
                 *buk_it = kmer;
                 ++buk_it;

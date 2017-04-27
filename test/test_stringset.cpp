@@ -1,14 +1,17 @@
 
+#include <gtest/gtest.h>
+
 #include <iostream>
 #include <vector>
 #include <string>
 
-#include <stringset.hpp>
-#include <shifting.hpp>
-#include <kmer.hpp>
 #include <mxx/env.hpp>
 #include <mxx/comm.hpp>
 #include <mxx/distribution.hpp>
+
+#include <stringset.hpp>
+#include <shifting.hpp>
+#include <kmer.hpp>
 
 #include <cxx-prettyprint/prettyprint.hpp>
 
@@ -268,7 +271,7 @@ std::vector<std::vector<T>> gather_dist_seq(const dist_seqs& ds, const std::vect
     return result;
 }
 
-void test_dist_kmer() {
+TEST(PsacDistStringSet, DSKmerGen) {
     mxx::comm c;
 
     // create input
@@ -280,7 +283,6 @@ void test_dist_kmer() {
         flatstrs = flatten_strings(strs);
     }
     flatstrs = mxx::stable_distribute(flatstrs, c);
-    SDEBUG(flatstrs);
 
     // create stringset, dist_seq
     simple_dstringset ss(flatstrs.begin(), flatstrs.end(), c);
@@ -293,28 +295,16 @@ void test_dist_kmer() {
 
     mxx::stable_distribute_inplace(kmers, c);
 
-    // gather everything to root and compare kmers for correctness
-    std::vector<uint16_t> all_kmers = mxx::gatherv(kmers, 0, c);
-    if (c.rank() == 0) {
-        // create kmers from original strings
-        auto chk_it = all_kmers.begin();
-        bool all_correct = true;
-        for (auto s : strs) {
-            std::vector<uint16_t> skmers = kmer_generation<uint16_t>(s.begin(), s.end(), k, a);
-            // check these kmers
-            for (uint16_t kmer : skmers) {
-                if (kmer != *chk_it) {
-                    all_correct = false;
-                    std::cout << "ERROR ERROR" << std::endl;
-                    std::cout << "in string " << s << ": " << kmer << " != " << *chk_it << std::endl;
-                }
-                ++chk_it;
-            }
-        }
-        if (all_correct) {
-            std::cout << "kmer gen: SUCCESS" << std::endl;
-        }
+    // construct kmers per string and also gather to root
+    std::vector<uint16_t> skmers;
+    for (auto s : strs) {
+        std::vector<uint16_t> sk = kmer_generation<uint16_t>(s.begin(), s.end(), k, a);
+        skmers.insert(skmers.end(), sk.begin(), sk.end());
     }
+
+    // distribute skmers similar to kmers and then they should be equal
+    mxx::stable_distribute_inplace(skmers, c);
+    EXPECT_EQ(skmers, kmers);
 
     // next up: test shifting of kmers utilizing the dist_seqs representation
     size_t shift_by = 3;
@@ -323,38 +313,17 @@ void test_dist_kmer() {
     std::vector<std::vector<uint16_t>> kmer_vecs = gather_dist_seq(ds, kmers, c);
     std::vector<std::vector<uint16_t>> shift_vecs = gather_dist_seq(ds, b, c);
 
-    // TODO: make proper GTEST
-    // EXPECT_EQ(kmer_vecs.size(), shift_vecs.size());
+    ASSERT_EQ(kmer_vecs.size(), shift_vecs.size());
     if (c.rank() == 0) {
-        std::cout << kmer_vecs << std::endl;
-        std::cout << shift_vecs << std::endl;
         for (size_t i = 0; i < kmer_vecs.size(); ++i) {
-            // EXPECT_EQ(kmer_vecs[i].size(), shift_vecs[i].size());
-            if (kmer_vecs[i].size() != shift_vecs[i].size()) {
-                std::cout << "ERRROR!!!!!!!" << std::endl;
-            }
+            ASSERT_EQ(kmer_vecs[i].size(), shift_vecs[i].size());
             for (size_t j = shift_by; j < shift_vecs[i].size(); ++j) {
-                if (kmer_vecs[i][j] != shift_vecs[i][j-shift_by]) {
-                    std::cout << "shifting error" << std::endl;
-                }
+                EXPECT_EQ(kmer_vecs[i][j], shift_vecs[i][j-shift_by]);
             }
             for (size_t j = 0; j < std::min(shift_vecs[i].size(), shift_by); ++j) {
-                if (shift_vecs[i][shift_vecs[i].size()-j-1] != 0) {
-                    std::cout << "shifting 0 error" << std::endl;
-                }
+                EXPECT_EQ(shift_vecs[i][shift_vecs[i].size()-j-1], 0);
             }
         }
     }
 }
 
-int main(int argc, char *argv[]) {
-
-    mxx::env e(argc, argv);
-
-    //test_shift();
-    //test_global_copy();
-    //test_dist_ss();
-    test_dist_kmer();
-
-    return 0;
-}

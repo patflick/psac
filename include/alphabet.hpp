@@ -96,6 +96,7 @@ private:
 
     /// maps each unsigned char to a new integer using at most log(sigma+1) bits
     std::vector<uint16_t> mapping_table;
+    std::vector<char_type> inverse_mapping;
 
     unsigned int m_sigma;
     unsigned int m_bits_per_char;
@@ -119,6 +120,13 @@ private:
         m_bits_per_char = ceillog2(m_sigma+1);
     }
 
+    inline void init_inverse_mapping() {
+        inverse_mapping.push_back('\0');
+        for_each_char([&](uchar_type c) {
+            inverse_mapping.push_back(c);
+        });
+    }
+
     template <typename count_type>
     alphabet(const std::vector<count_type>& hist) {
         assert(hist.size() == max_uchar+1);
@@ -129,6 +137,7 @@ private:
         }
         init_mapping_table();
         init_sizes();
+        init_inverse_mapping();
     }
 
 public:
@@ -182,12 +191,17 @@ public:
         return mapping_table[index];
     }
 
+
     inline std::vector<char_type> unique_chars() const {
         std::vector<char_type> result;
         for_each_char([&](uchar_type c) {
             result.push_back(c);
         });
         return result;
+    }
+
+    inline char_type decode(uint16_t c) const {
+        return inverse_mapping[c];
     }
 };
 
