@@ -13,63 +13,8 @@
 
 #include <cxx-prettyprint/prettyprint.hpp>
 
-void test_kmer() {
-    std::vector<std::string> vec = {"abc", "cba", "bbbb", "a"};
-    // expected coding: a: 01, b: 10, c: 11
-    // "abc" -> 00011011 -> 1b
-    //          00101100 -> 2c
-    //          00110000 -> 30
-    // "cba" -> 00111001 -> 39
-    //          00100100 -> 24
-    //          00010000 -> 10
-    // "bbbb"-> 00101010 -> 2a 2a 28 20
-    // "a"   -> 00010000 -> 10
-    // => [1b, 2c, 30, 39, 24, 10, 2a, 2a, 28, 20, 10] (hex)
-    std::vector<uint16_t> ex_kmers = {0x1b, 0x2c, 0x30, 0x39, 0x24,0x10,
-                                      0x2a, 0x2a, 0x28, 0x20, 0x10};
-    vstringset ss(vec);
 
-
-    std::string unique_chars = "abc";
-    alphabet<char> alpha = alphabet<char>::from_sequence(unique_chars.begin(), unique_chars.end()); // TODO from vec of chars
-    std::cout << "Alphabet: " << alpha << std::endl;
-    //std::vector<uint16_t> kmers = kmer_gen_stringset<uint16_t>(ss, 3, alpha);
-
-    //std::cout << std::hex << kmers << std::endl;
-}
-
-
-void test_shift() {
-    // generate input
-    mxx::comm c;
-    std::vector<int> x;
-    int n = 23;
-    if (c.rank() == 0) {
-        x.resize(n);
-        for (size_t i = 0; i < x.size(); ++i) {
-            x[i] = i;
-        }
-    }
-    // distribute equally
-    mxx::stable_distribute_inplace(x, c);
-
-    for (int i = 0; i < n; ++i) {
-        std::vector<int> r = left_shift_dvec(x, c, i);
-
-        std::vector<int> g = mxx::gatherv(r, 0, c);
-        // check g
-        if (c.rank() == 0) {
-            std::cout << "shift " << i << ": " << g << std::endl;
-            for (unsigned int j = 0; j < g.size(); ++j) {
-                if (g[j] != (int)j + i && !(i+(int)j >= n && g[j] == 0))  {
-                    std::cout << "ERROR ERROR" << std::endl;
-                }
-            }
-        }
-    }
-
-}
-
+// TODO: as GTEST
 void test_global_copy() {
     // generate input
     mxx::comm c;
@@ -148,6 +93,25 @@ std::string flatten_strings(const std::vector<std::string>& v, const char sep = 
     return result;
 }
 
+template <typename T>
+std::vector<std::vector<T>> gather_dist_seq(const dist_seqs& ds, const std::vector<T>& vec, const mxx::comm& comm) {
+    // gather sizes of subsequences
+    std::vector<size_t> allsizes = mxx::gatherv(ds.sizes(), 0, comm);
+
+    // gather whole sequence to rank 0
+    std::vector<T> allvec = mxx::gatherv(vec, 0, comm);
+
+    // create the vectors per sequence
+    std::vector<std::vector<T>> result(allsizes.size());
+    auto it = allvec.begin();
+    for (size_t i = 0; i < allsizes.size(); ++i) {
+        result[i] = std::vector<T>(it, it + allsizes[i]);
+        it += allsizes[i];
+    }
+
+    return result;
+}
+
 std::string randseq_1(const mxx::comm& c) {
     std::vector<size_t> ssizes;
     if (c.rank() == 0) {
@@ -191,6 +155,49 @@ std::string randseq_2(const mxx::comm& c) {
     return randseq;
 }
 
+TEST(PsacDistStringSet, TestSimpleKmers) {
+    mxx::comm comm;
+    // max with 5 processes:
+    for (int comm_size = 1; comm_size <= 5; ++comm_size) {
+        comm.with_subset(comm.rank() < comm_size, [&](const mxx::comm& c){
+            std::vector<std::string> strs = {"abc", "cba", "bbbb", "a", "c", "abab", "cb"};
+            std::string flatstrs;
+            if (c.rank() == 0) {
+                //strs = {"accctgca", "aca", "t", "gct"};
+                flatstrs = flatten_strings(strs);
+            }
+            flatstrs = mxx::stable_distribute(flatstrs, c);
+
+            // create stringset, dist_seq
+            simple_dstringset ss(flatstrs.begin(), flatstrs.end(), c);
+
+            // expected coding: a: 01, b: 10, c: 11
+            // "abc" -> 00011011 -> 1b
+            //          00101100 -> 2c
+            //          00110000 -> 30
+            // "cba" -> 00111001 -> 39
+            //          00100100 -> 24
+            //          00010000 -> 10
+            // "bbbb"-> 10101010 -> 2a 2a 28 20
+            // "a"   -> 00010000 -> 10
+            // "c"   -> 00110000 -> 30
+            // "abab"-> 01100110 -> 19 26 18 20
+            // "cb"  -> 00111000 -> 38 20
+            // => [1b, 2c, 30, 39, 24, 10, 2a, 2a, 28, 20, 19, 26, 18, 20, 10, 30, 20] (hex)
+            std::vector<uint16_t> ex_kmers = {0x1b, 0x2c, 0x30, 0x39, 0x24,0x10,
+                                              0x2a, 0x2a, 0x28, 0x20, 0x10, 0x30,
+                                              0x19, 0x26, 0x18, 0x20, 0x38, 0x20};
+            alphabet<char> alpha = alphabet<char>::from_string("abc", c);
+            std::vector<uint16_t> kmers = kmer_gen_stringset<uint16_t>(ss, 3, alpha, c);
+
+            std::vector<uint16_t> all_kmers = mxx::gatherv(kmers, 0, c);
+            if (c.rank() == 0) {
+                EXPECT_EQ(ex_kmers, all_kmers) << " with comm size: " << comm_size;
+            }
+        });
+        comm.barrier();
+    }
+}
 
 void test_dist_ss() {
     mxx::comm c;
@@ -250,24 +257,6 @@ void test_dist_ss() {
     }
 }
 
-template <typename T>
-std::vector<std::vector<T>> gather_dist_seq(const dist_seqs& ds, const std::vector<T>& vec, const mxx::comm& comm) {
-    // gather sizes of subsequences
-    std::vector<size_t> allsizes = mxx::gatherv(ds.sizes(), 0, comm);
-
-    // gather whole sequence to rank 0
-    std::vector<T> allvec = mxx::gatherv(vec, 0, comm);
-
-    // create the vectors per sequence
-    std::vector<std::vector<T>> result(allsizes.size());
-    auto it = allvec.begin();
-    for (size_t i = 0; i < allsizes.size(); ++i) {
-        result[i] = std::vector<T>(it, it + allsizes[i]);
-        it += allsizes[i];
-    }
-
-    return result;
-}
 
 TEST(PsacDistStringSet, DSKmerGen) {
     mxx::comm c;

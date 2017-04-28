@@ -25,6 +25,9 @@
 #include "kmer.hpp"
 #include "par_rmq.hpp"
 #include "shifting.hpp"
+#include "stringset.hpp"
+#include "bulk_permute.hpp"
+#include "idxsort.hpp"
 
 #include <mxx/datatypes.hpp>
 #include <mxx/shift.hpp>
@@ -100,13 +103,6 @@ class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 }
 
 
-// class representing distributed buckets/subranges
-// TODO TODO TODO TODO TODO TODO TODO
-class dbuckets {
-    dbuckets(const mxx::comm& comm) {
-    }
-};
-
 
 // distributed suffix array
 template <typename InputIterator, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
@@ -171,9 +167,6 @@ private:
 
 public:
 
-// TODO: first we need yet another tuple based construction algo, similar to
-// std::array based but fixed to 2 (for easier LCP etc), and then extend this to
-// multiple sequences
 template <typename StringSet>
 void construct_ss(const StringSet& ss) {
     SAC_TIMER_START();
@@ -182,8 +175,11 @@ void construct_ss(const StringSet& ss) {
      ***********************/
 
     // detect alphabet and get encoding
+    // TODO: from ss not from input_begin, input_end!
     alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
+
     unsigned int bits_per_char = alpha.bits_per_char();
+    // TODO: replace local_size with the local sum_sizes
     unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
@@ -193,17 +189,47 @@ void construct_ss(const StringSet& ss) {
 
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
+    dist_seqs ds = dist_seqs::from_dss(ss, comm);
     local_B = kmer_generation<index_t>(ss, k, alpha, comm);
+    mxx::stable_distribute_inplace(local_B, comm);
     SAC_TIMER_END_SECTION("kmer generation");
 
     size_t shift_by;
+    // TODO stop at min(n, max_seq_len)
     for (shift_by = k; shift_by < n; shift_by <<= 1) {
         // 1) doubling by shifting into tuples (2BSA kind of structure)
-        std::vector<index_t> B2 = shift_buckets_ss(ss);
+        std::vector<index_t> B2 = shift_buckets_ss(ss, local_B, shift_by, comm);
+
         // 2) sort by (B1, B2)
-        // 2) LCP
-        // 3) rebucket (B1, B2) -> B1
-        // 4) reverse order to SA order
+        local_SA = idxsort_vectors<index_t, index_t, true>(local_B, B2, comm);
+
+        // 3) LCP (TODO later)
+
+        // 4) rebucket (B1, B2) -> B1
+        size_t unfinished_buckets, unfinished_elements;
+        std::tie(unfinished_buckets, unfinished_elements) = rebucket_gsa(B2, true);
+        if (comm.rank() == 0) {
+            INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << ", unfinished elements = " << unfinished_elements);
+        }
+
+        // 5) reverse order to SA order
+        if ((shift_by << 1) >= n || unfinished_buckets == 0) {
+            // if last iteration, use copy of local_SA for reorder and keep
+            // original SA
+            std::vector<index_t> cpy_SA(local_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
+            //SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
+        } else {
+            bulk_permute_inplace(local_B, local_SA, part, comm);
+            //SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
+        }
+        if (unfinished_buckets == 0)
+            break;
+    }
+    for (std::size_t i = 0; i < local_B.size(); ++i) {
+        // the buffer indeces are `1` based indeces, but the ISA should be
+        // `0` based indeces
+        local_B[i] -= 1;
     }
 }
 
@@ -255,7 +281,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
          *  ISA->SA  *
          *************/
         // by using sample sort on tuples (B1,B2)
-        isa_2b_to_sa(local_B2);
+        local_SA = idxsort_vectors<index_t, index_t>(local_B, local_B2, comm);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "ISA-to-SA");
 
         /****************
@@ -290,7 +316,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
             // SA and ISA order)
             std::vector<index_t> cpy_SA(local_SA);
             local_B_SA = local_B; // copy
-            reorder_sa_to_isa(cpy_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
             SAC_TIMER_END_SECTION("sac-iteration");
             break;
@@ -298,10 +324,10 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
             // if last iteration, use copy of local_SA for reorder and keep
             // original SA
             std::vector<index_t> cpy_SA(local_SA);
-            reorder_sa_to_isa(cpy_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         } else {
-            reorder_sa_to_isa();
+            bulk_permute_inplace(local_B, local_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
 
@@ -447,17 +473,17 @@ void construct_arr(bool fast_resolval = true) {
             // SA and ISA order)
             std::vector<index_t> cpy_SA(local_SA);
             local_B_SA = local_B; // copy
-            reorder_sa_to_isa(cpy_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
             break;
         } else if ((shift_by * L) >= n || unfinished_buckets == 0) {
             // if last iteration, use copy of local_SA for reorder and keep
             // original SA
             std::vector<index_t> cpy_SA(local_SA);
-            reorder_sa_to_isa(cpy_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         } else {
-            reorder_sa_to_isa();
+            bulk_permute_inplace(local_B, local_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
 
@@ -524,7 +550,7 @@ void construct_fast() {
 
     std::vector<index_t> cpy_SA(local_SA);
     std::vector<index_t> local_B_SA(local_B); // copy
-    reorder_sa_to_isa(cpy_SA);
+    bulk_permute_inplace(local_B, cpy_SA, part, comm);
     SAC_TIMER_END_SECTION("sa2isa");
 
     cpy_SA.clear();
@@ -552,31 +578,6 @@ private:
 /*********************************************************************
  *               Shifting buckets (i -> i + 2^l) => B2               *
  *********************************************************************/
-template <typename StringSet>
-std::vector<index_t> shift_buckets_ss_nosplit(const StringSet& ss, const std::vector<index_t>& vec, std::size_t dist) {
-    // if strings are not split accross processors: easy, no communication
-    // necessary, just 0 fill once outside string
-    std::vector<index_t> result(vec.size());
-
-    // for each string: memcopy segments backward in input and std::fill rest with 0
-    auto oit = result.begin();
-    auto iit = vec.begin();
-    for (auto& s : ss) {
-        size_t ssize = s.size();
-        if (dist < ssize) {
-            std::copy(iit+dist, iit+ssize, oit);
-            // not necessary because vector is initialized with `0`
-            // std::fill(oit+(ssize-dist), oit+ssize, static_cast<index_t>(0));
-        } else {
-            // not necessary because vector is initialized with `0`
-            // std::fill(oit, oit+ssize, static_cast<index_t>(0));
-        }
-        oit += ssize;
-        iit += ssize;
-    }
-    return result;
-}
-
 
 std::vector<index_t> shift_buckets(std::size_t dist) {
     // get # elements to the left
@@ -790,54 +791,6 @@ void shift_buckets(std::size_t k, std::vector<std::array<index_t, 1+L> >& tuples
 /*********************************************************************
  *                     ISA -> SA (sort buckets)                      *
  *********************************************************************/
-void isa_2b_to_sa(std::vector<index_t>& local_B2) {
-    assert(local_B2.size() == local_size);
-    SAC_TIMER_START();
-
-    // convert the struct of arrays (local_SA, local_B, etc) into
-    // array of structs (TwoBSA {.B1, .B2, .SA}) for sorting purposes
-
-    // initialize tuple array
-    std::vector<TwoBSA<index_t> > tuple_vec(local_size);
-
-    // get global index offset
-    std::size_t str_offset = part.excl_prefix_size();
-
-    // fill tuple vector
-    for (std::size_t i = 0; i < local_size; ++i) {
-        tuple_vec[i].B1 = local_B[i];
-        tuple_vec[i].B2 = local_B2[i];
-        assert(str_offset + i < std::numeric_limits<index_t>::max());
-        tuple_vec[i].SA = str_offset + i;
-    }
-
-    // release memory of input (to remain at the minimum 6x words memory usage)
-    local_B.clear(); local_B.shrink_to_fit();
-    local_B2.clear(); local_B2.shrink_to_fit();
-    local_SA.clear(); local_SA.shrink_to_fit();
-
-    SAC_TIMER_END_SECTION("isa2sa_tupleize");
-
-    // parallel, distributed sample-sorting of tuples (B1, B2, SA)
-    mxx::sort(tuple_vec.begin(), tuple_vec.end(), comm);
-
-    SAC_TIMER_END_SECTION("isa2sa_samplesort");
-
-    // reallocate output
-    local_B.resize(local_size);
-    local_B2.resize(local_size);
-    local_SA.resize(local_size);
-
-    // back-convert array of structs into struct of arrays
-
-    // read back into input vectors
-    for (std::size_t i = 0; i < local_size; ++i) {
-        local_B[i] = tuple_vec[i].B1;
-        local_B2[i] = tuple_vec[i].B2;
-        local_SA[i] = tuple_vec[i].SA;
-    }
-    SAC_TIMER_END_SECTION("isa2sa_untupleize");
-}
 
 
 template <std::size_t L>
@@ -855,7 +808,6 @@ void sort_array_tuples(std::vector<std::array<index_t, L+1> >& tuples) {
         }
         return false;
     }, comm);
-
 
     SAC_TIMER_END_SECTION("isa2sa_samplesort");
 }
@@ -983,7 +935,6 @@ std::pair<size_t,size_t> rebucket(std::vector<index_t>& local_B2, bool count_unf
      * assign local zero or one, depending on whether the bucket is the same
      * as the previous one
      */
-
     std::pair<index_t, index_t> last_element = std::make_pair(local_B.back(), local_B2.back());
     std::pair<index_t, index_t> prevRight = mxx::right_shift(last_element, comm);
     bool firstDiff = false;
@@ -1026,6 +977,102 @@ std::pair<size_t,size_t> rebucket(std::vector<index_t>& local_B2, bool count_unf
         result = mxx::allreduce(local_result, pair_sum<size_t,size_t>(), comm);
     }
 
+    /*
+     * Global prefix MAX:
+     *  - such that for every item we have it's bucket number, where the
+     *    bucket number is equal to the first index in the bucket
+     *    this way buckets who are finished, will never receive a new
+     *    number.
+     */
+    // 1.) find the max in the local sequence. since the max is the last index
+    //     of a bucket, this should be somewhere at the end -> start scanning
+    //     from the end
+    auto rev_it = local_B.rbegin();
+    size_t local_max = 0;
+    while (rev_it != local_B.rend() && (local_max = *rev_it) == 0)
+        ++rev_it;
+
+    // 2.) distributed scan with max() to get starting max for each sequence
+    size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
+    if (comm.rank() == 0)
+        pre_max = 0;
+
+    // 3.) linear scan and assign bucket numbers
+    for (size_t i = 0; i < local_B.size(); ++i) {
+        if (local_B[i] == 0)
+            local_B[i] = pre_max;
+        else
+            pre_max = local_B[i];
+        assert(local_B[i] <= i+prefix+1);
+        // first element of bucket has id of it's own global index:
+        assert(i == 0 || (local_B[i-1] ==  local_B[i] || local_B[i] == i+prefix+1));
+    }
+
+    return result;
+}
+
+// assumed sorted order (globally) by tuple (B1[i], B2[i])
+// this reassigns new, unique bucket numbers in {1,...,n} globally
+std::pair<size_t,size_t> rebucket_gsa(std::vector<index_t>& local_B2, bool count_unfinished) {
+    /*
+     * NOTE: buckets are indexed by the global index of the first element in
+     *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
+     *       reserved for out-of-bounds)
+     */
+    // assert inputs are of equal size
+    assert(local_B.size() == local_B2.size() && local_B.size() > 0);
+
+    // init result
+    std::pair<size_t,size_t> result;
+
+    // get my global starting index
+    size_t prefix = part.excl_prefix_size();
+
+    /*
+     * assign local zero or one, depending on whether the bucket is the same
+     * as the previous one
+     */
+    std::pair<index_t, index_t> last_element = std::make_pair(local_B.back(), local_B2.back());
+    std::pair<index_t, index_t> prevRight = mxx::right_shift(last_element, comm);
+    bool firstDiff = false;
+    if (comm.rank() == 0) {
+        firstDiff = true;
+    } else if (!(prevRight.first == local_B[0] && (prevRight.second == local_B2[0] && prevRight.second != 0))) {
+        firstDiff = true;
+    }
+
+    // set local_B1 to `(prefix+i)` if previous entry is different:
+    // i.e., mark start of buckets, otherwise: set to 0
+    bool nextDiff = firstDiff;
+    for (std::size_t i = 0; i+1 < local_B.size(); ++i) {
+        bool setOne = nextDiff;
+        nextDiff = !(local_B[i] == local_B[i+1] && local_B2[i] == local_B2[i+1] && local_B2[i] != 0);
+        local_B[i] = setOne ? prefix+i+1 : 0;
+    }
+
+    local_B.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
+
+    if (count_unfinished) {
+        // count the number of unfinished elements and buckets
+        index_t prev_right = mxx::right_shift(local_B.back(), comm);
+        index_t local_unfinished_buckets = 0;
+        index_t local_unfinished_els = 0;
+        if (comm.rank() != 0) {
+            local_unfinished_buckets = (prev_right > 0 && local_B[0] == 0) ? 1 : 0;
+            local_unfinished_els = local_unfinished_buckets;
+        }
+        for (size_t i = 1; i < local_B.size(); ++i) {
+            if(local_B[i-1] > 0 && local_B[i] == 0) {
+                ++local_unfinished_buckets;
+                ++local_unfinished_els;
+            }
+            if (local_B[i] == 0) {
+                ++local_unfinished_els;
+            }
+        }
+        std::pair<size_t,size_t> local_result(local_unfinished_buckets, local_unfinished_els);
+        result = mxx::allreduce(local_result, pair_sum<size_t,size_t>(), comm);
+    }
 
     /*
      * Global prefix MAX:
@@ -1238,74 +1285,6 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, const mxx::comm& com
         // first element of bucket has id of it's own global index:
         assert(i == 0 || (tuples[i-1].B1 ==  tuples[i].B1 || tuples[i].B1 == i+prefix+1));
     }
-}
-
-/*********************************************************************
- *                       SA->ISA (~bucketsort)                       *
- *********************************************************************/
-void reorder_sa_to_isa(std::vector<index_t>& SA) {
-    assert(SA.size() == local_B.size());
-
-    SAC_TIMER_START();
-    // 1.) local bucketing for each processor
-    //
-    // counting the number of elements for each processor
-    std::vector<size_t> send_counts(p, 0);
-    for (index_t sa : SA) {
-        int target_p = part.target_processor(sa);
-        assert(0 <= target_p && target_p < p);
-        ++send_counts[target_p];
-    }
-    // get exclusive prefix sum
-    std::vector<size_t> send_displs = mxx::local_exscan(send_counts);
-    std::vector<size_t> upper_bound = mxx::local_scan(send_counts);
-
-    // in-place bucketing
-    int cur_p = 0;
-    for (std::size_t i = 0; i < SA.size();) {
-        // skip full buckets
-        while (cur_p < p-1 && send_displs[cur_p] >= upper_bound[cur_p]) {
-            // skip over full buckets
-            i = send_displs[++cur_p];
-        }
-        // break if all buckets are done
-        if (cur_p >= p-1)
-            break;
-        int target_p = part.target_processor(SA[i]);
-        assert(target_p < p && target_p >= 0);
-        if (target_p == cur_p) {
-            // item correctly placed
-            ++i;
-        } else {
-            // swap to correct bucket
-            assert(target_p > cur_p);
-            std::swap(SA[i], SA[send_displs[target_p]]);
-            std::swap(local_B[i], local_B[send_displs[target_p]]);
-        }
-        send_displs[target_p]++;
-    }
-
-    SAC_TIMER_END_SECTION("sa2isa_bucketing");
-
-    // get displacements again (since they were modified above)
-    std::vector<index_t> recv_SA = mxx::all2allv(SA, send_counts, comm);
-    std::vector<index_t> recv_B = mxx::all2allv(local_B, send_counts, comm);
-    SAC_TIMER_END_SECTION("sa2isa_all2all");
-
-    // rearrange locally
-    for (std::size_t i = 0; i < SA.size(); ++i) {
-        index_t out_idx = recv_SA[i] - part.excl_prefix_size();
-        assert(0 <= out_idx && out_idx < recv_SA.size());
-        local_B[out_idx] = recv_B[i];
-    }
-
-    SAC_TIMER_END_SECTION("sa2isa_rearrange");
-}
-
-// SA->ISA defaulting with the local_SA array
-void reorder_sa_to_isa()
-{
-    reorder_sa_to_isa(local_SA);
 }
 
 

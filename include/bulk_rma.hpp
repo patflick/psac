@@ -151,7 +151,6 @@ bulk_rma_mpiwin(InputIter local_begin, InputIter local_end,
 #if MPI_VERSION > 2
 // TODO: separate further into Window and the global indexing stuff
 //       ie: seprate into: global_array and backend implementation 
-// FIXME enable only for MPI Version >= 3
 template <typename T>
 class shmem_window_mpi {
 // TODO: visablitiy
