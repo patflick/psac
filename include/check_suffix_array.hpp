@@ -98,17 +98,14 @@ bool check_lcp(const std::string& str, const std::vector<index_t>& SA, const std
     lcp_from_sa(str, SA, ISA, ref_LCP);
 
     // check if reference is equal to this LCP
-    if (LCP.size() != ref_LCP.size())
-    {
+    if (LCP.size() != ref_LCP.size()) {
         std::cerr << "[ERROR] LCP size is wrong: " << LCP.size() << "!=" << ref_LCP.size() << std::endl;
         return false;
     }
     // check that all LCP values are equal
     bool all_correct = true;
-    for (std::size_t i = 0; i < LCP.size(); ++i)
-    {
-        if (LCP[i] != ref_LCP[i])
-        {
+    for (std::size_t i = 0; i < LCP.size(); ++i) {
+        if (LCP[i] != ref_LCP[i]) {
             std::cerr << "[ERROR] LCP[" << i << "]=" << LCP[i] << " != " << ref_LCP[i] << "=ref_LCP[" << i << "]" << std::endl;
             all_correct = false;
         }

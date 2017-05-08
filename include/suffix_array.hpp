@@ -158,7 +158,6 @@ public:
     using alphabet_type = alphabet<char_type>;
     alphabet_type alpha;
 
-
 public:
     /// The local suffix array
     std::vector<index_t> local_SA;
@@ -198,9 +197,8 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
     // TODO: from ss not from input_begin, input_end!
     //alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
 
-    // TODO: replace local_size with the local sum_sizes
+    unsigned int k = get_optimal_k<index_t>(alpha, ss.sum_sizes, comm);
     //unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
-    unsigned int k = 2;
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
         INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
@@ -216,7 +214,7 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
     SAC_TIMER_END_SECTION("kmer generation");
 
     size_t shift_by;
-    // TODO stop at min(n, max_seq_len)
+    // TODO stop at min(n, max_seq_len) + A2
     for (shift_by = k; shift_by < n; shift_by <<= 1) {
         // 1) doubling by shifting into tuples (2BSA kind of structure)
         std::vector<index_t> B2 = shift_buckets_ds(ds, local_B, shift_by, comm);
