@@ -87,9 +87,9 @@ int main(int argc, char *argv[])
     std::string local_str = mxx::stable_distribute(input_str, MPI_COMM_WORLD);
     mxx::timer t;
     double start = t.elapsed();
-    suffix_array<std::string::iterator, index_t, false> sa(local_str.begin(), local_str.end(), MPI_COMM_WORLD);
+    suffix_array<char, index_t, false> sa(MPI_COMM_WORLD);
     // TODO: choose construction method!
-    sa.construct_arr<2>(true);
+    sa.construct_arr<2>(local_str.begin(), local_str.end(), true);
     //sa.construct_arr<2>();
     double end = t.elapsed() - start;
     if (rank == 0)

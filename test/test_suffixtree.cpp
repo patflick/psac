@@ -44,11 +44,11 @@ TEST(PsacST, SimpleSuffixTree) {
         std::string local_str = mxx::stable_distribute(str, c);
 
         // build SA and LCP
-        suffix_array<std::string::iterator, size_t, true> sa(local_str.begin(), local_str.end(), c);
-        sa.construct();
+        suffix_array<char, size_t, true> sa(c);
+        sa.construct(local_str.begin(), local_str.end());
 
         // build ST
-        std::vector<size_t> local_nodes = construct_suffix_tree(sa, c);
+        std::vector<size_t> local_nodes = construct_suffix_tree(sa, local_str.begin(), local_str.end(), c);
 
         // gather and print on master
         std::vector<size_t> nodes = mxx::gatherv(local_nodes, 0, c);
@@ -102,11 +102,11 @@ TEST(PsacST, RandDNATest) {
         std::string local_str = mxx::stable_distribute(str, c);
 
         // build SA and LCP
-        suffix_array<std::string::iterator, size_t, true> sa(local_str.begin(), local_str.end(), c);
-        sa.construct();
+        suffix_array<char, size_t, true> sa(c);
+        sa.construct(local_str.begin(), local_str.end());
 
         // build ST
-        std::vector<size_t> local_nodes = construct_suffix_tree(sa, c);
+        std::vector<size_t> local_nodes = construct_suffix_tree(sa, local_str.begin(), local_str.end(), c);
 
 
         // gather on master
@@ -142,12 +142,12 @@ TEST(PsacST, Repeats3Test) {
         std::string local_str = mxx::stable_distribute(str, c);
 
         // build SA and LCP
-        suffix_array<std::string::iterator, size_t, true> sa(local_str.begin(), local_str.end(), c);
-        sa.construct();
-        gl_check_correct(sa, sa.input_begin, sa.input_end, c);
+        suffix_array<char, size_t, true> sa(c);
+        sa.construct(local_str.begin(), local_str.end());
+        gl_check_correct(sa, local_str.begin(), local_str.end(), c);
 
         // build ST
-        std::vector<size_t> local_nodes = construct_suffix_tree(sa, c);
+        std::vector<size_t> local_nodes = construct_suffix_tree(sa, local_str.begin(), local_str.end(), c);
 
         // gather on master
         std::vector<size_t> nodes = mxx::gatherv(local_nodes, 0, c);

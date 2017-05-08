@@ -39,14 +39,14 @@ void benchmark_k(const std::string& local_str, int k, MPI_Comm comm)
     MPI_Comm_rank(comm, &rank);
     mxx::timer t;
 
-    typedef suffix_array<std::string::const_iterator, std::size_t, false> sa_t;
+    typedef suffix_array<char, std::size_t, false> sa_t;
 
     {
         // without LCP and fast
         std::string method_name = "reg-fast-nolcp";
         double start = t.elapsed();
-        sa_t sa(local_str.begin(), local_str.end(), comm);
-        sa.construct(true, k);
+        sa_t sa(comm);
+        sa.construct(local_str.begin(), local_str.end(), true, k);
         double time = t.elapsed() - start;
         if (rank == 0)
             std::cout << p << ";" << method_name << ";" << k << ";" << time << std::endl;
@@ -55,8 +55,8 @@ void benchmark_k(const std::string& local_str, int k, MPI_Comm comm)
         // without LCP and slow
         std::string method_name = "reg-nolcp";
         double start = t.elapsed();
-        sa_t sa(local_str.begin(), local_str.end(), comm);
-        sa.construct(false, k);
+        sa_t sa(comm);
+        sa.construct(local_str.begin(), local_str.end(), false, k);
         double time = t.elapsed() - start;
         if (rank == 0)
             std::cout << p << ";" << method_name << ";" << k << ";" << time << std::endl;

@@ -105,10 +105,13 @@ class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 
 
 // distributed suffix array
-template <typename InputIterator, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
+template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
 class suffix_array {
 private:
 public:
+    suffix_array(const mxx::comm& _comm) : comm(_comm.copy()) {
+    }
+    /*
     suffix_array(InputIterator begin, InputIterator end, const mxx::comm& _comm)
         : comm(_comm.copy()), p(comm.size()),
         input_begin(begin), input_end(end)
@@ -123,10 +126,13 @@ public:
         if (part.local_size() != local_size)
             throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
     }
+    */
     virtual ~suffix_array() {}
+
 private:
     /// The global size of the input string and suffix array
     std::size_t n;
+
     /// The local size of the input string and suffix array
     /// is either floor(n/p) or ceil(n/p) and based on a equal block
     /// distribution
@@ -143,16 +149,17 @@ private:
 
 public:
     /// Iterators over the local input string
-    InputIterator input_begin;
+    //InputIterator input_begin;
     /// End iterator for local input string
-    InputIterator input_end;
+    //InputIterator input_end;
 
-    using char_type = typename std::iterator_traits<InputIterator>::value_type;
+    //using char_type = typename std::iterator_traits<InputIterator>::value_type;
+    using char_type = char_t;
     using alphabet_type = alphabet<char_type>;
     alphabet_type alpha;
 
 
-public: // TODO: make private again and provide some iterator and query access
+public:
     /// The local suffix array
     std::vector<index_t> local_SA;
     /// The local inverse suffix array (TODO: rename?)
@@ -167,8 +174,21 @@ private:
 
 public:
 
-template <typename StringSet>
-void construct_ss(const StringSet& ss) {
+void init_size(size_t lsize) {
+    local_size = lsize;
+    n = mxx::allreduce(local_size, this->comm);
+    // get distribution
+    part = mxx::partition::block_decomposition_buffered<index_t>(n, comm.size(), comm.rank());
+
+    p = comm.size();
+
+    // assert a block decomposition
+    if (part.local_size() != local_size)
+        throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
+}
+
+//template <typename StringSet> TODO template later
+void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
     SAC_TIMER_START();
     /***********************
      *  Initial bucketing  *
@@ -176,29 +196,30 @@ void construct_ss(const StringSet& ss) {
 
     // detect alphabet and get encoding
     // TODO: from ss not from input_begin, input_end!
-    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
+    //alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
 
-    unsigned int bits_per_char = alpha.bits_per_char();
     // TODO: replace local_size with the local sum_sizes
-    unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
+    //unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
+    unsigned int k = 2;
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
     }
     SAC_TIMER_END_SECTION("alphabet detection");
 
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
     dist_seqs ds = dist_seqs::from_dss(ss, comm);
-    local_B = kmer_generation<index_t>(ss, k, alpha, comm);
+    local_B = kmer_gen_stringset<index_t>(ss, k, alpha, comm);
     mxx::stable_distribute_inplace(local_B, comm);
+    init_size(local_B.size());
     SAC_TIMER_END_SECTION("kmer generation");
 
     size_t shift_by;
     // TODO stop at min(n, max_seq_len)
     for (shift_by = k; shift_by < n; shift_by <<= 1) {
         // 1) doubling by shifting into tuples (2BSA kind of structure)
-        std::vector<index_t> B2 = shift_buckets_ss(ss, local_B, shift_by, comm);
+        std::vector<index_t> B2 = shift_buckets_ds(ds, local_B, shift_by, comm);
 
         // 2) sort by (B1, B2)
         local_SA = idxsort_vectors<index_t, index_t, true>(local_B, B2, comm);
@@ -233,27 +254,13 @@ void construct_ss(const StringSet& ss) {
     }
 }
 
-
-void construct(bool fast_resolval = true, unsigned int k = 0) {
+template <typename Iterator>
+void construct(Iterator begin, Iterator end, bool fast_resolval, const alphabet_type& alpha, unsigned int k) {
     SAC_TIMER_START();
-
-    /***********************
-     *  Initial bucketing  *
-     ***********************/
-
-    // detect alphabet and get encoding
-    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
-    unsigned int bits_per_char = alpha.bits_per_char();
-    k = get_optimal_k<index_t>(alpha, local_size, comm, k);
-    if(comm.rank() == 0) {
-        INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
-    }
-
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
-    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
-    SAC_TIMER_END_SECTION("initial-bucketing");
+    local_B = kmer_generation<index_t>(begin, end, k, alpha, comm);
+    SAC_TIMER_END_SECTION("kmer-gen");
 
     // init local_SA
     if (local_SA.size() != local_B.size()) {
@@ -290,7 +297,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
         // if this is the first iteration: create LCP, otherwise update
         if (_CONSTRUCT_LCP) {
             if (shift_by == k) {
-                initial_kmer_lcp(k, bits_per_char, local_B2);
+                initial_kmer_lcp(k, alpha.bits_per_char(), local_B2);
                 SAC_TIMER_END_LOOP_SECTION(shift_by, "init-lcp");
             } else {
                 resolve_next_lcp(shift_by, local_B2);
@@ -355,34 +362,54 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
     SAC_TIMER_END_SECTION("fix-isa");
 }
 
-// generalized to more than "doubling" (e.g. prefix-trippling with L=3)
-// NOTE: this implementation doesn't support building the LCP (SA + ISA only)
-template <std::size_t L = 2>
-void construct_arr(bool fast_resolval = true) {
+
+template <typename Iterator>
+void construct(Iterator begin, Iterator end, bool fast_resolval = true, unsigned int k = 0) {
+
     SAC_TIMER_START();
+    /* get sizes */
+    // the local size of the input
+    init_size(std::distance(begin, end));
 
     /***********************
      *  Initial bucketing  *
      ***********************/
 
     // detect alphabet and get encoding
-    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
-    unsigned int bits_per_char = alpha.bits_per_char();
+    alpha = alphabet_type::from_sequence(begin, end, comm);
+    k = get_optimal_k<index_t>(alpha, local_size, comm, k);
+    if(comm.rank() == 0) {
+        INFO("Alphabet: " << alpha.unique_chars());
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
+    }
+
+    construct(begin, end, fast_resolval, alpha, k);
+}
+
+// generalized to more than "doubling" (e.g. prefix-trippling with L=3)
+// NOTE: this implementation doesn't support building the LCP (SA + ISA only)
+template <std::size_t L, typename Iterator>
+void construct_arr(Iterator begin, Iterator end, bool fast_resolval = true) {
+    SAC_TIMER_START();
+    init_size(std::distance(begin, end));
+
+    /***********************
+     *  Initial bucketing  *
+     ***********************/
+
+    // detect alphabet and get encoding
+    alpha = alphabet_type::from_sequence(begin, end, comm);
     unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
     }
 
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
-    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
+    local_B = kmer_generation<index_t>(begin, end, k, alpha, comm);
     SAC_TIMER_END_SECTION("initial-bucketing");
 
-    // init local_SA
-    if (local_SA.size() != local_B.size()) {
-        local_SA.resize(local_B.size());
-    }
 
     std::vector<index_t> local_B_SA;
     std::size_t unfinished_buckets = 1<<k;
@@ -453,6 +480,9 @@ void construct_arr(bool fast_resolval = true) {
         /**************************************
          *  Reset local_SA array from tuples  *
          **************************************/
+
+        // init local_SA
+        local_SA.resize(local_size);
         for (std::size_t i = 0; i < local_size; ++i) {
             local_SA[i] = tuples[i][0];
         }
@@ -511,6 +541,7 @@ void construct_arr(bool fast_resolval = true) {
     SAC_TIMER_END_SECTION("fix-isa");
 }
 
+#if 0
 void construct_fast() {
     SAC_TIMER_START();
 
@@ -570,6 +601,7 @@ void construct_fast() {
     SAC_TIMER_END_SECTION("fix-isa");
 }
 
+#endif
 
 
 private:

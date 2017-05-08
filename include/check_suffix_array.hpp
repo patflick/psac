@@ -46,30 +46,24 @@ bool check_SA(const std::vector<index_t>& SA, const std::vector<index_t>& ISA, c
     std::size_t n = SA.size();
     bool success = true;
 
-    for (std::size_t i = 0; i < n; ++i)
-    {
+    for (std::size_t i = 0; i < n; ++i) {
         // check valid range
-        if (SA[i] >= n || SA[i] < 0)
-        {
+        if (SA[i] >= n || SA[i] < 0) {
             std::cerr << "[ERROR] SA[" << i << "] = " << SA[i] << " out of range 0 <= sa < " << n << std::endl;
             success = false;
         }
 
         // check SA conditions
-        if (i >= 1 && SA[i-1] < n-1)
-        {
-            if (!((unsigned char)str[SA[i-1]] <= (unsigned char)str[SA[i]]))
-            {
+        if (i >= 1 && SA[i-1] < n-1) {
+            if (!((unsigned char)str[SA[i-1]] <= (unsigned char)str[SA[i]])) {
                 std::cerr << "[ERROR] wrong SA order: str[SA[i]] >= str[SA[i-1]]" << std::endl;
                 success = false;
             }
 
             // if strings are equal, the ISA of these positions have to be
             // ordered
-            if ((unsigned char)str[SA[i-1]] == (unsigned char)str[SA[i]])
-            {
-                if (!(ISA[SA[i-1]+1] < ISA[SA[i]+1]))
-                {
+            if ((unsigned char)str[SA[i-1]] == (unsigned char)str[SA[i]]) {
+                if (!(ISA[SA[i-1]+1] < ISA[SA[i]+1])) {
                     std::cerr << "[ERROR] invalid SA order: ISA[SA[" << i-1 << "]+1] < ISA[SA[" << i << "]+1]" << std::endl;
                     std::cerr << "[ERROR] where SA[i-1]=" << SA[i-1] << ", SA[i]=" << SA[i] << ", ISA[SA[i-1]+1]=" << ISA[SA[i-1]+1] << ", ISA[SA[i]+1]=" << ISA[SA[i]+1] << std::endl;
                     success = false;
@@ -144,8 +138,8 @@ bool check_lcp(const std::string& str, const std::vector<index_t>& SA, const std
  *                      was constructed.
  * @param comm          The communictor.
  */
-template <typename InputIterator, typename index_t, bool test_lcp>
-void gl_check_correct(const suffix_array<InputIterator, index_t, test_lcp>& sa,
+template <typename InputIterator, typename char_t, typename index_t, bool test_lcp>
+void gl_check_correct(const suffix_array<char_t, index_t, test_lcp>& sa,
                       InputIterator str_begin, InputIterator str_end,
                       const mxx::comm& comm)
 {

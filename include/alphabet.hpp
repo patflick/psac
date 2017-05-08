@@ -155,14 +155,14 @@ public:
     }
 
     template <typename Iterator>
-    static alphabet from_sequence(Iterator begin, Iterator end, const mxx::comm& comm = mxx::comm()) {
+    static alphabet from_sequence(Iterator begin, Iterator end, const mxx::comm& comm) {
         static_assert(std::is_same<char_type, typename std::iterator_traits<Iterator>::value_type>::value, "Character type of alphabet must match the value type of input sequence");
         // get histogram
         std::vector<size_t> alphabet_hist = alphabet_histogram<size_t>(begin, end, comm);
         return alphabet::from_hist(alphabet_hist);
     }
 
-    static alphabet from_string(const std::string& str, const mxx::comm& comm = mxx::comm()) {
+    static alphabet from_string(const std::string& str, const mxx::comm& comm) {
         return alphabet::from_sequence(str.begin(), str.end(), comm);
     }
 

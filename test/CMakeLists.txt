@@ -17,6 +17,9 @@ target_link_libraries(test-ansv mxx-gtest-main)
 add_executable(test-ss test_stringset.cpp)
 target_link_libraries(test-ss mxx-gtest-main)
 
+add_executable(test-gsa test_gsa.cpp)
+target_link_libraries(test-gsa mxx-gtest-main rt)
+
 add_executable(test-suffixtree test_suffixtree.cpp)
 target_link_libraries(test-suffixtree mxx-gtest-main rt)
 
@@ -28,3 +31,4 @@ target_link_libraries(test-psac divsufsort64)
 # standalone tests
 #add_executable(test-ss test_stringset.cpp)
 #target_link_libraries(test-ss ${EXTRA_LIBS} rt)
+

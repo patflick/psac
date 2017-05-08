@@ -382,6 +382,40 @@ std::ostream& operator<<(std::ostream& os, const simple_dstringset& ss) {
 }
 
 
+std::string flatten_strings(const std::vector<std::string>& v, const char sep = '$') {
+    std::string result;
+    size_t outsize = 0;
+    for (auto s : v) {
+        outsize += s.size() + 1;
+    }
+    result.resize(outsize);
+    auto outit = result.begin();
+    for (auto s : v) {
+        outit = std::copy(s.begin(), s.end(), outit);
+        *outit = sep;
+        ++outit;
+    }
+    return result;
+}
+
+template <typename T>
+std::vector<std::vector<T>> gather_dist_seq(const dist_seqs& ds, const std::vector<T>& vec, const mxx::comm& comm) {
+    // gather sizes of subsequences
+    std::vector<size_t> allsizes = mxx::gatherv(ds.sizes(), 0, comm);
+
+    // gather whole sequence to rank 0
+    std::vector<T> allvec = mxx::gatherv(vec, 0, comm);
+
+    // create the vectors per sequence
+    std::vector<std::vector<T>> result(allsizes.size());
+    auto it = allvec.begin();
+    for (size_t i = 0; i < allsizes.size(); ++i) {
+        result[i] = std::vector<T>(it, it + allsizes[i]);
+        it += allsizes[i];
+    }
+
+    return result;
+}
 
 
 // example class for string sets
