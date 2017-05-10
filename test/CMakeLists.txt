@@ -32,3 +32,6 @@ target_link_libraries(test-psac divsufsort64)
 #add_executable(test-ss test_stringset.cpp)
 #target_link_libraries(test-ss ${EXTRA_LIBS} rt)
 
+# standalone tests
+add_executable(test-lcp test_glcp.cpp)
+target_link_libraries(test-lcp ${EXTRA_LIBS} rt)

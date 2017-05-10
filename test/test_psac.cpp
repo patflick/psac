@@ -230,7 +230,7 @@ TEST(PSAC, Lcp1) {
     // distribute string equally
     std::string local_str = mxx::stable_distribute(str, c);
 
-    // create suffix array w/o LCP
+    // create suffix array with LCP
     suffix_array<char, uint64_t, true> sa(c);
 
     // construct suffix  and LCP array

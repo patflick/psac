@@ -47,6 +47,25 @@ std::vector<size_t> repeat_inc_gsa(size_t slen, size_t reps) {
     return gsa;
 }
 
+std::vector<size_t> repeat_inc_glcp(size_t slen, size_t reps) {
+    size_t m = reps*(reps+1)/2;
+    size_t n = slen*m;
+    std::vector<size_t> lcp(n);
+    for (size_t i = 0; i < slen; ++i) {
+        auto oit = lcp.begin()+i*m;
+        *oit = 0;
+        ++oit;
+
+        for (size_t j = 1; j < reps; ++j) {
+            for (size_t k = 0; k < (reps+1-j); ++k) {
+                *oit = j*slen - i;
+                ++oit;
+            }
+        }
+    }
+    return lcp;
+}
+
 TEST(TestGSA, SimpleTiny) {
     mxx::comm comm;
     comm.with_subset(comm.rank() < 3, [](const mxx::comm& c) {
@@ -65,15 +84,19 @@ TEST(TestGSA, SimpleTiny) {
 
         // construct GSA
         alphabet<char> a = alphabet<char>::from_string("ab", c);
-        suffix_array<char, uint64_t> sa(c);
+        suffix_array<char, uint64_t, true> sa(c);
         sa.construct_ss(ss, a);
         SDEBUG(sa.local_SA);
+        SDEBUG(sa.local_LCP);
 
-        std::vector<uint64_t> sar = mxx::gatherv(sa.local_SA, 0, c);
+        std::vector<uint64_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
+        std::vector<uint64_t> glcp = mxx::gatherv(sa.local_LCP, 0, c);
         // check equal
         if (c.rank() == 0) {
             std::vector<uint64_t> ex_gsa = {7, 2, 5, 0, 3, 6, 1, 4};
-            EXPECT_EQ(ex_gsa, sar);
+            std::vector<uint64_t> ex_lcp = {0, 1, 2, 3, 0, 1, 2, 3};
+            EXPECT_EQ(ex_gsa, gsa);
+            EXPECT_EQ(ex_lcp, glcp);
         }
     });
 }
@@ -98,21 +121,30 @@ void test_repeats(const std::string& seq, size_t reps, const mxx::comm& comm) {
 
         // construct SA
         alphabet<char> a = alphabet<char>::from_string(seq, c);
-        suffix_array<char, uint64_t> sa(c);
+        suffix_array<char, uint64_t, true> sa(c);
         sa.construct_ss(ss, a);
 
         // check equal
-        std::vector<uint64_t> sar = mxx::gatherv(sa.local_SA, 0, c);
+        std::vector<uint64_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
+        std::vector<uint64_t> glcp = mxx::gatherv(sa.local_LCP, 0, c);
         if (c.rank() == 0) {
             std::vector<uint64_t> ex_gsa = repeat_inc_gsa(seq.size(), reps);
-            EXPECT_EQ(ex_gsa, sar);
+            EXPECT_EQ(ex_gsa, gsa);
+            std::vector<uint64_t> ex_lcp = repeat_inc_glcp(seq.size(), reps);
+            EXPECT_EQ(ex_lcp, glcp);
         }
     });
 }
 
+
 TEST(TestGSA, IncRepeatsAB3) {
     mxx::comm c;
     test_repeats("ab", 3, c);
+}
+
+TEST(TestGSA, IncRepeatsABC3) {
+    mxx::comm c;
+    test_repeats("abc", 3, c);
 }
 
 TEST(TestGSA, IncRepeatsA20) {
