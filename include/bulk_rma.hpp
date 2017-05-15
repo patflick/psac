@@ -13,7 +13,7 @@
 template <typename Q, typename Func>
 std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector<Q>& queries, Func f, const std::vector<size_t>& send_counts, const mxx::comm& comm) {
     // type of the query results
-    typedef typename std::result_of<Func(Q)>::type T;
+    using T = typename std::result_of<Func(Q)>::type;
     mxx::section_timer t(std::cerr, comm);
 
     // get receive counts (needed as send counts for returning queries)
@@ -24,7 +24,7 @@ std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector
     std::vector<Q> local_queries = mxx::all2allv(queries, send_counts, recv_counts, comm);
     t.end_section("bulk_query: all2all queries");
 
-    // TODO: show load inbalance in queries and recv_counts?
+    // show load inbalance in queries and recv_counts
     size_t recv_num = local_queries.size();
     std::pair<size_t, int> maxel = mxx::max_element(recv_num, comm);
     size_t total_queries = mxx::allreduce(queries.size(), comm);
@@ -32,7 +32,6 @@ std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector
     if (comm.rank() == 0) {
         std::cerr << "Avg queries: " << total_queries * 1.0 / comm.size() << ", max queries on proc " << maxel.second << ": " << maxel.first << std::endl;
         std::cerr << "Inbalance factor: " << maxel.first * comm.size() * 1.0 / total_queries << "x" << std::endl;
-        //std::cerr << "Queries received by each processor: " << recv_per_proc << std::endl;
     }
 
     // locally use query function for querying and save results
@@ -73,13 +72,13 @@ template <typename InputIter>
 std::vector<typename std::iterator_traits<InputIter>::value_type>
 bulk_rma(InputIter local_begin, InputIter local_end,
          const std::vector<size_t>& global_indexes, const mxx::comm& comm) {
-    typedef typename std::iterator_traits<InputIter>::value_type value_type;
+
+    using value_type = typename std::iterator_traits<InputIter>::value_type;
     // get local and global size
     size_t local_size = std::distance(local_begin, local_end);
     size_t global_size = mxx::allreduce(local_size, comm);
     // get the block decomposition class and check that input is actuall block
     // decomposed
-    // TODO: at one point, refactor this crap:
     mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
     MXX_ASSERT(part.local_size() == local_size);
 
