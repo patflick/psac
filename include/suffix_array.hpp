@@ -808,44 +808,6 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, const mxx::comm& com
  *          Faster construction for fewer remaining buckets          *
  *********************************************************************/
 
-std::vector<index_t> get_active(const std::vector<index_t>& B, const mxx::comm& comm, bool print_stats = false) {
-    // get next element from right
-    index_t right_B = mxx::left_shift(B[0], comm);
-    // get global offset
-    size_t prefix = part.excl_prefix_size();
-
-    size_t unresolved_els = 0;
-    size_t unfinished_b = 0;
-
-    std::vector<index_t> active_elements;
-    for (size_t j = 0; j < B.size(); ++j) {
-        // get global index for each local index
-        size_t i =  prefix + j;
-        // check if this is a unresolved bucket
-        // relying on the property that for resolved buckets:
-        //   B[i] == i+1 and B[i+1] == i+2
-        //   (where `i' is the global index)
-        if (B[j] != i+1) {
-            // save local active indexes
-            active_elements.push_back(j);
-            unresolved_els++;
-        } else if (B[j] == i+1 && ((j < local_size-1 && B[j+1] == i+1)
-                        || (j == local_size-1 && comm.rank() < p-1 && right_B == i+1))) {
-            active_elements.push_back(j);
-            unresolved_els++;
-            unfinished_b++;
-        }
-    }
-
-    if (print_stats) {
-        size_t gl_unresolved = mxx::allreduce(unresolved_els, comm);
-        size_t gl_unfinished = mxx::allreduce(unfinished_b, comm);
-        if (comm.rank() == 0) {
-            INFO("unresolved = " << gl_unresolved << ", unfinished = " << gl_unfinished);
-        }
-    }
-    return active_elements;
-}
 std::vector<index_t> get_active(const std::vector<index_t>& B, const std::vector<index_t>& active, const mxx::comm& comm, bool print_stats = false) {
     // get next element from right
     index_t right_B = mxx::left_shift(B[0], comm);
@@ -856,7 +818,10 @@ std::vector<index_t> get_active(const std::vector<index_t>& B, const std::vector
     size_t unfinished_b = 0;
 
     std::vector<index_t> active_elements;
-    for (index_t j : active) {
+    bool use_b = active.empty();
+    size_t loopn = use_b ? B.size() : active.size();
+    for (index_t g = 0; g < loopn; ++g) {
+        size_t j = use_b ? g : active[g];
         // get global index for each local index
         size_t i =  prefix + j;
         // check if this is a unresolved bucket
@@ -885,16 +850,18 @@ std::vector<index_t> get_active(const std::vector<index_t>& B, const std::vector
     return active_elements;
 }
 
+std::vector<index_t> get_active(const std::vector<index_t>& B, const mxx::comm& comm, bool print_stats = false) {
+    std::vector<index_t> empty;
+    return get_active(B, empty, comm, print_stats);
+}
+
 std::vector<index_t> sparse_get_b2(const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
     std::vector<size_t> rma_reqs;
     std::vector<index_t> b2(active.size());
     for (size_t ai = 0; ai < active.size(); ++ai) {
         size_t j = active[ai];
-        // add tuple
-        if (SA[j] + shift_by >= n) {
-            b2[ai] = 0;
-        } else {
-            rma_reqs.push_back(local_SA[j]+shift_by);
+        if (SA[j] + shift_by < n) {
+            rma_reqs.push_back(SA[j]+shift_by);
         }
     }
 
@@ -913,6 +880,72 @@ std::vector<index_t> sparse_get_b2(const std::vector<index_t>& active, const std
 
     return b2;
 }
+
+std::vector<index_t> local_get_sparse_b2(const dist_seqs& ds, const std::vector<index_t>& B, const std::vector<size_t>& local_queries, size_t shift_by) {
+    // argsort the local_queries
+    std::vector<size_t> argsort(local_queries.size());
+    std::iota(argsort.begin(), argsort.end(), 0);
+    std::sort(argsort.begin(), argsort.end(), [&local_queries](size_t i, size_t j) { return local_queries[i] < local_queries[j]; });
+
+    // scan local queries in argsorted order and save the B2 if the string size permits
+    std::vector<index_t> results(local_queries.size());
+    // each query is {SA[j] + shift_by}
+    size_t i = 0;
+    // linear in number of local strings + number of queries
+    ds.for_each_seq([&](size_t str_beg, size_t str_end) {
+        while (i < local_queries.size() && local_queries[argsort[i]] < str_end) {
+            size_t qi = argsort[i];
+            if (local_queries[qi] - shift_by >= str_beg) {
+                results[qi] = B[local_queries[qi]];
+            } else {
+                results[qi] = 0;
+            }
+            ++i;
+        }
+    });
+    return results;
+}
+
+std::vector<index_t> sparse_get_b2(const dist_seqs& ds, const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
+    // create RMA requests for the doubled positions
+    std::vector<size_t> rma_reqs;
+    std::vector<index_t> b2(active.size());
+    for (size_t ai = 0; ai < active.size(); ++ai) {
+        size_t j = active[ai];
+        if (SA[j] + shift_by < n) {
+            rma_reqs.push_back(SA[j]+shift_by);
+        }
+    }
+
+    mxx::partition::block_decomposition_buffered<size_t>& p = part;
+    std::vector<size_t> original_pos;
+    std::vector<size_t> bucketed_rma;
+    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&p](size_t gidx) { return p.target_processor(gidx); }, comm.size(), bucketed_rma, original_pos);
+
+
+    std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
+
+    // send all queries via all2all
+    std::vector<size_t> local_queries = mxx::all2allv(bucketed_rma, send_counts, recv_counts, comm);
+
+    std::vector<index_t> results = local_get_sparse_b2(ds, B, local_queries, shift_by);
+    results = mxx::all2allv(results, recv_counts, send_counts, comm);
+
+    std::vector<index_t> rma_b2 = permute(results, original_pos);
+
+    auto b2in = rma_b2.begin();
+    for (size_t i = 0; i < active.size(); ++i) {
+        size_t j = active[i];
+        if (SA[j] + shift_by < n) {
+            b2[i] = *b2in;
+            ++b2in;
+        }
+    }
+    return b2;
+}
+
+
+
 
 void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_ISA, int dist, bool GSA = false) {
     /*
@@ -963,7 +996,12 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
             // finished!
             break;
 
-        std::vector<index_t> b2 = sparse_get_b2(active_elements, local_ISA, local_SA, shift_by, comm);
+        std::vector<index_t> b2;
+        if (!GSA) {
+            b2 = sparse_get_b2(active_elements, local_ISA, local_SA, shift_by, comm);
+        } else {
+            //b2 = sparse_get_b2(ds, active_elements, local_ISA, local_SA, shift_by, comm);
+        }
 
         // building sequence of triplets for each unfinished bucket and sort
         // then rebucket, buckets which spread accross boundaries, sort via

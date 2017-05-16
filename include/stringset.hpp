@@ -173,11 +173,62 @@ public:
     }
 };
 
-// equal distributed (re-distributed) prefix_size, from there things become simple?
-// mxx::stable_distribute_inplace()...
-//
-//
-//
+
+// overlap type:    0: no overlaps, 1: left overlap, 2:right overlap,
+//                  3: separate overlaps on left and right
+//                  4: contiguous overlap with both sides
+int get_schedule(int overlap_type, const mxx::comm& comm) {
+    // if we have left/right/both/or double buckets, do global comm in two phases
+    int my_schedule = -1;
+
+    // gather all types to first processor
+    std::vector<int> overlaps = mxx::gather(overlap_type, 0, comm);
+    if (comm.rank() == 0) {
+
+        // create schedule using linear scan over the overlap types
+        std::vector<int> schedule(comm.size());
+        int phase = 0; // start in first phase
+        for (int i = 0; i < comm.size(); ++i) {
+            switch (overlaps[i]) {
+                case 0:
+                    schedule[i] = -1; // doesn't matter
+                    break;
+                case 1:
+                    // only left overlap -> participate in current phase
+                    schedule[i] = phase;
+                    break;
+                case 2:
+                    // only right overlap, start with phase 0
+                    phase = 0;
+                    schedule[i] = phase;
+                    break;
+                case 3:
+                    // separate overlaps left and right -> switch phase
+                    schedule[i] = phase; // left overlap starts with current phase
+                    phase = 1 - phase;
+                    break;
+                case 4:
+                    // overlap with both: left and right => keep phase
+                    schedule[i] = phase;
+                    break;
+                default:
+                    assert(false);
+                    break;
+            }
+        }
+
+        // scatter the schedule to the processors
+        MPI_Scatter(&schedule[0], 1, MPI_INT, &my_schedule, 1, MPI_INT, 0, comm);
+
+        my_schedule = mxx::scatter_one(schedule, 0, comm);
+    } else {
+        my_schedule = mxx::scatter_one_recv<int>(0, comm);
+    }
+    return my_schedule;
+}
+
+
+
 
 class dist_seqs_base {
 
@@ -188,11 +239,13 @@ public:
     size_t first_sep;
     size_t last_sep;
 
-    /// possibly remove sequence separators for subsequences which have
+    /// possibly remote sequence separators for subsequences which have
     /// elements on this processor but also on other processors
     bool is_init_splits;
     size_t left_sep;
+    int left_sep_rank;
     size_t right_sep;
+    int right_sep_rank;
 
     /// !collective
     /// Given that the first and last separators are set, this initializes the
@@ -206,11 +259,18 @@ public:
             }
         }
 
-        left_sep = mxx::exscan(last_sep, mxx::max<size_t>(), comm);
-        right_sep = mxx::exscan(first_sep, mxx::min<size_t>(), comm.reverse());
+        auto maxpair = [](const std::pair<size_t, int>& x, const std::pair<size_t, int>& y) {
+            return (x.first < y.first) ? y : x;
+        };
+        std::tie(left_sep,left_sep_rank) = mxx::exscan(std::make_pair(last_sep, comm.rank()), maxpair, comm);
+        auto minpair = [](const std::pair<size_t, int>& x, const std::pair<size_t, int>& y) {
+            return (x.first > y.first) ? y : x;
+        };
+        std::tie(right_sep,right_sep_rank) = mxx::exscan(std::make_pair(first_sep, comm.rank()), minpair, comm.reverse());
         if (comm.rank() == comm.size() - 1) {
             //right_sep = dist.iprefix();
             right_sep = dist.prefix_size();
+            right_sep_rank = comm.rank();
         }
         if (right_sep == dist.prefix_size()) {
             last_sep = right_sep;
@@ -220,6 +280,7 @@ public:
         }
         if (first_sep == dist.excl_prefix_size()) {
             left_sep = first_sep;
+            left_sep_rank = comm.rank();
         }
         is_init_splits = true;
     }
@@ -270,6 +331,56 @@ public:
             result.emplace_back(left_sep, right_sep);
         }
         return result;
+    }
+
+    template <typename Func>
+    void for_each_split_seq_2phase(Func func, const mxx::comm& comm) {
+
+        // overlap type:    0: no overlaps, 1: left overlap, 2:right overlap,
+        //                  3: separate overlaps on left and right
+        //                  4: contiguous overlap with both sides
+        int overlap_type = 0;
+        if (has_local_seps) {
+            if (left_sep < first_sep)
+                overlap_type += 1;
+            if (last_sep < right_sep)
+                overlap_type += 2;
+        } else {
+            overlap_type = 4;
+        }
+
+        int my_schedule = get_schedule(overlap_type, comm);
+
+        // create schedule
+        for (int phase = 0; phase <= 1; ++phase) {
+            // the leftmost processor of a group will be used as split
+            bool participate = overlap_type == 3 || (overlap_type != 0 && my_schedule == phase);
+
+            int left_p;
+            size_t begin, end;
+            if ((my_schedule != phase && overlap_type == 3) || (my_schedule == phase && overlap_type == 2)) {
+                // right bucket
+                begin = last_sep;
+                end = right_sep;
+                left_p = comm.rank();
+            } else if (my_schedule == phase && overlap_type == 4) {
+                begin = left_sep;
+                end = right_sep;
+                left_p = left_sep_rank;
+            } else if (my_schedule == phase && overlap_type == 1) {
+                begin = left_sep;
+                end = first_sep;
+                left_p = left_sep_rank;
+            }
+
+            comm.with_subset(participate,[&](const mxx::comm& sc) {
+                // split communicator to `left_p`
+                mxx::comm subcomm = sc.split(left_p);
+                func(begin, end, subcomm);
+            });
+
+            comm.barrier();
+        }
     }
 
     std::pair<size_t, size_t> inner_seqs_range() const {
@@ -346,6 +457,26 @@ struct dist_seqs : public dist_seqs_base {
         return res;
     }
 
+    // calls the given function for each sequence on this processor, by passing
+    // the global start and end indexes as the two parameters for all sequences
+    // which have at least on element on this processor
+    template <typename Func>
+    void for_each_seq(Func f) {
+        if (has_local_seps) {
+            if (left_sep < first_sep) {
+                f(left_sep, first_sep);
+            }
+            for (size_t i = 1; i < prefix_sizes.size(); ++i) {
+                f(prefix_sizes[i-1], prefix_sizes[i]);
+            }
+            if (last_sep < right_sep) {
+                f(last_sep, right_sep);
+            }
+        } else {
+            f(left_sep, right_sep);
+        }
+    }
+
     // returns the size of the subsequences starting (owned by) this processor
     std::vector<size_t> sizes() const {
         std::vector<size_t> result(prefix_sizes.size());
@@ -361,8 +492,89 @@ struct dist_seqs : public dist_seqs_base {
 
 };
 
+struct dist_seqs_buckets : public dist_seqs_base {
+    mxx::partition::block_decomposition_buffered<size_t> part;
+    size_t global_size;
+
+    template <typename T, typename Func = std::equal_to<T>>
+    static dist_seqs_buckets from_func(const std::vector<T>& seq, const mxx::comm& comm, Func f = std::equal_to<T>()) {
+        assert(seq.size() > 0);
+        // init size and distribution
+        dist_seqs_buckets d;
+        d.global_size = mxx::allreduce(seq.size(), comm);
+        d.part = mxx::partition::block_decomposition_buffered<size_t>(d.global_size, comm.size(), comm.rank());
+
+        // set these three:
+        T prev = mxx::right_shift(seq.back(), comm);
+        T next = mxx::left_shift(seq.front(), comm);
+        d.has_local_seps = !f(seq.front(), seq.back());
+        if (d.has_local_seps) {
+            // find first
+            if (!f(prev, seq.front())) {
+                d.first_sep = d.part.excl_prefix_size();
+            } else {
+                size_t i = 0;
+                while (i+1 < seq.size() && f(seq[i], seq[i+1]))
+                    ++i;
+                d.first_sep = i+1 + d.part.excl_prefix_size();
+            }
+
+            // find first entry of sequence equal to last element
+            size_t i = seq.size()-1;
+            while (i > 0 && f(seq[i-1],seq[i]))
+                --i;
+            d.last_sep = i + d.part.excl_prefix_size();
+        }
+        d.init_split_sequences(d.part, comm);
+
+        return d;
+    }
+
+    template <typename T, typename Func = std::equal_to<T>>
+    static dist_seqs_buckets from_func_sparse(const std::vector<T>& seq, const std::vector<size_t>& active, const mxx::comm& comm, Func f = std::equal_to<T>()) {
+        assert(seq.size() > 0);
+        // init size and distribution
+        dist_seqs_buckets d;
+        d.global_size = mxx::allreduce(seq.size(), comm);
+        d.part = mxx::partition::block_decomposition_buffered<size_t>(d.global_size, comm.size(), comm.rank());
+
+        // set these three:
+        if (active.empty()) {
+            d.has_local_seps = false;
+        } else {
+            T prev = mxx::right_shift(seq[active.back()], comm);
+            T next = mxx::left_shift(seq[active.front()], comm);
+            d.has_local_seps = !f(seq[active.front()], seq[active.back()]);
+            if (d.has_local_seps) {
+                // find first
+                if (!f(prev, seq[active.front()])) {
+                    d.first_sep = d.part.excl_prefix_size();
+                } else {
+                    size_t i = 0;
+                    while (i+1 < active.size() && f(seq[active[i]], seq[active[i+1]]))
+                        ++i;
+                    d.first_sep = active[i+1] + d.part.excl_prefix_size();
+                }
+
+                // find first entry of sequence equal to last element
+                size_t i = active.size()-1;
+                while (i > 0 && f(seq[active[i-1]],seq[active[i]]))
+                    --i;
+                d.last_sep = active[i] + d.part.excl_prefix_size();
+            }
+        }
+        d.init_split_sequences(d.part, comm);
+
+        return d;
+    }
+};
+
 std::ostream& operator<<(std::ostream& os, const dist_seqs& ds) {
     return os << "(" << ds.left_sep << "), " << ds.prefix_sizes << ", (" << ds.right_sep << ")";
+}
+
+std::ostream& operator<<(std::ostream& os, const dist_seqs_buckets& ds) {
+    return os << "(" << ds.left_sep << "@" << ds.left_sep_rank << "), [" << ds.first_sep << ",...," << ds.last_sep << "), (" << ds.right_sep << "@" << ds.right_sep_rank << ")";
 }
 
 // for use with mxx::sync_cout

@@ -39,6 +39,7 @@ std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector
     for (size_t i = 0; i < local_queries.size(); ++i) {
         local_results[i] = f(local_queries[i]);
     }
+
     // now we can free the memory used for queries
     local_queries = std::vector<Q>();
     t.end_section("bulk_query: local query");
@@ -51,7 +52,6 @@ std::vector<typename std::result_of<Func(Q)>::type> bulk_query(const std::vector
 }
 
 // global_adrs don't need to be sorted by address, but sorted by target processor
-// TODO: generalize for where the global addresses/offsets are part of another data structure
 template <typename InputIter>
 std::vector<typename std::iterator_traits<InputIter>::value_type>
 bulk_rma(InputIter local_begin, InputIter local_end,
@@ -65,6 +65,46 @@ bulk_rma(InputIter local_begin, InputIter local_end,
                       [&local_begin, &prefix](size_t gladr) {
                             return *(local_begin + (gladr - prefix));
                       }, send_counts, comm);
+}
+
+// buckets inplace but keeps track of original index for each element
+// returns the send_counts (number of elements in each bucket)
+template <typename T, typename Func>
+std::vector<size_t> idxbucketing(const std::vector<T>& vec, Func key_func, size_t num_buckets, std::vector<T>& bucketed_vec, std::vector<size_t>& original_pos) {
+    std::vector<size_t> send_counts(num_buckets, 0);
+    for (size_t i = 0; i < vec.size(); ++i) {
+        ++send_counts[key_func(vec[i])];
+    }
+    std::vector<size_t> offsets = mxx::local_exscan(send_counts);
+
+    // [2nd pass]: saving elements into correct position
+    bucketed_vec.resize(vec.size());
+    original_pos.resize(vec.size());
+    for (size_t i = 0; i < vec.size(); ++i) {
+        size_t pos = offsets[key_func(vec[i])]++;
+        bucketed_vec[pos] = vec[i];
+        original_pos[pos] = i;
+    }
+    return send_counts;
+}
+template <typename T, typename Func>
+std::vector<size_t> idxbucketing_inplace(std::vector<T>& vec, Func key_func, size_t num_buckets, std::vector<size_t>& original_pos) {
+    // TODO: inplace optimizations?
+    std::vector<T> tmp_res;
+    std::vector<size_t> send_counts = idxbucketing(vec, key_func, num_buckets, tmp_res, original_pos);
+    vec.swap(tmp_res);
+    return send_counts;
+}
+
+template <typename T>
+std::vector<T> permute(const std::vector<T>& vec, const std::vector<size_t>& idx) {
+    assert(vec.size() == idx.size());
+    std::vector<T> results(vec.size());
+    for (size_t i = 0; i < vec.size(); ++i) {
+        // TODO: streaming write
+        results[idx[i]] = vec[i];
+    }
+    return results;
 }
 
 
@@ -82,32 +122,15 @@ bulk_rma(InputIter local_begin, InputIter local_end,
     mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
     MXX_ASSERT(part.local_size() == local_size);
 
-    // get send counts by linear scan (TODO: could get for free with the bucketing)
-    // or cheaper with p*log(n)
-    std::vector<size_t> send_counts(comm.size(), 0);
-    for (size_t i = 0; i < global_indexes.size(); ++i) {
-        int t = part.target_processor(global_indexes[i]);
-        ++send_counts[t];
-    }
-    std::vector<size_t> offsets = mxx::local_exscan(send_counts);
-    std::vector<size_t> bucketed_indexes(global_indexes.size());
-    std::vector<size_t> original_pos(global_indexes.size());
-    for (size_t i = 0; i < global_indexes.size(); ++i) {
-        int t = part.target_processor(global_indexes[i]);
-        bucketed_indexes[offsets[t]] = global_indexes[i];
-        original_pos[offsets[t]] = i;
-        offsets[t]++;
-    }
+
+    std::vector<size_t> bucketed_indexes;
+    std::vector<size_t> original_pos;
+    std::vector<size_t> send_counts = idxbucketing(global_indexes, [&part](size_t gidx) { return part.target_processor(gidx); }, comm.size(), bucketed_indexes, original_pos);
 
     std::vector<value_type> results = bulk_rma(local_begin, local_end, bucketed_indexes, send_counts, comm);
+    bucketed_indexes = std::vector<size_t>();
     // reorder back into original order
-    std::vector<value_type> results2(results.size());
-    MXX_ASSERT(results2.size() == global_indexes.size());
-    for (size_t i = 0; i < global_indexes.size(); ++i) {
-        results2[original_pos[i]] = results[i];
-    }
-
-    return results2;
+    return permute(results, original_pos);
 }
 
 

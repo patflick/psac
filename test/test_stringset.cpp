@@ -280,3 +280,18 @@ TEST(PsacDistStringSet, DSKmerGen) {
     }
 }
 
+TEST(PsacDistStringSet, DSbuckets) {
+    mxx::comm c;
+    std::vector<int> b;
+    if (c.is_first()) {
+        b = {0, 0, 1, 1, 1, 1, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3};
+    }
+    b = mxx::stable_distribute(b, c);
+
+    dist_seqs_buckets db = dist_seqs_buckets::from_func(b, c);
+
+    SDEBUG(b);
+    SDEBUG(db);
+}
+
+
