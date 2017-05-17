@@ -978,7 +978,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
      * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
      */
     // get next element from right
-    index_t right_B = mxx::left_shift(local_B[0], comm);
+    //index_t right_B = mxx::left_shift(local_B[0], comm);
 
     // get global offset
     size_t prefix = part.excl_prefix_size();
@@ -986,7 +986,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
     // get active elements
     SAC_TIMER_END_SECTION("get active elements");
 
-    bool right_bucket_crosses_proc = (comm.rank() < p-1 && local_B.back() == right_B);
+    //bool right_bucket_crosses_proc = (comm.rank() < p-1 && local_B.back() == right_B);
 
     std::vector<index_t> active_elements = get_active(local_B, comm, true);
 
@@ -1003,220 +1003,131 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
             //b2 = sparse_get_b2(ds, active_elements, local_ISA, local_SA, shift_by, comm);
         }
 
-        // building sequence of triplets for each unfinished bucket and sort
-        // then rebucket, buckets which spread accross boundaries, sort via
-        // MPI sub communicators and samplesort in two phases
-        std::vector<TwoBSA<index_t> > bucket;
-        std::vector<TwoBSA<index_t> > left_bucket;
-        std::vector<TwoBSA<index_t> > right_bucket;
-
         // prepare LCP queries vector
         std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
 
-        // find bucket boundaries:
-        // overlap type:    0: no overlaps, 1: left overlap, 2:right overlap,
-        //                  3: separate overlaps on left and right
-        //                  4: contiguous overlap with both sides
-        int overlap_type = 0; // init to no overlaps
-        size_t bucket_begin = local_B[0]-1;
-        size_t first_bucket_begin = bucket_begin;
-        size_t right_bucket_offset = 0;
+        dist_seqs_buckets db = dist_seqs_buckets::from_func(local_B, comm);
 
-        for (size_t ai = 0; ai < active_elements.size();) {
-            size_t idx = active_elements[ai];
-            bucket_begin = local_B[idx]-1;
+        // for each inner bucket:
+        size_t inner_beg, inner_end;
+        std::tie(inner_beg, inner_end) = db.inner_seqs_range();
+        if (inner_beg < inner_end) {
+            size_t ai = 0;
+            while (ai < active_elements.size() && active_elements[ai] < inner_beg-prefix)
+                ++ai;
+            assert(ai == 0 || local_B[active_elements[ai]] != local_B[active_elements[ai-1]]);
 
-            size_t bucket_begin_ai = ai;
+            while (ai < active_elements.size() && active_elements[ai] < inner_end-prefix) {
+                size_t bucket_begin = local_B[active_elements[ai]]-1;
+                assert(bucket_begin == active_elements[ai]+prefix);
+                size_t bucket_begin_ai = ai;
 
-            // find end of local bucket
-            while (ai < active_elements.size() && local_B[active_elements[ai]]-1 == bucket_begin) {
-                idx = active_elements[ai];
+                while (ai < active_elements.size() && local_B[active_elements[ai]]-1 == bucket_begin) {
+                    ++ai;
+                }
+                size_t bucket_end_ai = ai-1;
+                size_t bucket_end = active_elements[bucket_end_ai] + prefix;
+                assert(bucket_end - bucket_begin == bucket_end_ai - bucket_begin_ai);
+                size_t bucket_size = bucket_end - bucket_begin + 1;
+
+                std::vector<size_t> ais(bucket_end_ai - bucket_begin_ai + 1);
+                std::iota(ais.begin(), ais.end(), bucket_begin_ai);
+                // this is a local bucket => sort by B2, rebucket, and save
+                //auto cmp = [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y) {
+                //    return x.B2 < y.B2;
+                //};
+                //std::sort(bucket.begin(), bucket.end(), cmp);
+                std::sort(ais.begin(), ais.end(), [&b2, &active_elements](index_t x, index_t y) {
+                    return b2[x] < b2[y];
+                });
+
+                // local rebucket
+                // save back into local_B, local_SA, etc
+                index_t cur_b = bucket_begin + 1;
+                size_t out_idx = bucket_begin - prefix;
+                std::vector<index_t> bucket_SA(local_SA.begin() + (bucket_begin - prefix), local_SA.begin() + (bucket_begin - prefix) + bucket_size);
+                // assert previous bucket index is smaller
+                assert(out_idx == 0 || local_B[out_idx-1] < cur_b);
+                for (auto it = ais.begin(); it != ais.end(); ++it) {
+                    // if this is a new bucket, then update number
+                    index_t pre_b2 = b2[*(it-1)];
+                    index_t cur_b2 = b2[*it];
+                    if (it != ais.begin() && pre_b2 != cur_b2) {
+                        // update bucket index
+                        cur_b = out_idx + prefix + 1;
+
+                        if (_CONSTRUCT_LCP) {
+                            // add as query item for LCP construction
+                            index_t left_b  = std::min(pre_b2, cur_b2);
+                            index_t right_b = std::max(pre_b2, cur_b2);
+                            // we need the minumum LCP of all suffixes in buckets between
+                            // these two buckets. Since the first element in the left bucket
+                            // is the LCP of this bucket with its left bucket and we don't need
+                            // this LCP value, start one to the right:
+                            // (-1 each since buffer numbers are current index + 1)
+                            index_t range_left = (left_b-1) + 1;
+                            index_t range_right = (right_b-1) + 1; // +1 since exclusive index
+                            minqueries.emplace_back(out_idx + prefix, range_left, range_right);
+                        }
+                    }
+                    local_SA[out_idx] = bucket_SA[active_elements[*it]-(bucket_begin-prefix)];// it->SA;
+                    local_B[out_idx] = cur_b;
+                    out_idx++;
+                }
+                // assert next bucket index is larger
+                assert(out_idx == local_size || local_B[out_idx] == prefix+out_idx+1);
+            }
+        }
+
+        /*
+         * for each split bucket, exclusively in a subcommunicator
+         */
+        db.for_each_split_seq_2phase(comm, [&](size_t gbegin, size_t gend, const mxx::comm& subcomm) {
+            if (active_elements.size() == 0) {
+                assert(gbegin == gend);
+                return;
+            }
+            std::vector<TwoBSA<index_t> > border_bucket;
+            size_t lbegin = std::max(gbegin, prefix) - prefix;
+            size_t lend = std::min(gend, prefix+local_size) - prefix;
+            // find `ai` for this bucket
+            size_t ai = 0;
+            while (active_elements[ai] < lbegin)
+                ++ai;
+            assert(active_elements[ai] == lbegin);
+            for (size_t i = lbegin; i < lend; ++i) {
+                assert(active_elements[ai] == i);
                 TwoBSA<index_t> tuple;
                 //assert(msgit->second >= prefix && msgit->second < prefix+local_size);
-                tuple.SA = local_SA[idx];
-                tuple.B1 = local_B[idx];
+                tuple.SA = local_SA[i];
+                tuple.B1 = local_B[i];
                 tuple.B2 = b2[ai];
-                bucket.push_back(tuple);
+                border_bucket.push_back(tuple);
                 ++ai;
             }
-
-            // get bucket end (could be on other processor)
-            if (ai == active_elements.size() && right_bucket_crosses_proc) {
-                assert(comm.rank() < p-1 && local_B.back() == right_B);
-                if (bucket_begin >= prefix) {
-                    overlap_type += 2;
-                    right_bucket.swap(bucket);
-                    right_bucket_offset = bucket_begin - prefix;
-                } else {
-                    // bucket extends to left AND right
-                    left_bucket.swap(bucket);
-                    overlap_type = 4;
-                }
-            } else {
-                if (bucket_begin >= prefix) {
-                    size_t bucket_end_ai = ai-1;
-                    size_t bucket_end = active_elements[bucket_end_ai] + prefix;
-                    assert(bucket_end - bucket_begin == bucket_end_ai - bucket_begin_ai);
-                    size_t bucket_size = bucket_end - bucket_begin + 1;
-
-                    std::vector<size_t> ais(bucket_end_ai - bucket_begin_ai + 1);
-                    std::iota(ais.begin(), ais.end(), bucket_begin_ai);
-                    // this is a local bucket => sort by B2, rebucket, and save
-                    //auto cmp = [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y) {
-                    //    return x.B2 < y.B2;
-                    //};
-                    //std::sort(bucket.begin(), bucket.end(), cmp);
-                    std::sort(ais.begin(), ais.end(), [&b2, &active_elements](index_t x, index_t y) {
-                        return b2[x] < b2[y];
-                    });
-
-                    // local rebucket
-                    // save back into local_B, local_SA, etc
-                    index_t cur_b = bucket_begin + 1;
-                    size_t out_idx = bucket_begin - prefix;
-                    std::vector<index_t> bucket_SA(local_SA.begin() + (bucket_begin - prefix), local_SA.begin() + (bucket_begin - prefix) + bucket_size);
-                    // assert previous bucket index is smaller
-                    assert(out_idx == 0 || local_B[out_idx-1] < cur_b);
-                    for (auto it = ais.begin(); it != ais.end(); ++it) {
-                        // if this is a new bucket, then update number
-                        index_t pre_b2 = b2[*(it-1)];
-                        index_t cur_b2 = b2[*it];
-                        if (it != ais.begin() && pre_b2 != cur_b2) {
-                            // update bucket index
-                            cur_b = out_idx + prefix + 1;
-
-                            if (_CONSTRUCT_LCP) {
-                                // add as query item for LCP construction
-                                index_t left_b  = std::min(pre_b2, cur_b2);
-                                index_t right_b = std::max(pre_b2, cur_b2);
-                                // we need the minumum LCP of all suffixes in buckets between
-                                // these two buckets. Since the first element in the left bucket
-                                // is the LCP of this bucket with its left bucket and we don't need
-                                // this LCP value, start one to the right:
-                                // (-1 each since buffer numbers are current index + 1)
-                                index_t range_left = (left_b-1) + 1;
-                                index_t range_right = (right_b-1) + 1; // +1 since exclusive index
-                                minqueries.emplace_back(out_idx + prefix, range_left, range_right);
-                            }
-                        }
-                        local_SA[out_idx] = bucket_SA[active_elements[*it]-(bucket_begin-prefix)];// it->SA;
-                        local_B[out_idx] = cur_b;
-                        out_idx++;
-                    }
-                    // assert next bucket index is larger
-                    assert(out_idx == local_size || local_B[out_idx] == prefix+out_idx+1);
-                } else {
-                    overlap_type += 1;
-                    left_bucket.swap(bucket);
-                }
-            }
-            bucket.clear();
-        }
-
-        // if we have left/right/both/or double buckets, do global comm in two phases
-        int my_schedule = -1;
-        if (comm.rank() == 0) {
-            // gather all types to first processor
-            std::vector<int> overlaps(p);
-            MPI_Gather(&overlap_type, 1, MPI_INT, &overlaps[0], 1, MPI_INT, 0, comm);
-
-            // create schedule using linear scan over the overlap types
-            std::vector<int> schedule(p);
-            int phase = 0; // start in first phase
-            for (int i = 0; i < p; ++i) {
-                switch (overlaps[i]) {
-                    case 0:
-                        schedule[i] = -1; // doesn't matter
-                        break;
-                    case 1:
-                        // only left overlap -> participate in current phase
-                        schedule[i] = phase;
-                        break;
-                    case 2:
-                        // only right overlap, start with phase 0
-                        phase = 0;
-                        schedule[i] = phase;
-                        break;
-                    case 3:
-                        // separate overlaps left and right -> switch phase
-                        schedule[i] = phase; // left overlap starts with current phase
-                        phase = 1 - phase;
-                        break;
-                    case 4:
-                        // overlap with both: left and right => keep phase
-                        schedule[i] = phase;
-                        break;
-                    default:
-                        assert(false);
-                        break;
-                }
-            }
-
-            // scatter the schedule to the processors
-            MPI_Scatter(&schedule[0], 1, MPI_INT, &my_schedule, 1, MPI_INT, 0, comm);
-        } else {
-            // send out my overlap type
-            MPI_Gather(&overlap_type, 1, MPI_INT, NULL, 1, MPI_INT, 0, comm);
-
-            // ... let master processor solve the schedule
-
-            // receive schedule:
-            MPI_Scatter(NULL, 1, MPI_INT, &my_schedule, 1, MPI_INT, 0, comm);
-        }
-
-
-        // two phase sorting across boundaries using sub communicators
-        for (int phase = 0; phase <= 1; ++phase) {
-            std::vector<TwoBSA<index_t> > border_bucket = left_bucket;
-            // the leftmost processor of a group will be used as split
-            int left_p = part.target_processor(first_bucket_begin);
-            bool participate = (overlap_type != 0 && my_schedule == phase);
-            size_t bucket_offset = 0; // left bucket starts from beginning
-            size_t rebucket_offset = first_bucket_begin;
-            if ((my_schedule != phase && overlap_type == 3) || (my_schedule == phase && overlap_type == 2)) {
-                // starting a bucket at the end
-                border_bucket = right_bucket;
-                left_p = comm.rank();
-                participate = true;
-                bucket_offset = right_bucket_offset;
-                rebucket_offset = prefix + bucket_offset;
-            }
-
-            comm.with_subset(participate,[&](const mxx::comm& sc) {
-                // split communicator to `left_p`
-                mxx::comm subcomm = sc.split(left_p);
-
-                // sample sort the bucket with arbitrary distribution
-                mxx::sort(border_bucket.begin(), border_bucket.end(), subcomm);
+            // sample sort the bucket with arbitrary distribution
+            mxx::sort(border_bucket.begin(), border_bucket.end(), subcomm);
 
 #ifndef NDEBUG
-                index_t first_bucket = border_bucket[0].B1;
+            index_t first_bucket = border_bucket[0].B1;
 #endif
-                // rebucket with global offset of first -> in tuple form (also updates LCP)
-                rebucket_tuples(border_bucket, subcomm, rebucket_offset, minqueries);
-                // assert first bucket index remains the same
-                assert(subcomm.rank() != 0 || first_bucket == border_bucket[0].B1);
+            size_t bucket_offset = lbegin;
+            // rebucket with global offset of first -> in tuple form (also updates LCP)
+            rebucket_tuples(border_bucket, subcomm, gbegin, minqueries);
+            // assert first bucket index remains the same
+            assert(subcomm.rank() != 0 || first_bucket == border_bucket[0].B1);
 
-                // save into full array (if this was left -> save to beginning)
-                // (else, need offset of last)
-                assert(bucket_offset == 0 || local_B[bucket_offset-1] < border_bucket[0].B1);
-                assert(bucket_offset+border_bucket.size() <= local_size);
-                for (size_t i = 0; i < border_bucket.size(); ++i) {
-                    local_SA[i+bucket_offset] = border_bucket[i].SA;
-                    local_B[i+bucket_offset] = border_bucket[i].B1;
-                }
-                assert(bucket_offset+border_bucket.size() == local_size || (local_B[bucket_offset+border_bucket.size()] > local_B[bucket_offset+border_bucket.size()-1]));
-                assert(subcomm.rank() != 0 || local_B[bucket_offset] == bucket_offset+prefix+1);
-
-                /*
-                 * LCP update
-                 */
-                // LCP is updated in the custom `rebucket_tuples` function
-            });
-
-            comm.barrier();
-        }
-
+            // save into full array (if this was left -> save to beginning)
+            // (else, need offset of last)
+            assert(bucket_offset == 0 || local_B[bucket_offset-1] < border_bucket[0].B1);
+            assert(bucket_offset+border_bucket.size() <= local_size);
+            for (size_t i = 0; i < border_bucket.size(); ++i) {
+                local_SA[i+bucket_offset] = border_bucket[i].SA;
+                local_B[i+bucket_offset] = border_bucket[i].B1;
+            }
+            assert(bucket_offset+border_bucket.size() == local_size || (local_B[bucket_offset+border_bucket.size()] > local_B[bucket_offset+border_bucket.size()-1]));
+            assert(subcomm.rank() != 0 || local_B[bucket_offset] == bucket_offset+prefix+1);
+        });
 
         /*
          * 4.1)   Update LCP
@@ -1259,9 +1170,9 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         msgs = std::vector<mypair<index_t>>();
 
         // get new bucket number to the right
-        right_B = mxx::left_shift(local_B[0], comm);
+        //right_B = mxx::left_shift(local_B[0], comm);
         // check if right bucket still goes over boundary
-        right_bucket_crosses_proc = (comm.rank() < p-1 && local_B.back() == right_B);
+        //right_bucket_crosses_proc = (comm.rank() < p-1 && local_B.back() == right_B);
 
         // update remaining active elements
         active_elements = get_active(local_B, active_elements, comm, true);
