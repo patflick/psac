@@ -340,6 +340,61 @@ public:
             return std::pair<size_t, size_t>(0, 0);
         }
     }
+
+    template <typename Func>
+    void for_each_split_seq_2phase(const mxx::comm& comm, Func func) {
+
+        // overlap type:    0: no overlaps, 1: left overlap, 2:right overlap,
+        //                  3: separate overlaps on left and right
+        //                  4: contiguous overlap with both sides
+        int overlap_type = 0;
+        if (has_local_seps) {
+            if (left_sep < first_sep)
+                overlap_type += 1;
+            if (last_sep < right_sep)
+                overlap_type += 2;
+        } else {
+            overlap_type = 4;
+        }
+
+        // if there are no overlaps at all, skip!
+        if (mxx::all_of(overlap_type == 0, comm))
+            return;
+
+        // create schedule of two phases to process all split sequences
+        int my_schedule = get_schedule(overlap_type, comm);
+
+        // execute two phases separately, synchronized by a barrier
+        for (int phase = 0; phase <= 1; ++phase) {
+            // the leftmost processor of a group will be used as split
+            bool participate = overlap_type == 3 || (overlap_type != 0 && my_schedule == phase);
+
+            int left_p;
+            size_t begin, end;
+            if ((my_schedule != phase && overlap_type == 3) || (my_schedule == phase && overlap_type == 2)) {
+                // right bucket
+                begin = last_sep;
+                end = right_sep;
+                left_p = comm.rank();
+            } else if (my_schedule == phase && overlap_type == 4) {
+                begin = left_sep;
+                end = right_sep;
+                left_p = left_sep_rank;
+            } else if (my_schedule == phase && (overlap_type == 1 || overlap_type == 3)) {
+                begin = left_sep;
+                end = first_sep;
+                left_p = left_sep_rank;
+            }
+
+            comm.with_subset(participate,[&](const mxx::comm& sc) {
+                // split communicator to `left_p`
+                mxx::comm subcomm = sc.split(left_p);
+                func(begin, end, subcomm);
+            });
+
+            comm.barrier();
+        }
+    }
 };
 
 
@@ -481,99 +536,7 @@ struct dist_seqs_buckets : public dist_seqs_base {
         return d;
     }
 
-    template <typename T, typename index_t, typename Func = std::equal_to<T>>
-    static dist_seqs_buckets from_func_sparse(const std::vector<T>& seq, const std::vector<index_t>& active, const mxx::comm& comm, Func f = std::equal_to<T>()) {
-        assert(seq.size() > 0);
-        // init size and distribution
-        dist_seqs_buckets d;
-        d.has_local_els = active.size() > 0;
-        d.global_size = mxx::allreduce(seq.size(), comm);
-        d.part = mxx::partition::block_decomposition_buffered<size_t>(d.global_size, comm.size(), comm.rank());
 
-        // set these three:
-        //T last = active.empty() ? T() : seq[active.back()];
-        T prev = mxx::right_shift(seq.back(), comm);
-        if (active.empty()) {
-            d.has_local_seps = false;
-        } else {
-            d.has_local_seps = !f(seq.front(), seq.back());
-            if (d.has_local_seps) {
-                // find first
-                if (!f(prev, seq[active.front()])) {
-                    d.first_sep = d.part.excl_prefix_size();
-                } else {
-                    size_t i = 0;
-                    while (i+1 < active.size() && f(seq[active[i]], seq[active[i+1]]))
-                        ++i;
-                    d.first_sep = active[i+1] + d.part.excl_prefix_size();
-                }
-
-                // find first entry of sequence equal to last element
-                size_t i = active.size()-1;
-                while (i > 0 && f(seq[active[i-1]],seq[active[i]]))
-                    --i;
-                d.last_sep = active[i] + d.part.excl_prefix_size();
-            }
-        }
-        d.init_split_sequences(d.part, comm);
-
-        return d;
-    }
-
-    template <typename Func>
-    void for_each_split_seq_2phase(const mxx::comm& comm, Func func) {
-
-        // overlap type:    0: no overlaps, 1: left overlap, 2:right overlap,
-        //                  3: separate overlaps on left and right
-        //                  4: contiguous overlap with both sides
-        int overlap_type = 0;
-        if (has_local_seps) {
-            if (left_sep < first_sep)
-                overlap_type += 1;
-            if (last_sep < right_sep)
-                overlap_type += 2;
-        } else {
-            overlap_type = 4;
-        }
-
-        // if there are no overlaps at all, skip!
-        if (mxx::all_of(overlap_type == 0, comm))
-            return;
-
-        // create schedule of two phases to process all split sequences
-        int my_schedule = get_schedule(overlap_type, comm);
-
-        // execute two phases separately, synchronized by a barrier
-        for (int phase = 0; phase <= 1; ++phase) {
-            // the leftmost processor of a group will be used as split
-            bool participate = overlap_type == 3 || (overlap_type != 0 && my_schedule == phase);
-
-            int left_p;
-            size_t begin, end;
-            if ((my_schedule != phase && overlap_type == 3) || (my_schedule == phase && overlap_type == 2)) {
-                // right bucket
-                begin = last_sep;
-                end = right_sep;
-                left_p = comm.rank();
-            } else if (my_schedule == phase && overlap_type == 4) {
-                begin = left_sep;
-                end = right_sep;
-                left_p = left_sep_rank;
-            } else if (my_schedule == phase && (overlap_type == 1 || overlap_type == 3)) {
-                begin = left_sep;
-                end = first_sep;
-                left_p = left_sep_rank;
-            }
-
-            comm.with_subset(participate,[&](const mxx::comm& sc) {
-                // split communicator to `left_p`
-                mxx::comm subcomm = sc.split(left_p);
-                func(begin, end, subcomm);
-            });
-
-            comm.barrier();
-        }
-    }
 };
 
 std::ostream& operator<<(std::ostream& os, const dist_seqs& ds) {

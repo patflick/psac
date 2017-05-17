@@ -973,34 +973,25 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 
     SAC_TIMER_START();
 
-
-    /*
-     * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
-     */
-    // get next element from right
-    //index_t right_B = mxx::left_shift(local_B[0], comm);
-
     // get global offset
     size_t prefix = part.excl_prefix_size();
 
     // get active elements
+    std::vector<index_t> active = get_active(local_B, comm, true);
     SAC_TIMER_END_SECTION("get active elements");
 
-    //bool right_bucket_crosses_proc = (comm.rank() < p-1 && local_B.back() == right_B);
-
-    std::vector<index_t> active_elements = get_active(local_B, comm, true);
 
     for (index_t shift_by = dist; shift_by < n; shift_by <<= 1) {
         // check for termination
-        if (mxx::allreduce(active_elements.size()) == 0)
+        if (mxx::allreduce(active.size()) == 0)
             // finished!
             break;
 
         std::vector<index_t> b2;
         if (!GSA) {
-            b2 = sparse_get_b2(active_elements, local_ISA, local_SA, shift_by, comm);
+            b2 = sparse_get_b2(active, local_ISA, local_SA, shift_by, comm);
         } else {
-            //b2 = sparse_get_b2(ds, active_elements, local_ISA, local_SA, shift_by, comm);
+            //b2 = sparse_get_b2(ds, active, local_ISA, local_SA, shift_by, comm);
         }
 
         // prepare LCP queries vector
@@ -1012,40 +1003,45 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         size_t inner_beg, inner_end;
         std::tie(inner_beg, inner_end) = db.inner_seqs_range();
         if (inner_beg < inner_end) {
+            // find position in `active` corresponding to first internal bucket
             size_t ai = 0;
-            while (ai < active_elements.size() && active_elements[ai] < inner_beg-prefix)
+            while (ai < active.size() && active[ai] < inner_beg-prefix)
                 ++ai;
-            assert(ai == 0 || local_B[active_elements[ai]] != local_B[active_elements[ai-1]]);
+            assert(ai == 0 || local_B[active[ai]] != local_B[active[ai-1]]);
 
-            while (ai < active_elements.size() && active_elements[ai] < inner_end-prefix) {
-                size_t bucket_begin = local_B[active_elements[ai]]-1;
-                assert(bucket_begin == active_elements[ai]+prefix);
-                size_t bucket_begin_ai = ai;
+            // for each internal bucket
+            while (ai < active.size() && active[ai] < inner_end-prefix) {
+                // get global index of bucket begin
+                size_t bucket_begin = active[ai]+prefix;
+                assert(bucket_begin == local_B[active[ai]]-1);
+                size_t bucket_offset = bucket_begin - prefix;
+                size_t a_beg = ai;
 
-                while (ai < active_elements.size() && local_B[active_elements[ai]]-1 == bucket_begin) {
-                    ++ai;
+                // find end of bucket
+                size_t idx = active[ai];
+                while (ai < active.size() && local_B[idx]-1 == bucket_begin) {
+                    assert(idx == active[ai]);
+                    ++ai; ++idx;
                 }
-                size_t bucket_end_ai = ai-1;
-                size_t bucket_end = active_elements[bucket_end_ai] + prefix;
-                assert(bucket_end - bucket_begin == bucket_end_ai - bucket_begin_ai);
+
+                assert(ai > 0);
+                size_t a_end = ai;
+                size_t bucket_end = active[a_end-1] + prefix;
+                assert(bucket_end - bucket_begin == a_end - a_beg);
                 size_t bucket_size = bucket_end - bucket_begin + 1;
 
-                std::vector<size_t> ais(bucket_end_ai - bucket_begin_ai + 1);
-                std::iota(ais.begin(), ais.end(), bucket_begin_ai);
-                // this is a local bucket => sort by B2, rebucket, and save
-                //auto cmp = [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y) {
-                //    return x.B2 < y.B2;
-                //};
-                //std::sort(bucket.begin(), bucket.end(), cmp);
-                std::sort(ais.begin(), ais.end(), [&b2, &active_elements](index_t x, index_t y) {
+                // arg-sort bucket by b2
+                std::vector<size_t> ais(bucket_size);
+                std::iota(ais.begin(), ais.end(), a_beg);
+                std::sort(ais.begin(), ais.end(), [&b2](index_t x, index_t y) {
                     return b2[x] < b2[y];
                 });
 
                 // local rebucket
                 // save back into local_B, local_SA, etc
                 index_t cur_b = bucket_begin + 1;
-                size_t out_idx = bucket_begin - prefix;
-                std::vector<index_t> bucket_SA(local_SA.begin() + (bucket_begin - prefix), local_SA.begin() + (bucket_begin - prefix) + bucket_size);
+                size_t out_idx = bucket_offset;
+                std::vector<index_t> bucket_SA(local_SA.begin() + bucket_offset, local_SA.begin() + bucket_offset + bucket_size);
                 // assert previous bucket index is smaller
                 assert(out_idx == 0 || local_B[out_idx-1] < cur_b);
                 for (auto it = ais.begin(); it != ais.end(); ++it) {
@@ -1055,22 +1051,14 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
                     if (it != ais.begin() && pre_b2 != cur_b2) {
                         // update bucket index
                         cur_b = out_idx + prefix + 1;
-
                         if (_CONSTRUCT_LCP) {
                             // add as query item for LCP construction
                             index_t left_b  = std::min(pre_b2, cur_b2);
                             index_t right_b = std::max(pre_b2, cur_b2);
-                            // we need the minumum LCP of all suffixes in buckets between
-                            // these two buckets. Since the first element in the left bucket
-                            // is the LCP of this bucket with its left bucket and we don't need
-                            // this LCP value, start one to the right:
-                            // (-1 each since buffer numbers are current index + 1)
-                            index_t range_left = (left_b-1) + 1;
-                            index_t range_right = (right_b-1) + 1; // +1 since exclusive index
-                            minqueries.emplace_back(out_idx + prefix, range_left, range_right);
+                            minqueries.emplace_back(out_idx + prefix, left_b, right_b);
                         }
                     }
-                    local_SA[out_idx] = bucket_SA[active_elements[*it]-(bucket_begin-prefix)];// it->SA;
+                    local_SA[out_idx] = bucket_SA[active[*it]-bucket_offset];
                     local_B[out_idx] = cur_b;
                     out_idx++;
                 }
@@ -1083,7 +1071,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
          * for each split bucket, exclusively in a subcommunicator
          */
         db.for_each_split_seq_2phase(comm, [&](size_t gbegin, size_t gend, const mxx::comm& subcomm) {
-            if (active_elements.size() == 0) {
+            if (active.size() == 0) {
                 assert(gbegin == gend);
                 return;
             }
@@ -1092,11 +1080,11 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
             size_t lend = std::min(gend, prefix+local_size) - prefix;
             // find `ai` for this bucket
             size_t ai = 0;
-            while (active_elements[ai] < lbegin)
+            while (active[ai] < lbegin)
                 ++ai;
-            assert(active_elements[ai] == lbegin);
+            assert(active[ai] == lbegin);
             for (size_t i = lbegin; i < lend; ++i) {
-                assert(active_elements[ai] == i);
+                assert(active[ai] == i);
                 TwoBSA<index_t> tuple;
                 //assert(msgit->second >= prefix && msgit->second < prefix+local_size);
                 tuple.SA = local_SA[i];
@@ -1153,9 +1141,9 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         // since the message array is still available with the indices of unfinished
         // buckets -> reuse that information => no need to rescan the whole
         // local array
-        std::vector<mypair<index_t> > msgs(active_elements.size());
-        for (size_t i = 0; i < active_elements.size(); ++i) {
-            size_t j = active_elements[i];
+        std::vector<mypair<index_t> > msgs(active.size());
+        for (size_t i = 0; i < active.size(); ++i) {
+            size_t j = active[i];
             msgs[i].first = local_SA[j]; // SA[i]
             msgs[i].second = local_B[j]; // B[i]
         }
@@ -1175,7 +1163,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         //right_bucket_crosses_proc = (comm.rank() < p-1 && local_B.back() == right_B);
 
         // update remaining active elements
-        active_elements = get_active(local_B, active_elements, comm, true);
+        active = get_active(local_B, active, comm, true);
 
         SAC_TIMER_END_SECTION("bucket-chaising iteration");
     }
