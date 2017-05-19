@@ -342,7 +342,7 @@ public:
     }
 
     template <typename Func>
-    void for_each_split_seq_2phase(const mxx::comm& comm, Func func) {
+    void for_each_split_seq_2phase(const mxx::comm& comm, Func func) const {
 
         // overlap type:    0: no overlaps, 1: left overlap, 2:right overlap,
         //                  3: separate overlaps on left and right
@@ -419,7 +419,6 @@ struct dist_seqs : public dist_seqs_base {
 
         std::vector<size_t> send_counts(comm.size(), 0);
         // for all sequence starts: ps[i] = gidx_sum[i-1] + size[i]
-        // TODO: do across procs boundaries/split sequences
         std::vector<size_t> gidx;
         gidx.reserve(dss.sizes.size());
         size_t size_sum = ss_prefix;
@@ -444,7 +443,8 @@ struct dist_seqs : public dist_seqs_base {
             ++send_counts[pi];
         }
 
-        // XXX: possibly optimize this communication (expected very low volume, and only neighbor comm)
+        // XXX: possibly optimize this communication (expected very low volume,
+        //      and mostly with direct neighbors)
         prefix_sizes = mxx::all2allv(gidx, send_counts, comm);
     }
 
@@ -466,13 +466,16 @@ struct dist_seqs : public dist_seqs_base {
     // the global start and end indexes as the two parameters for all sequences
     // which have at least on element on this processor
     template <typename Func>
-    void for_each_seq(Func f) {
+    void for_each_seq(Func f) const {
         if (has_local_seps) {
             if (left_sep < first_sep) {
                 f(left_sep, first_sep);
             }
             for (size_t i = 1; i < prefix_sizes.size(); ++i) {
                 f(prefix_sizes[i-1], prefix_sizes[i]);
+            }
+            if (prefix_sizes.back() < last_sep) {
+                f(prefix_sizes.back(), last_sep);
             }
             if (last_sep < right_sep) {
                 f(last_sep, right_sep);

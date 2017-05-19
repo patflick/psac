@@ -7,6 +7,7 @@
 #include <stringset.hpp>
 
 #include <cxx-prettyprint/prettyprint.hpp>
+#include <fstream>
 
 #define SDEBUG(x) mxx::sync_cerr(c) << "[" << c.rank() << "]: " #x " = " << (x) << std::endl
 
@@ -129,8 +130,20 @@ void test_repeats(const std::string& seq, size_t reps, const mxx::comm& comm) {
         std::vector<uint64_t> glcp = mxx::gatherv(sa.local_LCP, 0, c);
         if (c.rank() == 0) {
             std::vector<uint64_t> ex_gsa = repeat_inc_gsa(seq.size(), reps);
+            if (gsa != ex_gsa) {
+                std::ofstream f("gsa.tsv");
+                for (size_t i = 0; i < gsa.size(); ++i) {
+                    f << ex_gsa[i] << "\t" << gsa[i] << std::endl;
+                }
+            }
             EXPECT_EQ(ex_gsa, gsa);
             std::vector<uint64_t> ex_lcp = repeat_inc_glcp(seq.size(), reps);
+            if (glcp != ex_lcp) {
+                std::ofstream f("lcp.tsv");
+                for (size_t i = 0; i < glcp.size(); ++i) {
+                    f << ex_lcp[i] << "\t" << glcp[i] << std::endl;
+                }
+            }
             EXPECT_EQ(ex_lcp, glcp);
         }
     });
