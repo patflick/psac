@@ -27,8 +27,8 @@
 
 #include <bulk_rma.hpp>
 
-template <typename Func, typename InputIterator, typename index_t = std::size_t>
-void for_each_parent(const suffix_array<InputIterator, index_t, true>& sa, Func func, const mxx::comm& comm) {
+template <typename Func, typename char_t, typename index_t = std::size_t>
+void for_each_parent(const suffix_array<char_t, index_t, true>& sa, Func func, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
     // get input sizes
     size_t local_size = sa.local_SA.size();
@@ -231,8 +231,8 @@ constexpr int edgechar_default = edgechar_bulk_rma;
  *
  * This can be deleted eventually.
  */
-template <typename InputIterator, typename index_t = std::size_t>
-std::vector<size_t> construct_st_2phase(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+template <typename Iterator, typename char_t, typename index_t = std::size_t>
+std::vector<size_t> construct_st_2phase(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
     // get input sizes
     size_t local_size = sa.local_SA.size();
@@ -257,8 +257,8 @@ std::vector<size_t> construct_st_2phase(const suffix_array<InputIterator, index_
     }, comm);
     t.end_section("locally calc parents");
 
-    typedef typename std::iterator_traits<InputIterator>::value_type CharT;
-    std::vector<CharT> edge_chars;
+    //typedef typename std::iterator_traits<InputIterator>::value_type CharT;
+    std::vector<char_t> edge_chars;
 
     // This is a slower method, because it sends all edges to the position
     // of the character first, and then back to the position of the parent.
@@ -279,7 +279,7 @@ std::vector<size_t> construct_st_2phase(const suffix_array<InputIterator, index_
             std::get<2>(parent_reqs[i]) = 0;
         } else {
             // get character from that global string position
-            std::get<2>(parent_reqs[i]) = sa.alpha.encode(static_cast<size_t>(*(sa.input_begin+(std::get<2>(parent_reqs[i])-prefix))));
+            std::get<2>(parent_reqs[i]) = sa.alpha.encode(static_cast<size_t>(*(str_begin+(std::get<2>(parent_reqs[i])-prefix))));
         }
     }
     // append the "dollar" requests
@@ -309,8 +309,8 @@ std::vector<size_t> construct_st_2phase(const suffix_array<InputIterator, index_
 }
 
 // original implementation used for SC16 and IPDPS17 papers
-template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
-std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+template <typename Iterator, typename char_t, typename index_t = std::size_t, int edgechar_method = edgechar_default>
+std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, Iterator str_end, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
     // get input sizes
     size_t local_size = sa.local_SA.size();
@@ -336,8 +336,8 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
     t.end_section("locally calc parents");
 
     // TODO: plus distinguish between dollar/parent req only for the first method
-    typedef typename std::iterator_traits<InputIterator>::value_type CharT;
-    std::vector<CharT> edge_chars;
+    //typedef typename std::iterator_traits<InputIterator>::value_type CharT;
+    std::vector<char_t> edge_chars;
     if (edgechar_method == edgechar_bulk_rma) {
         mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
         // send those edges for which the parent lies on a remote processor
@@ -365,7 +365,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         }
         t.end_section("bulk_rma: create global_indexes");
         // use global bulk RMA for getting the corresponding characters
-        edge_chars = bulk_rma(sa.input_begin, sa.input_end, global_indexes, send_counts, comm);
+        edge_chars = bulk_rma(str_begin, str_end, global_indexes, send_counts, comm);
         t.end_section("bulk_rma: bulk_rma");
     } else {
         mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
@@ -382,15 +382,15 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
 
         // TODO: bulk_rma_mpi only for non-dollar
         if (edgechar_method == edgechar_mpi_osc_rma) {
-            edge_chars = bulk_rma_mpiwin(sa.input_begin, sa.input_end, global_indexes, comm);
+            edge_chars = bulk_rma_mpiwin(str_begin, str_end, global_indexes, comm);
 #if MPI_VERSION > 2
         } else if (edgechar_method == edgechar_rma_shared) {
-            edge_chars = bulk_rma_shm_mpi(sa.input_begin, sa.input_end, global_indexes, comm);
+            edge_chars = bulk_rma_shm_mpi(str_begin, str_end, global_indexes, comm);
 #endif
         } else if (edgechar_method == edgechar_posix_sm) {
-            edge_chars = bulk_rma_shm_posix(sa.input_begin, sa.input_end, global_indexes, comm);
+            edge_chars = bulk_rma_shm_posix(str_begin, str_end, global_indexes, comm);
         } else if (edgechar_method == edgechar_posix_sm_split) {
-            edge_chars = bulk_rma_shm_posix_split(sa.input_begin, sa.input_end, global_indexes, comm);
+            edge_chars = bulk_rma_shm_posix_split(str_begin, str_end, global_indexes, comm);
         }
         t.end_section("RMA read chars");
     }
@@ -408,7 +408,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<InputIterator, inde
         size_t parent = std::get<0>(parent_reqs[i]);
         size_t node_idx = (parent - prefix)*(sa.alpha.sigma()+1);
         uint16_t c;
-        CharT x = edge_chars[i];
+        char_t x = edge_chars[i];
         if (x == 0) {
             c = 0;
         } else {
@@ -450,8 +450,8 @@ std::ostream& operator<<(std::ostream& os, const edge& e) {
 
 MXX_CUSTOM_STRUCT(edge, parent, gidx);
 
-template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
-std::vector<size_t> construct_suffix_tree_edges(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+template <typename Iterator, typename char_t, typename index_t = std::size_t, int edgechar_method = edgechar_default>
+std::vector<size_t> construct_suffix_tree_edges(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, Iterator str_end, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
 
     // get input sizes
@@ -492,8 +492,8 @@ std::vector<size_t> construct_suffix_tree_edges(const suffix_array<InputIterator
     mxx::sync_cout(comm) << "regular edges: " << edges.size() << "/" << 2*local_size << ", dollar: " << dollar_edges.size() << ", remote: " << remote_edges.size() << std::endl;
 
     // TODO: plus distinguish between dollar/parent req only for the first method
-    typedef typename std::iterator_traits<InputIterator>::value_type CharT;
-    std::vector<CharT> edge_chars;
+    //typedef typename std::iterator_traits<InputIterator>::value_type CharT;
+    std::vector<char_t> edge_chars;
 
     mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
     // send those edges for which the parent lies on a remote processor
@@ -510,18 +510,18 @@ std::vector<size_t> construct_suffix_tree_edges(const suffix_array<InputIterator
 
     if (edgechar_method == edgechar_bulk_rma) {
         // use global bulk RMA for getting the corresponding characters
-        edge_chars = bulk_rma(sa.input_begin, sa.input_end, char_indexes, comm);
+        edge_chars = bulk_rma(str_begin, str_end, char_indexes, comm);
         t.end_section("bulk_rma: bulk_rma");
     } else {
         // shared memory versions
         if (edgechar_method == edgechar_mpi_osc_rma) {
-            edge_chars = bulk_rma_mpiwin(sa.input_begin, sa.input_end, char_indexes, comm);
+            edge_chars = bulk_rma_mpiwin(str_begin, str_end, char_indexes, comm);
         } else if (edgechar_method == edgechar_rma_shared) {
-            edge_chars = bulk_rma_shm_mpi(sa.input_begin, sa.input_end, char_indexes, comm);
+            edge_chars = bulk_rma_shm_mpi(str_begin, str_end, char_indexes, comm);
         } else if (edgechar_method == edgechar_posix_sm) {
-            edge_chars = bulk_rma_shm_posix(sa.input_begin, sa.input_end, char_indexes, comm);
+            edge_chars = bulk_rma_shm_posix(str_begin, str_end, char_indexes, comm);
         } else if (edgechar_method == edgechar_posix_sm_split) {
-            edge_chars = bulk_rma_shm_posix_split(sa.input_begin, sa.input_end, char_indexes, comm);
+            edge_chars = bulk_rma_shm_posix_split(str_begin, str_end, char_indexes, comm);
         }
         t.end_section("RMA read chars");
     }
@@ -532,7 +532,7 @@ std::vector<size_t> construct_suffix_tree_edges(const suffix_array<InputIterator
     std::vector<size_t> internal_nodes((sigma+1)*local_size);
     for (size_t i = 0; i < edges.size(); ++i) {
         size_t node_idx = (edges[i].parent - prefix)*(sigma+1);
-        CharT x = edge_chars[i];
+        char_t x = edge_chars[i];
         uint16_t c = sa.alpha.encode(x);
         MXX_ASSERT(0 <= c && c < sigma+1);
         size_t cell_idx = node_idx + c;
@@ -579,10 +579,11 @@ public:
 };
 
 // experimental shared memory implementation for suffix tree construction
-template <typename InputIterator, typename index_t = std::size_t, int edgechar_method = edgechar_default>
-std::vector<size_t> construct_suffix_tree_sm(const suffix_array<InputIterator, index_t, true>& sa, const mxx::comm& comm) {
+template <typename Iterator, typename char_t, typename index_t = std::size_t, int edgechar_method = edgechar_default>
+std::vector<size_t> construct_suffix_tree_sm(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, Iterator str_end, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
-    typedef typename std::iterator_traits<InputIterator>::value_type CharT;
+    //typedef typename std::iterator_traits<InputIterator>::value_type CharT;
+    using CharT = char_t;
 
     // get input sizes
     size_t local_size = sa.local_SA.size();
@@ -603,7 +604,7 @@ std::vector<size_t> construct_suffix_tree_sm(const suffix_array<InputIterator, i
     std::vector<std::pair<edge, size_t>> remote_edges;
 
     // create shared memory window over input string
-    shmem_window_posix_split<CharT> win(sa.input_begin, sa.input_end, comm);
+    shmem_window_posix_split<CharT> win(str_begin, str_end, comm);
     t.end_section("create shared mem window");
 
     size_t sigma = sa.sigma+1;

@@ -39,15 +39,15 @@ void benchmark_all(const std::string& local_str, MPI_Comm comm)
     MPI_Comm_rank(comm, &rank);
     mxx::timer t;
 
-    typedef suffix_array<std::string::const_iterator, std::size_t, false> sa_t;
-    typedef suffix_array<std::string::const_iterator, std::size_t, true> sa_lcp_t;
+    typedef suffix_array<char, std::size_t, false> sa_t;
+    typedef suffix_array<char, std::size_t, true> sa_lcp_t;
 
     {
         // without LCP and slow
         std::string method_name = "reg-nolcp";
         double start = t.elapsed();
-        sa_t sa(local_str.begin(), local_str.end(), comm);
-        sa.construct(false);
+        sa_t sa(comm);
+        sa.construct(local_str.begin(), local_str.end(), false);
         double time = t.elapsed() - start;
         if (rank == 0)
             std::cout << p << ";" << method_name << ";" << time << std::endl;
@@ -56,8 +56,8 @@ void benchmark_all(const std::string& local_str, MPI_Comm comm)
         // without LCP and fast
         std::string method_name = "reg-fast-nolcp";
         double start = t.elapsed();
-        sa_t sa(local_str.begin(), local_str.end(), comm);
-        sa.construct(true);
+        sa_t sa(comm);
+        sa.construct(local_str.begin(), local_str.end(), true);
         double time = t.elapsed() - start;
         if (rank == 0)
             std::cout << p << ";" << method_name << ";" << time << std::endl;
@@ -66,8 +66,8 @@ void benchmark_all(const std::string& local_str, MPI_Comm comm)
         // with LCP and slow
         std::string method_name = "reg-lcp";
         double start = t.elapsed();
-        sa_lcp_t sa(local_str.begin(), local_str.end(), comm);
-        sa.construct(false);
+        sa_lcp_t sa(comm);
+        sa.construct(local_str.begin(), local_str.end(), false);
         double time = t.elapsed() - start;
         if (rank == 0)
             std::cout << p << ";" << method_name << ";" << time << std::endl;
@@ -76,13 +76,14 @@ void benchmark_all(const std::string& local_str, MPI_Comm comm)
         // with LCP and fast
         std::string method_name = "reg-fast-lcp";
         double start = t.elapsed();
-        sa_lcp_t sa(local_str.begin(), local_str.end(), comm);
-        sa.construct(true);
+        sa_lcp_t sa(comm);
+        sa.construct(local_str.begin(), local_str.end(), true);
         double time = t.elapsed() - start;
         if (rank == 0)
             std::cout << p << ";" << method_name << ";" << time << std::endl;
     }
     // faster (skipping a few steps and switch to the bucket chaising quciker)
+    /*
     {
         // without LCP
         std::string method_name = "fast-nolcp";
@@ -103,6 +104,7 @@ void benchmark_all(const std::string& local_str, MPI_Comm comm)
         if (rank == 0)
             std::cout << p << ";" << method_name << ";" << time << std::endl;
     }
+    */
     // TODO: array construction with multiple
 }
 

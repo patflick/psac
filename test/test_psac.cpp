@@ -28,8 +28,8 @@
 #include <lcp.hpp>
 
 
-template <typename Iterator, typename index_t, bool _LCP>
-bool check_sa_dss(suffix_array<Iterator, index_t, _LCP>& sa, const std::string& str, const mxx::comm& c) {
+template <typename char_t, typename index_t, bool _LCP>
+bool check_sa_dss(suffix_array<char_t, index_t, _LCP>& sa, const std::string& str, const mxx::comm& c) {
     // gather SA back to root process
     std::vector<index_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
 
@@ -46,8 +46,8 @@ bool check_sa_dss(suffix_array<Iterator, index_t, _LCP>& sa, const std::string& 
     //bool correct = gl_check_correct(sa, local_str.begin(), local_str.end(), c);
 }
 
-template <typename Iterator, typename index_t, bool _LCP>
-bool check_lcp_eq(suffix_array<Iterator, index_t, _LCP>& sa, const std::string& local_str, const mxx::comm& c) {
+template <typename char_t, typename index_t, bool _LCP>
+bool check_lcp_eq(suffix_array<char_t, index_t, _LCP>& sa, const std::string& local_str, const mxx::comm& c) {
     // gather LCP back to root process
     std::vector<index_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
     std::vector<index_t> gisa = mxx::gatherv(sa.local_B, 0, c);
@@ -73,8 +73,8 @@ bool check_lcp_eq(suffix_array<Iterator, index_t, _LCP>& sa, const std::string& 
     return sa_correct && lcp_correct;
 }
 
-template <typename Iterator, typename index_t, bool _LCP>
-bool check_sa_eqdss(suffix_array<Iterator, index_t, _LCP>& sa, const std::string& str, const mxx::comm& c) {
+template <typename char_t, typename index_t, bool _LCP>
+bool check_sa_eqdss(suffix_array<char_t, index_t, _LCP>& sa, const std::string& str, const mxx::comm& c) {
     // gather SA back to root process
     std::vector<index_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
 
@@ -112,32 +112,32 @@ TEST(PSAC, RandAll) {
     std::string local_str = mxx::stable_distribute(str, c);
 
     // create suffix array w/o LCP
-    suffix_array<std::string::iterator, uint32_t, false> sa(local_str.begin(), local_str.end(), c);
+    suffix_array<char, uint32_t, false> sa(c);
 
     // construct suffix array
-    sa.construct();
+    sa.construct(local_str.begin(), local_str.end());
     ASSERT_TRUE(check_sa_dss(sa, str, c));
     ASSERT_TRUE(check_sa_eqdss(sa, str, c));
 
     // construct with custom `k` to force early bucket chaising
-    sa.construct(true, 3);
+    sa.construct(local_str.begin(), local_str.end(), true, 3);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
     ASSERT_TRUE(check_sa_eqdss(sa, str, c));
 
     // construct without bucket chaising
-    sa.construct(false, 2);
+    sa.construct(local_str.begin(), local_str.end(), false, 2);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 
     // construct with std::array based construction
-    sa.construct_arr<2>(true);
+    sa.construct_arr<2>(local_str.begin(), local_str.end(), true);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 
     // construct with prefix-tripling
-    sa.construct_arr<3>(true);
+    sa.construct_arr<3>(local_str.begin(), local_str.end(), true);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 
     // construct with prefix-quadrupling
-    sa.construct_arr<3>(false);
+    sa.construct_arr<3>(local_str.begin(), local_str.end(), false);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 
     //TODO this one fails
@@ -164,32 +164,32 @@ TEST(PSAC, RepeatsAll) {
     std::string local_str = mxx::stable_distribute(str, c);
 
     // create suffix array w/o LCP
-    suffix_array<std::string::iterator, uint64_t, false> sa(local_str.begin(), local_str.end(), c);
+    suffix_array<char, uint64_t, false> sa(c);
 
     // construct suffix array
-    sa.construct();
+    sa.construct(local_str.begin(), local_str.end());
     ASSERT_TRUE(check_sa_dss(sa, str, c));
     ASSERT_TRUE(check_sa_eqdss(sa, str, c));
 
     // construct with custom `k` to force early bucket chaising
-    sa.construct(true, 3);
+    sa.construct(local_str.begin(), local_str.end(), true, 3);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
     ASSERT_TRUE(check_sa_eqdss(sa, str, c));
 
     // construct without bucket chaising
-    sa.construct(false, 2);
+    sa.construct(local_str.begin(), local_str.end(), false, 2);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 
     // construct with std::array based construction
-    sa.construct_arr<2>(true);
+    sa.construct_arr<2>(local_str.begin(), local_str.end(), true);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 
     // construct with prefix-tripling
-    sa.construct_arr<3>(true);
+    sa.construct_arr<3>(local_str.begin(), local_str.end(), true);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 
     // construct with prefix-quadrupling
-    sa.construct_arr<3>(false);
+    sa.construct_arr<3>(local_str.begin(), local_str.end(), false);
     ASSERT_TRUE(check_sa_dss(sa, str, c));
 }
 
@@ -209,8 +209,8 @@ TEST(PSAC, SmallStrings) {
         std::string local_str = mxx::stable_distribute(str, subcomm);
 
         // create suffix array w/o LCP
-        suffix_array<std::string::iterator, uint32_t, false> sa(local_str.begin(), local_str.end(), subcomm);
-        sa.construct();
+        suffix_array<char, uint32_t, false> sa(subcomm);
+        sa.construct(local_str.begin(), local_str.end());
 
         correct = check_sa_dss(sa, str, subcomm);
     });
@@ -230,15 +230,15 @@ TEST(PSAC, Lcp1) {
     // distribute string equally
     std::string local_str = mxx::stable_distribute(str, c);
 
-    // create suffix array w/o LCP
-    suffix_array<std::string::iterator, uint64_t, true> sa(local_str.begin(), local_str.end(), c);
+    // create suffix array with LCP
+    suffix_array<char, uint64_t, true> sa(c);
 
     // construct suffix  and LCP array
-    sa.construct();
+    sa.construct(local_str.begin(), local_str.end());
     EXPECT_TRUE(check_sa_dss(sa, str, c));
     EXPECT_TRUE(check_lcp_eq(sa, local_str, c));
     // construct suffix and LCP array using artificial small `k` to force bucket chaising
-    sa.construct(true, 3);
+    sa.construct(local_str.begin(), local_str.end(), true, 3);
     EXPECT_TRUE(check_sa_dss(sa, str, c));
     EXPECT_TRUE(check_lcp_eq(sa, local_str, c));
 }

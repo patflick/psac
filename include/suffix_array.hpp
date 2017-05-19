@@ -25,6 +25,11 @@
 #include "kmer.hpp"
 #include "par_rmq.hpp"
 #include "shifting.hpp"
+#include "bucketing.hpp"
+#include "stringset.hpp"
+#include "bulk_permute.hpp"
+#include "bulk_rma.hpp"
+#include "idxsort.hpp"
 
 #include <mxx/datatypes.hpp>
 #include <mxx/shift.hpp>
@@ -71,12 +76,11 @@ struct TwoBSA {
     }
 };
 
-template <typename T1, typename T2>
-struct pair_sum {
-    std::pair<T1,T2> operator()(const std::pair<T1,T2>& x, const std::pair<T1,T2>& y) {
-        return std::pair<T1,T2>(x.first+y.first,x.second+y.second);
-    }
-};
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const TwoBSA<T>& t){
+    return os << "{" << t.SA << "," << t.B1 << "," << t.B2 << "}";
+}
+
 
 // specialize MPI datatype (mxx)
 namespace mxx {
@@ -100,19 +104,15 @@ class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 }
 
 
-// class representing distributed buckets/subranges
-// TODO TODO TODO TODO TODO TODO TODO
-class dbuckets {
-    dbuckets(const mxx::comm& comm) {
-    }
-};
-
 
 // distributed suffix array
-template <typename InputIterator, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
+template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
 class suffix_array {
 private:
 public:
+    suffix_array(const mxx::comm& _comm) : comm(_comm.copy()) {
+    }
+    /*
     suffix_array(InputIterator begin, InputIterator end, const mxx::comm& _comm)
         : comm(_comm.copy()), p(comm.size()),
         input_begin(begin), input_end(end)
@@ -127,10 +127,13 @@ public:
         if (part.local_size() != local_size)
             throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
     }
+    */
     virtual ~suffix_array() {}
+
 private:
     /// The global size of the input string and suffix array
     std::size_t n;
+
     /// The local size of the input string and suffix array
     /// is either floor(n/p) or ceil(n/p) and based on a equal block
     /// distribution
@@ -143,20 +146,20 @@ private:
     int p;
 
     // The block decomposition for the suffix array
-    mxx::partition::block_decomposition_buffered<index_t> part;
+    mxx::partition::block_decomposition_buffered<size_t> part;
 
 public:
     /// Iterators over the local input string
-    InputIterator input_begin;
+    //InputIterator input_begin;
     /// End iterator for local input string
-    InputIterator input_end;
+    //InputIterator input_end;
 
-    using char_type = typename std::iterator_traits<InputIterator>::value_type;
+    //using char_type = typename std::iterator_traits<InputIterator>::value_type;
+    using char_type = char_t;
     using alphabet_type = alphabet<char_type>;
     alphabet_type alpha;
 
-
-public: // TODO: make private again and provide some iterator and query access
+public:
     /// The local suffix array
     std::vector<index_t> local_SA;
     /// The local inverse suffix array (TODO: rename?)
@@ -171,68 +174,115 @@ private:
 
 public:
 
-// TODO: first we need yet another tuple based construction algo, similar to
-// std::array based but fixed to 2 (for easier LCP etc), and then extend this to
-// multiple sequences
-template <typename StringSet>
-void construct_ss(const StringSet& ss) {
+void init_size(size_t lsize) {
+    local_size = lsize;
+    n = mxx::allreduce(local_size, this->comm);
+    // get distribution
+    part = mxx::partition::block_decomposition_buffered<size_t>(n, comm.size(), comm.rank());
+
+    p = comm.size();
+
+    // assert a block decomposition
+    if (part.local_size() != local_size)
+        throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
+}
+
+//template <typename StringSet> TODO template later
+void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
     SAC_TIMER_START();
     /***********************
      *  Initial bucketing  *
      ***********************/
 
     // detect alphabet and get encoding
-    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
-    unsigned int bits_per_char = alpha.bits_per_char();
-    unsigned int k = get_optimal_k(alpha);
+    // TODO: get alphabet from string set
+    //alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
+
+    unsigned int k = get_optimal_k<index_t>(alpha, ss.sum_sizes, comm);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
     }
     SAC_TIMER_END_SECTION("alphabet detection");
 
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
-    local_B = kmer_generation<index_t>(ss, k, alpha, comm);
+    dist_seqs ds = dist_seqs::from_dss(ss, comm);
+    local_B = kmer_gen_stringset<index_t>(ss, k, alpha, comm);
+    mxx::stable_distribute_inplace(local_B, comm);
+    init_size(local_B.size());
     SAC_TIMER_END_SECTION("kmer generation");
 
     size_t shift_by;
+    std::vector<index_t> local_B_SA;
+    size_t unfinished_buckets, unfinished_elements;
     for (shift_by = k; shift_by < n; shift_by <<= 1) {
         // 1) doubling by shifting into tuples (2BSA kind of structure)
-        std::vector<index_t> B2 = shift_buckets_ss(ss);
+        std::vector<index_t> B2 = shift_buckets_ds(ds, local_B, shift_by, comm);
+
         // 2) sort by (B1, B2)
-        // 2) LCP
-        // 3) rebucket (B1, B2) -> B1
-        // 4) reverse order to SA order
+        local_SA = idxsort_vectors<index_t, index_t, true>(local_B, B2, comm);
+
+        // 4) rebucket (B1, B2) -> B1 and LCP contruction
+        if (shift_by == k) {
+            if (_CONSTRUCT_LCP) {
+                initial_kmer_lcp_gsa(k, alpha.bits_per_char(), B2);
+            }
+            std::tie(unfinished_buckets, unfinished_elements) = rebucket_gsa_kmers(local_B, B2, true, comm, alpha.bits_per_char());
+        } else {
+            if (_CONSTRUCT_LCP) {
+                resolve_next_lcp(shift_by, B2);
+            }
+            std::tie(unfinished_buckets, unfinished_elements) = rebucket_gsa(local_B, B2, true, comm);
+        }
+        if (comm.rank() == 0) {
+            INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << ", unfinished elements = " << unfinished_elements);
+        }
+
+        // 5) reverse order to SA order
+        if ((shift_by << 1) >= n || unfinished_buckets == 0) {
+            // if last iteration, use copy of local_SA for reorder and keep
+            // original SA
+            std::vector<index_t> cpy_SA(local_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
+        //} else if (unfinished_elements < n/10) {
+        } else if (true) {
+            // switch to A2: bucket chaising
+            // prepare for bucket chaising (needs SA, and bucket arrays in both
+            // SA and ISA order)
+            std::vector<index_t> cpy_SA(local_SA);
+            local_B_SA = local_B; // copy
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
+            break;
+        } else {
+            bulk_permute_inplace(local_B, local_SA, part, comm);
+            //SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
+        }
+        if (unfinished_buckets == 0)
+            break;
+    }
+
+    if (unfinished_buckets > 0) {
+        if (comm.rank() == 0)
+            INFO("Starting Bucket chasing algorithm");
+        construct_msgs_gsa(ds, local_B_SA, local_B, 2*shift_by);
+    }
+
+    SAC_TIMER_END_SECTION("construct-msgs");
+    for (std::size_t i = 0; i < local_B.size(); ++i) {
+        // the buffer indeces are `1` based indeces, but the ISA should be
+        // `0` based indeces
+        local_B[i] -= 1;
     }
 }
 
-
-void construct(bool fast_resolval = true, unsigned int k = 0) {
+template <typename Iterator>
+void construct(Iterator begin, Iterator end, bool fast_resolval, const alphabet_type& alpha, unsigned int k) {
     SAC_TIMER_START();
-
-    /***********************
-     *  Initial bucketing  *
-     ***********************/
-
-    // detect alphabet and get encoding
-    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
-    unsigned int bits_per_char = alpha.bits_per_char();
-    k = get_optimal_k(alpha, k);
-    if(comm.rank() == 0) {
-        INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
-    }
-
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
-    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
-    SAC_TIMER_END_SECTION("initial-bucketing");
-
-    // init local_SA
-    if (local_SA.size() != local_B.size()) {
-        local_SA.resize(local_B.size());
-    }
+    local_B = kmer_generation<index_t>(begin, end, k, alpha, comm);
+    SAC_TIMER_END_SECTION("kmer-gen");
 
     std::vector<index_t> local_B_SA;
     std::size_t unfinished_buckets = 1<<k;
@@ -248,14 +298,14 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
          *  Pairing buckets by shifting `shift_by` = 2^i  *
          **************************************************/
         // shift the B1 buckets by 2^i to the left => equals B2
-        std::vector<index_t> local_B2 = shift_buckets(shift_by);
+        std::vector<index_t> local_B2 = shift_vector(local_B, part, shift_by, comm);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets");
 
         /*************
          *  ISA->SA  *
          *************/
         // by using sample sort on tuples (B1,B2)
-        isa_2b_to_sa(local_B2);
+        local_SA = idxsort_vectors<index_t, index_t>(local_B, local_B2, comm);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "ISA-to-SA");
 
         /****************
@@ -264,7 +314,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
         // if this is the first iteration: create LCP, otherwise update
         if (_CONSTRUCT_LCP) {
             if (shift_by == k) {
-                initial_kmer_lcp(k, bits_per_char, local_B2);
+                initial_kmer_lcp(k, alpha.bits_per_char(), local_B2);
                 SAC_TIMER_END_LOOP_SECTION(shift_by, "init-lcp");
             } else {
                 resolve_next_lcp(shift_by, local_B2);
@@ -275,7 +325,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
         /*******************************
          *  Assign new bucket numbers  *
          *******************************/
-        std::tie(unfinished_buckets, unfinished_elements) = rebucket(local_B2, true);
+        std::tie(unfinished_buckets, unfinished_elements) = rebucket(local_B, local_B2, true, comm);
         if (comm.rank() == 0) {
             INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << ", unfinished elements = " << unfinished_elements);
         }
@@ -290,7 +340,7 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
             // SA and ISA order)
             std::vector<index_t> cpy_SA(local_SA);
             local_B_SA = local_B; // copy
-            reorder_sa_to_isa(cpy_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
             SAC_TIMER_END_SECTION("sac-iteration");
             break;
@@ -298,10 +348,10 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
             // if last iteration, use copy of local_SA for reorder and keep
             // original SA
             std::vector<index_t> cpy_SA(local_SA);
-            reorder_sa_to_isa(cpy_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         } else {
-            reorder_sa_to_isa();
+            bulk_permute_inplace(local_B, local_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
 
@@ -329,34 +379,54 @@ void construct(bool fast_resolval = true, unsigned int k = 0) {
     SAC_TIMER_END_SECTION("fix-isa");
 }
 
-// generalized to more than "doubling" (e.g. prefix-trippling with L=3)
-// NOTE: this implementation doesn't support building the LCP (SA + ISA only)
-template <std::size_t L = 2>
-void construct_arr(bool fast_resolval = true) {
+
+template <typename Iterator>
+void construct(Iterator begin, Iterator end, bool fast_resolval = true, unsigned int k = 0) {
+
     SAC_TIMER_START();
+    /* get sizes */
+    // the local size of the input
+    init_size(std::distance(begin, end));
 
     /***********************
      *  Initial bucketing  *
      ***********************/
 
     // detect alphabet and get encoding
-    alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
-    unsigned int bits_per_char = alpha.bits_per_char();
-    unsigned int k = get_optimal_k(alpha);
+    alpha = alphabet_type::from_sequence(begin, end, comm);
+    k = get_optimal_k<index_t>(alpha, local_size, comm, k);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
+    }
+
+    construct(begin, end, fast_resolval, alpha, k);
+}
+
+// generalized to more than "doubling" (e.g. prefix-trippling with L=3)
+// NOTE: this implementation doesn't support building the LCP (SA + ISA only)
+template <std::size_t L, typename Iterator>
+void construct_arr(Iterator begin, Iterator end, bool fast_resolval = true) {
+    SAC_TIMER_START();
+    init_size(std::distance(begin, end));
+
+    /***********************
+     *  Initial bucketing  *
+     ***********************/
+
+    // detect alphabet and get encoding
+    alpha = alphabet_type::from_sequence(begin, end, comm);
+    unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
+    if(comm.rank() == 0) {
+        INFO("Alphabet: " << alpha.unique_chars());
+        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
     }
 
     // create initial k-mers and use these as the initial bucket numbers
     // for each character position
-    local_B = kmer_generation<index_t>(input_begin, input_end, k, alpha, comm);
+    local_B = kmer_generation<index_t>(begin, end, k, alpha, comm);
     SAC_TIMER_END_SECTION("initial-bucketing");
 
-    // init local_SA
-    if (local_SA.size() != local_B.size()) {
-        local_SA.resize(local_B.size());
-    }
 
     std::vector<index_t> local_B_SA;
     std::size_t unfinished_buckets = 1<<k;
@@ -384,7 +454,7 @@ void construct_arr(bool fast_resolval = true) {
          *  Pairing buckets by shifting `shift_by` = 2^k  *
          **************************************************/
         // shift the B1 buckets by 2^k to the left => equals B2
-        shift_buckets<L>(shift_by, tuples);
+        multi_shift_inplace<index_t, L>(tuples, part, shift_by, comm);
         SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets");
 
 
@@ -417,7 +487,7 @@ void construct_arr(bool fast_resolval = true) {
         /*******************************
          *  Assign new bucket numbers  *
          *******************************/
-        std::tie(unfinished_buckets,unfinished_elements) = rebucket_arr<L>(tuples, true);
+        std::tie(unfinished_buckets,unfinished_elements) = rebucket_arr<L>(tuples, local_B, true, comm);
         if (comm.rank() == 0) {
             INFO("iteration " << shift_by << ": unfinished buckets = " << unfinished_buckets << ", unfinished elements = " << unfinished_elements);
         }
@@ -427,6 +497,9 @@ void construct_arr(bool fast_resolval = true) {
         /**************************************
          *  Reset local_SA array from tuples  *
          **************************************/
+
+        // init local_SA
+        local_SA.resize(local_size);
         for (std::size_t i = 0; i < local_size; ++i) {
             local_SA[i] = tuples[i][0];
         }
@@ -447,17 +520,17 @@ void construct_arr(bool fast_resolval = true) {
             // SA and ISA order)
             std::vector<index_t> cpy_SA(local_SA);
             local_B_SA = local_B; // copy
-            reorder_sa_to_isa(cpy_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
             break;
         } else if ((shift_by * L) >= n || unfinished_buckets == 0) {
             // if last iteration, use copy of local_SA for reorder and keep
             // original SA
             std::vector<index_t> cpy_SA(local_SA);
-            reorder_sa_to_isa(cpy_SA);
+            bulk_permute_inplace(local_B, cpy_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         } else {
-            reorder_sa_to_isa();
+            bulk_permute_inplace(local_B, local_SA, part, comm);
             SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
 
@@ -485,6 +558,7 @@ void construct_arr(bool fast_resolval = true) {
     SAC_TIMER_END_SECTION("fix-isa");
 }
 
+#if 0
 void construct_fast() {
     SAC_TIMER_START();
 
@@ -495,7 +569,7 @@ void construct_fast() {
     // detect alphabet and get encoding
     alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
     unsigned int bits_per_char = alpha.bits_per_char();
-    unsigned int k = get_optimal_k(alpha);
+    unsigned int k = get_optimal_k<index_t>(alpha, local_size, comm);
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha.unique_chars());
         INFO("Detecting sigma=" << alpha.sigma() << " => l=" << bits_per_char << ", k=" << k);
@@ -524,7 +598,7 @@ void construct_fast() {
 
     std::vector<index_t> cpy_SA(local_SA);
     std::vector<index_t> local_B_SA(local_B); // copy
-    reorder_sa_to_isa(cpy_SA);
+    bulk_permute_inplace(local_B, cpy_SA, part, comm);
     SAC_TIMER_END_SECTION("sa2isa");
 
     cpy_SA.clear();
@@ -544,483 +618,16 @@ void construct_fast() {
     SAC_TIMER_END_SECTION("fix-isa");
 }
 
+#endif
 
 
 private:
 
-unsigned int get_optimal_k(const alphabet_type& a, unsigned int k = 0) {
-    // number of characters per word => the `k` in `k-mer`
-    unsigned int max_k = a.template chars_per_word<index_t>();
-    if (k == 0 || k > max_k) {
-        if (k > max_k)
-             INFO("[WARNING] given `k` value of " << k << " is too large, setting k=" << max_k << " instead.");
-        k = max_k;
-    }
-    // if the input is too small for `k`, choose a smaller `k`
-    std::size_t min_local_size = part.local_size(p-1);
-    if (k >= min_local_size) {
-        k = min_local_size;
-        if (comm.size() == 1 && k > 1)
-            k--;
-    }
-    return k;
-}
-
-
-/*********************************************************************
- *               Shifting buckets (i -> i + 2^l) => B2               *
- *********************************************************************/
-template <typename StringSet>
-std::vector<index_t> shift_buckets_ss_nosplit(const StringSet& ss, const std::vector<index_t>& vec, std::size_t dist) {
-    // if strings are not split accross processors: easy, no communication
-    // necessary, just 0 fill once outside string
-    std::vector<index_t> result(vec.size());
-
-    // for each string: memcopy segments backward in input and std::fill rest with 0
-    auto oit = result.begin();
-    auto iit = vec.begin();
-    for (auto& s : ss) {
-        size_t ssize = s.size();
-        if (dist < ssize) {
-            std::copy(iit+dist, iit+ssize, oit);
-            // not necessary because vector is initialized with `0`
-            // std::fill(oit+(ssize-dist), oit+ssize, static_cast<index_t>(0));
-        } else {
-            // not necessary because vector is initialized with `0`
-            // std::fill(oit, oit+ssize, static_cast<index_t>(0));
-        }
-        oit += ssize;
-        iit += ssize;
-    }
-    return result;
-}
-
-template <typename drange>
-class dbuckets {
-    const drange& dr;
-    std::vector<size_t> local_begins;
-    std::vector<std::pair<size_t,size_t>> split_buckets;
-
-    std::pair<size_t, size_t> inner_buckets;
-    //dbuckets(drange, func) {}
-    dbuckets(const drange& dr, const std::vector<size_t>& local_begins) : dr(dr), local_begins(local_begins) {}
-
-    void init_split_buckets(const std::vector<size_t>& local_begins) {
-        // for each bucket that is split across this processors boundary,
-        // we save the [begin, end) global indexes
-        //enum split_types {NO_SPLITS=0, LEFT_SPLIT=1, RIGHT_SPLIT=2, BOTH_SPLIT=3};
-        //split_types split_type;
-
-        // assume array of global indexes as "bucket splitters"
-        size_t last_bucket_start, first_bucket_end;
-        if (local_begins.size() == 0) {
-            first_bucket_end = std::numeric_limits<size_t>::max();
-            last_bucket_start = 0;
-            if (dr.comm().rank() == dr.comm().size() - 1) {
-                first_bucket_end = dr.global_size();
-            }
-        } else {
-            first_bucket_end = local_begins.front();
-            last_bucket_start = local_begins.back();
-        }
-
-        size_t left_last_start = mxx::exscan(last_bucket_start, mxx::max<size_t>(), dr.comm());
-        size_t right_first_end = mxx::exscan(first_bucket_end, mxx::min<size_t>(), dr.comm().reverse());
-
-        // check how sequences are split
-        //split_type = NO_SPLITS;
-
-        // First check if the sequence extends beyond left and right process
-        if (dr.comm().rank() != 0 && dr.comm().rank() != dr.comm().size() - 1 && local_begins.empty() && right_first_end != dr.iprefix()) {
-            // bucket extends to left and right processes
-            split_buckets.emplace_back(left_last_start, right_first_end);
-            //split_type = BOTH_SPLIT;
-            // no inner buckets
-            inner_buckets.first = inner_buckets.second = 0;
-        } else {
-            // check if left-most bucket extends to previous processor
-            if (dr.comm().rank() != 0 && first_bucket_end != dr.eprefix()) {
-                split_buckets.emplace_back(left_last_start, first_bucket_end);
-            }
-
-            // check if right-most bucket extends to next processor
-            if (dr.comm().rank() != dr.comm().size() - 1 && right_first_end != dr.iprefix()) {
-                split_buckets.emplace_back(last_bucket_start, right_first_end);
-            }
-        }
-    }
-
-    size_t local_num_splits() {
-    }
-
-    bool local_has_splits() {
-    }
-
-    inline std::vector<std::pair<size_t, size_t>> local_split_buckets() const {
-        return split_buckets;
-    }
-};
-
-
-template <typename StringSet>
-std::vector<index_t> shift_buckets_ss_wsplit(const StringSet& ss, const std::vector<index_t>& vec, std::size_t dist) {
-    size_t prefix = part.excl_prefix_size();
-
-    // for each bucket: shift
-    std::vector<index_t> result(vec.size());
-
-    dvector_const_wrapper<index_t, blk_dist> src(vec, comm);
-    dvector_wrapper<index_t, blk_dist> dst(result, comm);
-
-    // for each bucket which is split across processors, use global range communication
-    mxx::requests req;
-    for (auto s : dbuckets.split_buckets()) {
-        // icopy range based on bucket range and distance
-        size_t ssize = s.second - s.first;
-        if (dist < ssize) {
-            req.insert(icopy_global_range(src, s.first + dist, s.second, dst, s.first, s.second - dist));
-        }
-        // otherwise fill with 0?
-    }
-
-    // for all purely internal buckets: shift using simple std::copy
-
-
-    // TODO: (re)move the stuff below
-
-    // Generally [seq_begin+dist, seq_end) => [seq_begin, seq_end-dist)
-    size_t src_begin = std::min<size_t>(seq_begin + dist, seq_end);
-    size_t src_end = seq_end;
-
-    size_t dst_begin = seq_begin;
-    size_t dst_end = std::max<size_t>((seq_end >= dist) ? seq_end - dist : 0, dst_begin);
-
-
-
-    // TODO: truncate only my part (both send and receive)
-
-
-    // =>  [my_begin+dist, min(seq_end, my_end+dist))   -> [my_begin, min(my_end, seq_end-dist))
-
-    if (ss.local_starts() == 0 && first_split && last_split) {
-
-        /* TODO special case when no range start/end on this processor */
-        {
-            size_t mystart = std::max<size_t>(first_range_start + dist, prefix);
-            size_t target_start = mystart - dist;
-
-            // end of range i send depends on whether there are any splits in local range
-            // i'm not sure what to do here!?
-            // need to send to left, and receive from right, for same sequence!
-            size_t myend = std::min<size_t>(last_range_end, prefix+local_size);
-            size_t target_end = myend - dist;
-
-            if (mystart < myend) {
-                // send vec[mystart,myend) -> result[target_start, target_end)
-                r.insert(isend_to_global_range(vec, mystart, myend, target_start, target_end));
-            }
-        }
-
-        // receive from right
-        {
-            
-        }
-    } else {
-        if (first_split) {
-            size_t mystart = std::max<size_t>(first_range_start + dist, prefix);
-            size_t target_start = mystart - dist; // either first_range_start or prefix - dist
-
-            // end of range i send depends on whether there are any splits in local range
-            size_t myend = std::min<size_t>(first_range_end, prefix+local_size);
-            size_t target_end = myend - dist;
-
-            if (mystart < myend) {
-                // send vec[mystart,myend) -> result[target_start, target_end)
-                r.insert(isend_to_global_range(vec, mystart, myend, target_start, target_end));
-            }
-        }
-
-        if (last_split) {
-            // receive a range from the right (possibly from more than one processor)
-            size_t mystart = last_range_start;
-            size_t rend = (last_range_end >= dist) ? last_range_end - dist : 0;
-            size_t myend = std::min<size_t>(prefix + local_size, rend);
-
-            if (mystart < myend) {
-                r.insert(irecv_from_global_range(result, mystart+dist, myend+dist, mystart, myend));
-                // receive from vec[mystart+dist, myend+dist) -> result[mystart, myend)
-            }
-        }
-
-        // TODO do internal ranges (if any)
-    }
-
-
-
-
-    r.waitall();
-}
-
-std::vector<index_t> shift_buckets(std::size_t dist) {
-    // get # elements to the left
-    std::vector<index_t> result(local_size);
-    std::size_t prev_size = part.excl_prefix_size();
-    assert(local_size == local_B.size());
-
-    mxx::datatype mxxindex_t = mxx::get_datatype<index_t>();
-    MPI_Datatype mpi_index_t = mxxindex_t.type();
-
-    MPI_Request recv_reqs[2];
-    int n_irecvs = 0;
-    // receive elements from the right
-    if (prev_size + dist < n) {
-        std::size_t right_first_gl_idx = prev_size + dist;
-        int p1 = part.target_processor(right_first_gl_idx);
-
-        std::size_t p1_gl_end = part.prefix_size(p1);
-        std::size_t p1_recv_cnt = p1_gl_end - right_first_gl_idx;
-
-        if (p1 != comm.rank()) {
-            // only receive if the source is not myself (i.e., `rank`)
-            // [otherwise results are directly written instead of MPI_Sended]
-            assert(p1_recv_cnt < std::numeric_limits<int>::max());
-        // increase iterators
-            int recv_cnt = p1_recv_cnt;
-            MPI_Irecv(&result[0],recv_cnt, mpi_index_t, p1,
-                      PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
-        }
-
-        if (p1_recv_cnt < local_size && p1 != p-1) {
-            // also receive from one more processor
-            int p2 = p1+1;
-            // since p2 has at least local_size - 1 elements and at least
-            // one element came from p1, we can assume that the receive count
-            // is our local size minus the already received elements
-            std::size_t p2_recv_cnt = local_size - p1_recv_cnt;
-
-            assert(p2_recv_cnt < std::numeric_limits<int>::max());
-            int recv_cnt = p2_recv_cnt;
-            // send to `p1` (which is necessarily different from `rank`)
-            MPI_Irecv(&result[0] + p1_recv_cnt, recv_cnt, mpi_index_t, p2,
-                      PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
-        }
-    }
-
-    // send elements to the left (split to at most 2 target processors)
-    if (prev_size + local_size - 1 >= dist) {
-        int p1 = -1;
-        if (prev_size >= dist) {
-            std::size_t first_gl_idx = prev_size - dist;
-            p1 = part.target_processor(first_gl_idx);
-        }
-        std::size_t last_gl_idx = prev_size + local_size - 1 - dist;
-        int p2 = part.target_processor(last_gl_idx);
-
-        std::size_t local_split;
-        if (p1 != p2) {
-            // local start index of area for second processor
-            if (p1 >= 0) {
-                local_split = part.prefix_size(p1) + dist - prev_size;
-                // send to first processor
-                assert(p1 != comm.rank());
-                MPI_Send(&local_B[0], local_split,
-                         mpi_index_t, p1, PSAC_TAG_SHIFT, comm);
-            } else {
-                // p1 doesn't exist, then there is no prefix to add
-                local_split = dist - prev_size;
-            }
-        } else {
-            // only one target processor
-            local_split = 0;
-        }
-
-        if (p2 != comm.rank()) {
-            MPI_Send(&local_B[0] + local_split, local_size - local_split,
-                     mpi_index_t, p2, PSAC_TAG_SHIFT, comm);
-        } else {
-            // in this case the split should be exactly at `dist`
-            assert(local_split == dist);
-            // locally reassign
-            for (std::size_t i = local_split; i < local_size; ++i) {
-                result[i-local_split] = local_B[i];
-            }
-        }
-    }
-
-    // wait for successful receive:
-    MPI_Waitall(n_irecvs, recv_reqs, MPI_STATUS_IGNORE);
-    return result;
-}
-
-// shifting with arrays (custom data types)
-// shifts (L-1) times into the (L-1) additional Bucket entries
-template <std::size_t L>
-void shift_buckets(std::size_t k, std::vector<std::array<index_t, 1+L> >& tuples) {
-    // get # elements to the left
-    std::size_t prev_size = part.excl_prefix_size();
-
-    mxx::datatype mxxindex_t = mxx::get_datatype<index_t>();
-    MPI_Datatype mpi_index_t = mxxindex_t.type();
-    // start receiving into second bucket and then continue with greater
-    int bi = 2;
-    for (std::size_t dist = k; dist < L*k; dist += k) {
-        MPI_Request recv_reqs[2];
-        int n_irecvs = 0;
-        MPI_Datatype dts[4];
-        int n_dts = 0;
-        // receive elements from the right
-        if (prev_size + dist < n) {
-            std::size_t right_first_gl_idx = prev_size + dist;
-            int p1 = part.target_processor(right_first_gl_idx);
-
-            std::size_t p1_gl_end = part.prefix_size(p1);
-            std::size_t p1_recv_cnt = p1_gl_end - right_first_gl_idx;
-
-            if (p1 != comm.rank()) {
-                // only receive if the source is not myself (i.e., `rank`)
-                // [otherwise results are directly written instead of MPI_Sended]
-                assert(p1_recv_cnt < std::numeric_limits<int>::max());
-                int recv_cnt = p1_recv_cnt;
-                // create custom datatype with stride (L+1)
-                MPI_Type_vector(recv_cnt,1,L+1,mpi_index_t,&dts[n_dts]);
-                MPI_Type_commit(&dts[n_dts]);
-                MPI_Irecv(&tuples[0][bi],1, dts[n_dts], p1,
-                          PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
-                n_dts++;
-            }
-
-            if (p1_recv_cnt < local_size && p1 != p-1) {
-                // also receive from one more processor
-                int p2 = p1+1;
-                // since p2 has at least local_size - 1 elements and at least
-                // one element came from p1, we can assume that the receive count
-                // is our local size minus the already received elements
-                std::size_t p2_recv_cnt = local_size - p1_recv_cnt;
-
-                assert(p2_recv_cnt < std::numeric_limits<int>::max());
-                int recv_cnt = p2_recv_cnt;
-                // send to `p1` (which is necessarily different from `rank`)
-                MPI_Type_vector(recv_cnt,1,L+1,mpi_index_t,&dts[n_dts]);
-                MPI_Type_commit(&dts[n_dts]);
-                MPI_Irecv(&tuples[p1_recv_cnt][bi],1, dts[n_dts], p2,
-                          PSAC_TAG_SHIFT, comm, &recv_reqs[n_irecvs++]);
-                n_dts++;
-            }
-        }
-
-        // send elements to the left (split to at most 2 target processors)
-        if (prev_size + local_size - 1 >= dist) {
-            int p1 = -1;
-            if (prev_size >= dist) {
-                std::size_t first_gl_idx = prev_size - dist;
-                p1 = part.target_processor(first_gl_idx);
-            }
-            std::size_t last_gl_idx = prev_size + local_size - 1 - dist;
-            int p2 = part.target_processor(last_gl_idx);
-
-            std::size_t local_split;
-            if (p1 != p2) {
-                // local start index of area for second processor
-                if (p1 >= 0) {
-                    local_split = part.prefix_size(p1) + dist - prev_size;
-                    // send to first processor
-                    assert(p1 != comm.rank());
-                    MPI_Type_vector(local_split,1,L+1,mpi_index_t,&dts[n_dts]);
-                    MPI_Type_commit(&dts[n_dts]);
-                    MPI_Send(&tuples[0][1], 1,
-                             dts[n_dts], p1, PSAC_TAG_SHIFT, comm);
-                    n_dts++;
-                } else {
-                    // p1 doesn't exist, then there is no prefix to add
-                    local_split = dist - prev_size;
-                }
-            } else {
-                // only one target processor
-                local_split = 0;
-            }
-
-            if (p2 != comm.rank()) {
-                MPI_Type_vector(local_size - local_split,1,L+1,mpi_index_t,&dts[n_dts]);
-                MPI_Type_commit(&dts[n_dts]);
-                MPI_Send(&tuples[local_split][1], 1,
-                         dts[n_dts], p2, PSAC_TAG_SHIFT, comm);
-                n_dts++;
-            } else {
-                // in this case the split should be exactly at `dist`
-                assert(local_split == dist);
-                // locally reassign
-                for (std::size_t i = local_split; i < local_size; ++i)
-                {
-                    tuples[i-local_split][bi] = tuples[i][1];
-                }
-            }
-        }
-
-        // wait for successful receive:
-        MPI_Waitall(n_irecvs, recv_reqs, MPI_STATUS_IGNORE);
-
-        // clean up data types from this round
-        for (int i = 0; i < n_dts; ++i) {
-            MPI_Type_free(&dts[i]);
-        }
-
-        // next target bucket
-        bi++;
-    }
-}
 
 
 /*********************************************************************
  *                     ISA -> SA (sort buckets)                      *
  *********************************************************************/
-void isa_2b_to_sa(std::vector<index_t>& local_B2) {
-    assert(local_B2.size() == local_size);
-    SAC_TIMER_START();
-
-    // convert the struct of arrays (local_SA, local_B, etc) into
-    // array of structs (TwoBSA {.B1, .B2, .SA}) for sorting purposes
-
-    // initialize tuple array
-    std::vector<TwoBSA<index_t> > tuple_vec(local_size);
-
-    // get global index offset
-    std::size_t str_offset = part.excl_prefix_size();
-
-    // fill tuple vector
-    for (std::size_t i = 0; i < local_size; ++i) {
-        tuple_vec[i].B1 = local_B[i];
-        tuple_vec[i].B2 = local_B2[i];
-        assert(str_offset + i < std::numeric_limits<index_t>::max());
-        tuple_vec[i].SA = str_offset + i;
-    }
-
-    // release memory of input (to remain at the minimum 6x words memory usage)
-    local_B.clear(); local_B.shrink_to_fit();
-    local_B2.clear(); local_B2.shrink_to_fit();
-    local_SA.clear(); local_SA.shrink_to_fit();
-
-    SAC_TIMER_END_SECTION("isa2sa_tupleize");
-
-    // parallel, distributed sample-sorting of tuples (B1, B2, SA)
-    mxx::sort(tuple_vec.begin(), tuple_vec.end(), comm);
-
-    SAC_TIMER_END_SECTION("isa2sa_samplesort");
-
-    // reallocate output
-    local_B.resize(local_size);
-    local_B2.resize(local_size);
-    local_SA.resize(local_size);
-
-    // back-convert array of structs into struct of arrays
-
-    // read back into input vectors
-    for (std::size_t i = 0; i < local_size; ++i) {
-        local_B[i] = tuple_vec[i].B1;
-        local_B2[i] = tuple_vec[i].B2;
-        local_SA[i] = tuple_vec[i].SA;
-    }
-    SAC_TIMER_END_SECTION("isa2sa_untupleize");
-}
 
 
 template <std::size_t L>
@@ -1038,7 +645,6 @@ void sort_array_tuples(std::vector<std::array<index_t, L+1> >& tuples) {
         }
         return false;
     }, comm);
-
 
     SAC_TIMER_END_SECTION("isa2sa_samplesort");
 }
@@ -1145,256 +751,49 @@ void rebucket_kmer() {
     }
 }
 
-// assumed sorted order (globally) by tuple (B1[i], B2[i])
-// this reassigns new, unique bucket numbers in {1,...,n} globally
-std::pair<size_t,size_t> rebucket(std::vector<index_t>& local_B2, bool count_unfinished) {
-    /*
-     * NOTE: buckets are indexed by the global index of the first element in
-     *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
-     *       reserved for out-of-bounds)
-     */
-    // assert inputs are of equal size
-    assert(local_B.size() == local_B2.size() && local_B.size() > 0);
-
-    // init result
-    std::pair<size_t,size_t> result;
-
-    // get my global starting index
-    size_t prefix = part.excl_prefix_size();
-
-    /*
-     * assign local zero or one, depending on whether the bucket is the same
-     * as the previous one
-     */
-
-    std::pair<index_t, index_t> last_element = std::make_pair(local_B.back(), local_B2.back());
-    std::pair<index_t, index_t> prevRight = mxx::right_shift(last_element, comm);
-    bool firstDiff = false;
-    if (comm.rank() == 0) {
-        firstDiff = true;
-    } else if (prevRight.first != local_B[0] || prevRight.second != local_B2[0]) {
-        firstDiff = true;
-    }
-
-    // set local_B1 to `(prefix+i)` if previous entry is different:
-    // i.e., mark start of buckets, otherwise: set to 0
-    bool nextDiff = firstDiff;
-    for (std::size_t i = 0; i+1 < local_B.size(); ++i) {
-        bool setOne = nextDiff;
-        nextDiff = (local_B[i] != local_B[i+1] || local_B2[i] != local_B2[i+1]);
-        local_B[i] = setOne ? prefix+i+1 : 0;
-    }
-
-    local_B.back() = nextDiff ? prefix+(local_size-1)+1 : 0;
-
-    if (count_unfinished) {
-        // count the number of unfinished elements and buckets
-        index_t prev_right = mxx::right_shift(local_B.back(), comm);
-        index_t local_unfinished_buckets = 0;
-        index_t local_unfinished_els = 0;
-        if (comm.rank() != 0) {
-            local_unfinished_buckets = (prev_right > 0 && local_B[0] == 0) ? 1 : 0;
-            local_unfinished_els = local_unfinished_buckets;
-        }
-        for (size_t i = 1; i < local_B.size(); ++i) {
-            if(local_B[i-1] > 0 && local_B[i] == 0) {
-                ++local_unfinished_buckets;
-                ++local_unfinished_els;
-            }
-            if (local_B[i] == 0) {
-                ++local_unfinished_els;
-            }
-        }
-        std::pair<size_t,size_t> local_result(local_unfinished_buckets, local_unfinished_els);
-        result = mxx::allreduce(local_result, pair_sum<size_t,size_t>(), comm);
-    }
-
-
-    /*
-     * Global prefix MAX:
-     *  - such that for every item we have it's bucket number, where the
-     *    bucket number is equal to the first index in the bucket
-     *    this way buckets who are finished, will never receive a new
-     *    number.
-     */
-    // 1.) find the max in the local sequence. since the max is the last index
-    //     of a bucket, this should be somewhere at the end -> start scanning
-    //     from the end
-    auto rev_it = local_B.rbegin();
-    size_t local_max = 0;
-    while (rev_it != local_B.rend() && (local_max = *rev_it) == 0)
-        ++rev_it;
-
-    // 2.) distributed scan with max() to get starting max for each sequence
-    size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
-    if (comm.rank() == 0)
-        pre_max = 0;
-
-    // 3.) linear scan and assign bucket numbers
-    for (size_t i = 0; i < local_B.size(); ++i) {
-        if (local_B[i] == 0)
-            local_B[i] = pre_max;
-        else
-            pre_max = local_B[i];
-        assert(local_B[i] <= i+prefix+1);
-        // first element of bucket has id of it's own global index:
-        assert(i == 0 || (local_B[i-1] ==  local_B[i] || local_B[i] == i+prefix+1));
-    }
-
-    return result;
-}
-// assumed sorted order (globally) by tuple (B1[i], B2[i])
-// this reassigns new, unique bucket numbers in {1,...,n} globally
-template <size_t L>
-std::pair<size_t,size_t> rebucket_arr(std::vector<std::array<index_t, L+1> >& tuples, bool count_unfinished) {
-    /*
-     * NOTE: buckets are indexed by the global index of the first element in
-     *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
-     *       reserved for out-of-bounds)
-     */
-
-    // init result
-    std::pair<size_t,size_t> result;
-    // get my global starting index
-    size_t prefix = part.excl_prefix_size();
-    size_t local_max = 0;
-
-    foreach_pair(tuples.begin(), tuples.end(), [&](const std::array<index_t, L+1>& prev, std::array<index_t, L+1>& cur, size_t i) {
-        if (!std::equal(&prev[1], &prev[1]+L, &cur[1])) {
-            local_max = prefix + i + 1;
-            local_B[i] = local_max;
-        } else {
-            local_B[i] = 0;
-        }
-    }, comm);
-
-    // specially handle first element of first process
-    if (comm.rank() == 0) {
-        local_B[0] = 1;
-        if (local_max == 0)
-            local_max = 1;
-    }
-
-
-    if (count_unfinished) {
-        // count the number of unfinished elements and buckets
-        index_t prev_right = mxx::right_shift(local_B.back(), comm);
-        index_t local_unfinished_buckets = 0;
-        index_t local_unfinished_els = 0;
-        if (comm.rank() != 0) {
-            local_unfinished_buckets = (prev_right > 0 && local_B[0] == 0) ? 1 : 0;
-            local_unfinished_els = local_unfinished_buckets;
-        }
-        for (size_t i = 1; i < local_B.size(); ++i) {
-            if(local_B[i-1] > 0 && local_B[i] == 0) {
-                ++local_unfinished_buckets;
-                ++local_unfinished_els;
-            }
-            if (local_B[i] == 0) {
-                ++local_unfinished_els;
-            }
-        }
-        std::pair<size_t,size_t> local_result(local_unfinished_buckets, local_unfinished_els);
-        result = mxx::allreduce(local_result, pair_sum<size_t,size_t>(), comm);
-    }
-
-    /*
-     * Global prefix MAX:
-     *  - such that for every item we have it's bucket number, where the
-     *    bucket number is equal to the first index in the bucket
-     *    this way buckets who are finished, will never receive a new
-     *    number.
-     */
-
-    // 2.) distributed scan with max() to get starting max for each sequence
-    size_t pre_max = mxx::exscan(local_max, mxx::max<size_t>(), comm);
-    if (comm.rank() == 0)
-        pre_max = 0;
-
-    // 3.) linear scan and assign bucket numbers
-    for (size_t i = 0; i < local_B.size(); ++i) {
-        if (local_B[i] == 0)
-            local_B[i] = pre_max;
-        else
-            pre_max = local_B[i];
-        assert(local_B[i] <= i+prefix+1);
-        // first element of bucket has id of it's own global index:
-        assert(i == 0 || (local_B[i-1] ==  local_B[i] || local_B[i] == i+prefix+1));
-    }
-
-    return result;
-}
-
-// func = void (const T prev, T& cur, size_t index)
-template <typename Iterator, typename Func>
-void foreach_pair(Iterator begin, Iterator end, Func func, const mxx::comm& comm) {
-    typedef typename std::iterator_traits<Iterator>::value_type T;
-
-    size_t n = std::distance(begin, end);
-    T prev = mxx::right_shift(*(begin+(n-1)), comm);
-
-    Iterator it = begin;
-    T cur = *it;
-
-    if (comm.rank() > 0) {
-        func(prev, *it, 0);
-    }
-    prev = cur;
-
-    for (size_t i = 0; i+1 < n; ++i) {
-        prev = cur;
-        ++it;
-        cur = *it;
-        func(prev, *it, i+1);
-    }
-}
-
 // same function as before, but this one assumes tuples instead of
 // two arrays
 // This is used in the bucket chaising construction. The MPI_Comm will most
 // of the time be a subcommunicator (so do not use the member `comm`)
-void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, const mxx::comm& comm, std::size_t gl_offset, std::vector<std::tuple<index_t, index_t, index_t> >& minqueries)
-{
+template <typename EqualFunc>
+void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t bucket_offset, std::vector<std::tuple<index_t, index_t, index_t> >& minqueries, size_t shift_by, EqualFunc eq) {
     /*
      * NOTE: buckets are indexed by the global index of the first element in
      *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
      *       reserved for out-of-bounds)
      */
     // inputs can be of different size, since buckets can span bucket boundaries
-    std::size_t local_size = tuples.size();
+    std::size_t local_size = bucket.size();
     std::size_t prefix = mxx::exscan(local_size, std::plus<size_t>(), comm);
     size_t local_max = 0;
-    prefix += gl_offset;
+    prefix += bucket_offset;
 
     // iterate through all pairs of elements (spanning across processors)
-    foreach_pair(tuples.begin(), tuples.end(), [&](const TwoBSA<index_t>& prev, TwoBSA<index_t>& cur, size_t i){
+    foreach_pair(bucket.begin(), bucket.end(), [&](const TwoBSA<index_t>& prev, TwoBSA<index_t>& cur, size_t i){
         // if this is a new bucket boundary: set current to prefix+index and update LCP
-        if (prev.B1 != cur.B1 || prev.B2 != cur.B2){
-            // set every bucket boundary to its global index and other elements to
-            // 0, a following max-scan will then distribute this bucket index among
-            // its elements
+        if (!eq(prev, cur)) {
             cur.B1 = prefix+i+1;
             local_max = cur.B1;
-            if (_CONSTRUCT_LCP) {
-                index_t left_b  = std::min(prev.B2, cur.B2);
-                index_t right_b = std::max(prev.B2, cur.B2);
-                // we need the minumum LCP of all suffixes in buckets between
-                // these two buckets. Since the first element in the left bucket
-                // is the LCP of this bucket with its left bucket and we don't need
-                // this LCP value, start one to the right:
-                // (-1 each since buffer numbers are current index + 1)
-                index_t range_left = (left_b-1) + 1;
-                index_t range_right = (right_b-1) + 1; // +1 since exclusive index
-                minqueries.emplace_back(i + prefix, range_left, range_right);
-            }
         } else {
             cur.B1 = 0;
+        }
+        if (_CONSTRUCT_LCP) {
+            if (prev.B2 == 0 || cur.B2 == 0) {
+                if (local_LCP[i+prefix - part.excl_prefix_size()] == n)
+                    local_LCP[i+prefix - part.excl_prefix_size()] = shift_by;
+            } else if (prev.B2 != cur.B2) {
+                index_t left_b  = std::min(prev.B2, cur.B2);
+                index_t right_b = std::max(prev.B2, cur.B2);
+                assert(0 < left_b && left_b < n);
+                assert(0 < right_b && right_b <= n);
+                minqueries.emplace_back(i + prefix, left_b, right_b);
+            }
         }
     }, comm);
 
     // specially handle first element of first process
     if (comm.rank() == 0) {
-        tuples[0].B1 = prefix + 1;
+        bucket[0].B1 = prefix + 1;
         if (local_max == 0)
             local_max = prefix + 1;
     }
@@ -1413,91 +812,184 @@ void rebucket_tuples(std::vector<TwoBSA<index_t> >& tuples, const mxx::comm& com
 
     // 3.) linear scan and assign bucket numbers
     for (std::size_t i = 0; i < local_size; ++i) {
-        if (tuples[i].B1 == 0)
-            tuples[i].B1 = pre_max;
+        if (bucket[i].B1 == 0)
+            bucket[i].B1 = pre_max;
         else
-            pre_max = tuples[i].B1;
-        assert(tuples[i].B1 <= i+prefix+1);
+            pre_max = bucket[i].B1;
+        assert(bucket[i].B1 <= i+prefix+1);
         // first element of bucket has id of it's own global index:
-        assert(i == 0 || (tuples[i-1].B1 ==  tuples[i].B1 || tuples[i].B1 == i+prefix+1));
+        assert(i == 0 || (bucket[i-1].B1 ==  bucket[i].B1 || bucket[i].B1 == i+prefix+1));
     }
 }
 
-/*********************************************************************
- *                       SA->ISA (~bucketsort)                       *
- *********************************************************************/
-void reorder_sa_to_isa(std::vector<index_t>& SA) {
-    assert(SA.size() == local_B.size());
-
-    SAC_TIMER_START();
-    // 1.) local bucketing for each processor
-    //
-    // counting the number of elements for each processor
-    std::vector<size_t> send_counts(p, 0);
-    for (index_t sa : SA) {
-        int target_p = part.target_processor(sa);
-        assert(0 <= target_p && target_p < p);
-        ++send_counts[target_p];
-    }
-    // get exclusive prefix sum
-    std::vector<size_t> send_displs = mxx::local_exscan(send_counts);
-    std::vector<size_t> upper_bound = mxx::local_scan(send_counts);
-
-    // in-place bucketing
-    int cur_p = 0;
-    for (std::size_t i = 0; i < SA.size();) {
-        // skip full buckets
-        while (cur_p < p-1 && send_displs[cur_p] >= upper_bound[cur_p]) {
-            // skip over full buckets
-            i = send_displs[++cur_p];
-        }
-        // break if all buckets are done
-        if (cur_p >= p-1)
-            break;
-        int target_p = part.target_processor(SA[i]);
-        assert(target_p < p && target_p >= 0);
-        if (target_p == cur_p) {
-            // item correctly placed
-            ++i;
-        } else {
-            // swap to correct bucket
-            assert(target_p > cur_p);
-            std::swap(SA[i], SA[send_displs[target_p]]);
-            std::swap(local_B[i], local_B[send_displs[target_p]]);
-        }
-        send_displs[target_p]++;
-    }
-
-    SAC_TIMER_END_SECTION("sa2isa_bucketing");
-
-    // get displacements again (since they were modified above)
-    std::vector<index_t> recv_SA = mxx::all2allv(SA, send_counts, comm);
-    std::vector<index_t> recv_B = mxx::all2allv(local_B, send_counts, comm);
-    SAC_TIMER_END_SECTION("sa2isa_all2all");
-
-    // rearrange locally
-    for (std::size_t i = 0; i < SA.size(); ++i) {
-        index_t out_idx = recv_SA[i] - part.excl_prefix_size();
-        assert(0 <= out_idx && out_idx < recv_SA.size());
-        local_B[out_idx] = recv_B[i];
-    }
-
-    SAC_TIMER_END_SECTION("sa2isa_rearrange");
+void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t gl_offset, std::vector<std::tuple<index_t, index_t, index_t> >& minqueries, size_t shift_by) {
+    rebucket_bucket(bucket, comm, gl_offset, minqueries, shift_by, [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y){
+        return x.B1 == y.B1 && x.B2 == y.B2;
+    });
 }
 
-// SA->ISA defaulting with the local_SA array
-void reorder_sa_to_isa()
-{
-    reorder_sa_to_isa(local_SA);
+void rebucket_bucket_gsa(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t gl_offset, std::vector<std::tuple<index_t, index_t, index_t> >& minqueries, size_t shift_by) {
+    rebucket_bucket(bucket, comm, gl_offset, minqueries, shift_by, [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y){
+        return x.B1 == y.B1 && x.B2 == y.B2 && x.B2 != 0;
+    });
 }
-
 
 /*********************************************************************
  *          Faster construction for fewer remaining buckets          *
  *********************************************************************/
 
-void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_ISA, int dist)
-{
+std::vector<index_t> get_active(const std::vector<index_t>& B, const std::vector<index_t>& active, const mxx::comm& comm, bool print_stats = false) {
+    // get next element from right
+    index_t right_B = mxx::left_shift(B[0], comm);
+    // get global offset
+    size_t prefix = part.excl_prefix_size();
+
+    size_t unresolved_els = 0;
+    size_t unfinished_b = 0;
+
+    std::vector<index_t> active_elements;
+    bool use_b = active.empty();
+    size_t loopn = use_b ? B.size() : active.size();
+    for (index_t g = 0; g < loopn; ++g) {
+        size_t j = use_b ? g : active[g];
+        // get global index for each local index
+        size_t i =  prefix + j;
+        // check if this is a unresolved bucket
+        // relying on the property that for resolved buckets:
+        //   B[i] == i+1 and B[i+1] == i+2
+        //   (where `i' is the global index)
+        if (B[j] != i+1) {
+            // save local active indexes
+            active_elements.push_back(j);
+            unresolved_els++;
+        } else if (B[j] == i+1 && ((j < local_size-1 && B[j+1] == i+1)
+                        || (j == local_size-1 && comm.rank() < p-1 && right_B == i+1))) {
+            active_elements.push_back(j);
+            unresolved_els++;
+            unfinished_b++;
+        }
+    }
+
+    if (print_stats) {
+        size_t gl_unresolved = mxx::allreduce(unresolved_els, comm);
+        size_t gl_unfinished = mxx::allreduce(unfinished_b, comm);
+        if (comm.rank() == 0) {
+            INFO("unresolved = " << gl_unresolved << ", unfinished = " << gl_unfinished);
+        }
+    }
+    return active_elements;
+}
+
+std::vector<index_t> get_active(const std::vector<index_t>& B, const mxx::comm& comm, bool print_stats = false) {
+    std::vector<index_t> empty;
+    return get_active(B, empty, comm, print_stats);
+}
+
+std::vector<index_t> sparse_get_b2(const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
+    std::vector<size_t> rma_reqs;
+    std::vector<index_t> b2(active.size());
+    for (size_t ai = 0; ai < active.size(); ++ai) {
+        size_t j = active[ai];
+        if (SA[j] + shift_by < n) {
+            rma_reqs.push_back(SA[j]+shift_by);
+        }
+    }
+
+    // use bulk RMA to request the values of B at doubled (+shift_by) location for
+    // each active suffix
+    std::vector<index_t> rma_b2 = bulk_rma(B.begin(), B.end(), rma_reqs, comm);
+
+    auto b2in = rma_b2.begin();
+    for (size_t i = 0; i < active.size(); ++i) {
+        size_t j = active[i];
+        if (SA[j] + shift_by < n) {
+            b2[i] = *b2in;
+            ++b2in;
+        }
+    }
+
+    return b2;
+}
+
+std::vector<index_t> local_get_sparse_b2(const dist_seqs& ds, const std::vector<index_t>& B, const std::vector<size_t>& local_queries, size_t shift_by) {
+    // argsort the local_queries
+    std::vector<size_t> argsort(local_queries.size());
+    std::iota(argsort.begin(), argsort.end(), 0);
+    std::sort(argsort.begin(), argsort.end(), [&local_queries](size_t i, size_t j) { return local_queries[i] < local_queries[j]; });
+
+    // scan local queries in argsorted order and save the B2 if the string size permits
+    std::vector<index_t> results(local_queries.size(), 9999999999ull);
+    // each query is {SA[j] + shift_by}
+    size_t i = 0;
+    // linear in number of local strings + number of queries
+    ds.for_each_seq([&](size_t str_beg, size_t str_end) {
+        while (i < local_queries.size() && local_queries[argsort[i]] < str_end) {
+            size_t qi = argsort[i];
+            if (local_queries[qi] - shift_by >= str_beg) {
+                results[qi] = B[local_queries[qi] - part.excl_prefix_size()];
+            } else {
+                results[qi] = 0;
+            }
+            ++i;
+        }
+    });
+    for (size_t i = 0; i < results.size(); ++i) {
+        assert(results[i] <= n);
+    }
+    return results;
+}
+
+template <typename T>
+std::vector<T> sparse_doubling(const dist_seqs& ds, const std::vector<T>& vec, const std::vector<size_t>& rma_reqs, size_t shift_by, const mxx::comm& comm) {
+    size_t local_size = vec.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
+    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+
+    std::vector<size_t> original_pos;
+    std::vector<size_t> bucketed_rma;
+    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&part](size_t gidx) { return part.target_processor(gidx); }, comm.size(), bucketed_rma, original_pos);
+
+    std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
+
+    // send all queries via all2all
+    std::vector<size_t> local_queries = mxx::all2allv(bucketed_rma, send_counts, recv_counts, comm);
+
+    std::vector<index_t> results = local_get_sparse_b2(ds, vec, local_queries, shift_by);
+    results = mxx::all2allv(results, recv_counts, send_counts, comm);
+
+    std::vector<index_t> rma_b2 = permute(results, original_pos);
+    return rma_b2;
+}
+
+std::vector<index_t> sparse_get_b2(const dist_seqs& ds, const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
+    // create RMA requests for the doubled positions
+    std::vector<size_t> rma_reqs;
+    for (size_t ai = 0; ai < active.size(); ++ai) {
+        size_t j = active[ai];
+        if (SA[j] + shift_by < n) {
+            rma_reqs.push_back(SA[j]+shift_by);
+        }
+    }
+
+    std::vector<index_t> rma_b2 = sparse_doubling(ds, B, rma_reqs, shift_by, comm);
+
+    auto b2in = rma_b2.begin();
+    assert(rma_b2.size() == rma_reqs.size());
+    std::vector<index_t> b2(active.size());
+    for (size_t i = 0; i < active.size(); ++i) {
+        size_t j = active[i];
+        if (SA[j] + shift_by < n) {
+            b2[i] = *b2in;
+            assert(b2[i] <= n);
+            ++b2in;
+        }
+    }
+    return b2;
+}
+
+
+template <typename Func>
+void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_ISA, int dist, Func sparse_b2_func) {
     /*
      * Algorithm for few remaining buckets (more communication overhead per
      * element but sends only unfinished buckets -> less data in total if few
@@ -1506,7 +998,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
      * INPUT:
      *  - SA in SA order
      *  - B in SA order
-     *  - ISA in ISA order (<=> B in ISA order)
+     *  - B in ISA order
      *  - dist: the current dist=2^k, gets doubled after every iteration
      *
      * ALGO:
@@ -1523,333 +1015,158 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 
     SAC_TIMER_START();
 
-
-    /*
-     * 0.) Preparation: need unfinished buckets (info accross proc. boundaries)
-     */
-    // get next element from right
-    index_t right_B = mxx::left_shift(local_B[0], comm);
-
     // get global offset
-    const std::size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.excl_prefix_size();
 
     // get active elements
-    std::vector<index_t> active_elements;
-    for (std::size_t j = 0; j < local_B.size(); ++j) {
-        // get global index for each local index
-        std::size_t i =  prefix + j;
-        // check if this is a unresolved bucket
-        // relying on the property that for resolved buckets:
-        //   B[i] == i+1 and B[i+1] == i+2
-        //   (where `i' is the global index)
-        if (local_B[j] != i+1 || (local_B[j] == i+1
-                    && ((j < local_size-1 && local_B[j+1] == i+1)
-                        || (j == local_size-1 && comm.rank() < p-1 && right_B == i+1))))
-        {
-            // save local active indexes
-            active_elements.push_back(j);
-        }
-    }
+    std::vector<index_t> active = get_active(local_B, comm, true);
     SAC_TIMER_END_SECTION("get active elements");
 
-    bool right_bucket_crosses_proc = (comm.rank() < p-1 && local_B.back() == right_B);
 
     for (index_t shift_by = dist; shift_by < n; shift_by <<= 1) {
-        /*
-         * 1.) on i: send tuple (`to:` Sa[i]+2^k, `from:` i)
-         */
-        //std::vector<std::pair<index_t, index_t> > msgs;
-        //std::vector<std::pair<index_t, index_t> > out_of_bounds_msgs;
-        std::vector<mypair<index_t> > msgs;
-        std::vector<mypair<index_t> > out_of_bounds_msgs;
-        // linear scan for bucket boundaries
-        // and create tuples/pairs
-        std::size_t unresolved_els = 0;
-        std::size_t unfinished_b = 0;
-        for (index_t j : active_elements) {
-            // get global index for each local index
-            std::size_t i =  prefix + j;
-            // add tuple
-            if (local_SA[j] + shift_by >= n)
-                //out_of_bounds_msgs.push_back(std::make_pair<index_t,index_t>(0, static_cast<index_t>(i)));
-                out_of_bounds_msgs.push_back({0, static_cast<index_t>(i)});
-            else
-                //msgs.push_back(std::make_pair<index_t,index_t>(local_SA[j]+shift_by, static_cast<index_t>(i)));
-                msgs.push_back({local_SA[j]+shift_by, static_cast<index_t>(i)});
-            unresolved_els++;
-            if (local_B[j] == i+1) // if first element of unfinished bucket:
-                unfinished_b++;
-        }
-
-        // check if all resolved
-        std::size_t gl_unresolved = mxx::allreduce(unresolved_els, comm);
-        std::size_t gl_unfinished = mxx::allreduce(unfinished_b, comm);
-        if (comm.rank() == 0) {
-            INFO("==== chaising iteration " << shift_by << " unresolved = " << gl_unresolved);
-            INFO("==== chaising iteration " << shift_by << " unfinished = " << gl_unfinished);
-        }
-        if (gl_unresolved == 0)
+        // check for termination
+        if (mxx::allreduce(active.size()) == 0)
             // finished!
             break;
 
-        // message exchange to processor which contains first index
-        //msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.first);}, comm);
-        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
-
-        // for each message, add the bucket no. into the `first` field
-        for (auto it = msgs.begin(); it != msgs.end(); ++it) {
-            it->first = local_ISA[it->first - prefix];
-        }
-
-
-        /*
-         * 2.)
-         */
-        // send messages back to originator
-        //msgs_all2all(msgs, [&](const std::pair<index_t, index_t>& x){return part.target_processor(x.second);}, comm);
-        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.second);}, comm);
-
-        // append the previous out-of-bounds messages (since they all have B2 = 0)
-        if (out_of_bounds_msgs.size() > 0)
-            msgs.insert(msgs.end(), out_of_bounds_msgs.begin(), out_of_bounds_msgs.end());
-        out_of_bounds_msgs.clear();
-
-        assert(msgs.size() == unresolved_els);
-
-        // sort received messages by the target index to enable consecutive
-        // scanning of local buckets and messages
-        std::sort(msgs.begin(), msgs.end(), [](const mypair<index_t>& x, const mypair<index_t>& y){ return x.second < y.second;});
-
-        /*
-         * 3.)
-         */
-        // building sequence of triplets for each unfinished bucket and sort
-        // then rebucket, buckets which spread accross boundaries, sort via
-        // MPI sub communicators and samplesort in two phases
-        std::vector<TwoBSA<index_t> > bucket;
-        std::vector<TwoBSA<index_t> > left_bucket;
-        std::vector<TwoBSA<index_t> > right_bucket;
+        std::vector<index_t> b2 = sparse_b2_func(active, local_ISA, local_SA, shift_by, comm);
 
         // prepare LCP queries vector
         std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
 
-        // find bucket boundaries:
-        auto msgit = msgs.begin();
-        // overlap type:    0: no overlaps, 1: left overlap, 2:right overlap,
-        //                  3: separate overlaps on left and right
-        //                  4: contiguous overlap with both sides
-        int overlap_type = 0; // init to no overlaps
-        std::size_t bucket_begin = local_B[0]-1;
-        std::size_t first_bucket_begin = bucket_begin;
-        std::size_t right_bucket_offset = 0;
-        while (msgit != msgs.end()) {
-            bucket_begin = local_B[msgit->second - prefix]-1;
-            assert(bucket_begin < prefix || bucket_begin == msgit->second);
+        dist_seqs_buckets db = dist_seqs_buckets::from_func(local_B, comm);
 
-            // find end of bucket
-            while (msgit != msgs.end() && local_B[msgit->second - prefix]-1 == bucket_begin) {
-                TwoBSA<index_t> tuple;
-                assert(msgit->second >= prefix && msgit->second < prefix+local_size);
-                tuple.SA = local_SA[msgit->second - prefix];
-                tuple.B1 = local_B[msgit->second - prefix];
-                tuple.B2 = msgit->first;
-                bucket.push_back(tuple);
-                msgit++;
-            }
+        // for each inner bucket:
+        size_t inner_beg, inner_end;
+        std::tie(inner_beg, inner_end) = db.inner_seqs_range();
+        if (inner_beg < inner_end) {
+            // find position in `active` corresponding to first internal bucket
+            size_t ai = 0;
+            while (ai < active.size() && active[ai] < inner_beg-prefix)
+                ++ai;
+            assert(ai == 0 || ai == active.size() || local_B[active[ai]] != local_B[active[ai-1]]);
 
-            // get bucket end (could be on other processor)
-            if (msgit == msgs.end() && right_bucket_crosses_proc) {
-                assert(comm.rank() < p-1 && local_B.back() == right_B);
-                if (bucket_begin >= prefix)
-                {
-                    overlap_type += 2;
-                    right_bucket.swap(bucket);
-                    right_bucket_offset = bucket_begin - prefix;
+            // for each internal bucket
+            while (ai < active.size() && active[ai] < inner_end-prefix) {
+                // get global index of bucket begin
+                size_t bucket_begin = active[ai]+prefix;
+                assert(bucket_begin == local_B[active[ai]]-1);
+                size_t bucket_offset = bucket_begin - prefix;
+                size_t a_beg = ai;
+
+                // find end of bucket
+                size_t idx = active[ai];
+                while (ai < active.size() && local_B[idx]-1 == bucket_begin) {
+                    assert(idx == active[ai]);
+                    ++ai; ++idx;
                 }
-                else
-                {
-                    // bucket extends to left AND right
-                    left_bucket.swap(bucket);
-                    overlap_type = 4;
-                }
-            } else {
-                if (bucket_begin >= prefix)
-                {
-                    // this is a local bucket => sort by B2, rebucket, and save
-                    // TODO custom comparison that only sorts by B2, not by B1 as well
-                    std::sort(bucket.begin(), bucket.end());
-                    // local rebucket
-                    // save back into local_B, local_SA, etc
-                    index_t cur_b = bucket_begin + 1;
-                    std::size_t out_idx = bucket_begin - prefix;
-                    // assert previous bucket index is smaller
-                    assert(out_idx == 0 || local_B[out_idx-1] < cur_b);
-                    for (auto it = bucket.begin(); it != bucket.end(); ++it)
-                    {
-                        // if this is a new bucket, then update number
-                        if (it != bucket.begin() && (it-1)->B2 != it->B2)
-                        {
-                            // update bucket index
+
+                assert(ai > 0);
+                size_t a_end = ai;
+                size_t bucket_end = active[a_end-1] + prefix + 1;
+                assert(bucket_end - bucket_begin == a_end - a_beg);
+                size_t bucket_size = bucket_end - bucket_begin;
+
+                // arg-sort bucket by b2
+                std::vector<size_t> ais(bucket_size);
+                std::iota(ais.begin(), ais.end(), a_beg);
+                std::sort(ais.begin(), ais.end(), [&](index_t x, index_t y) {
+                    return b2[x] < b2[y] || (b2[x] == 0 && b2[y] == 0 && local_SA[active[x]] < local_SA[active[y]]);
+                });
+
+
+                // local rebucket
+                // save back into local_B, local_SA, etc
+                index_t cur_b = bucket_begin + 1;
+                size_t out_idx = bucket_offset;
+                std::vector<index_t> bucket_SA(local_SA.begin() + bucket_offset, local_SA.begin() + bucket_offset + bucket_size);
+                // assert previous bucket index is smaller
+                assert(out_idx == 0 || local_B[out_idx-1] < cur_b);
+                for (auto it = ais.begin(); it != ais.end(); ++it) {
+                    if (it != ais.begin()) {
+                        index_t pre_b2 = b2[*(it-1)];
+                        index_t cur_b2 = b2[*it];
+                        // if this is a new bucket, then update bucket number
+                        if (pre_b2 != cur_b2 || cur_b2 == 0) {
                             cur_b = out_idx + prefix + 1;
-
-                            if (_CONSTRUCT_LCP)
-                            {
+                        }
+                        if (_CONSTRUCT_LCP) {
+                            if (pre_b2 == 0 || cur_b2 == 0) {
+                                if (local_LCP[out_idx] == n)
+                                    local_LCP[out_idx] = shift_by;
+                            } else if (pre_b2 != cur_b2) {
                                 // add as query item for LCP construction
-                                index_t left_b  = std::min((it-1)->B2, it->B2);
-                                index_t right_b = std::max((it-1)->B2, it->B2);
-                                // we need the minumum LCP of all suffixes in buckets between
-                                // these two buckets. Since the first element in the left bucket
-                                // is the LCP of this bucket with its left bucket and we don't need
-                                // this LCP value, start one to the right:
-                                // (-1 each since buffer numbers are current index + 1)
-                                index_t range_left = (left_b-1) + 1;
-                                index_t range_right = (right_b-1) + 1; // +1 since exclusive index
-                                minqueries.emplace_back(out_idx + prefix, range_left, range_right);
+                                index_t left_b  = std::min(pre_b2, cur_b2);
+                                index_t right_b = std::max(pre_b2, cur_b2);
+                                assert(0 < left_b && left_b < n);
+                                assert(0 < right_b && right_b <= n);
+                                minqueries.emplace_back(out_idx + prefix, left_b, right_b);
                             }
                         }
-                        local_SA[out_idx] = it->SA;
-                        local_B[out_idx] = cur_b;
-                        out_idx++;
                     }
-                    // assert next bucket index is larger
-                    assert(out_idx == local_size || local_B[out_idx] == prefix+out_idx+1);
+                    local_SA[out_idx] = bucket_SA[active[*it]-bucket_offset];
+                    assert(local_B[out_idx] == bucket_begin + 1);
+                    local_B[out_idx] = cur_b;
+                    out_idx++;
                 }
-                else
-                {
-                    overlap_type += 1;
-                    left_bucket.swap(bucket);
-                }
+                // assert next bucket index is larger
+                assert(out_idx == local_size || local_B[out_idx] == prefix+out_idx+1);
             }
-            bucket.clear();
         }
 
-        // if we have left/right/both/or double buckets, do global comm in two phases
-        int my_schedule = -1;
-        if (comm.rank() == 0) {
-            // gather all types to first processor
-            std::vector<int> overlaps(p);
-            MPI_Gather(&overlap_type, 1, MPI_INT, &overlaps[0], 1, MPI_INT, 0, comm);
-
-            // create schedule using linear scan over the overlap types
-            std::vector<int> schedule(p);
-            int phase = 0; // start in first phase
-            for (int i = 0; i < p; ++i) {
-                switch (overlaps[i]) {
-                    case 0:
-                        schedule[i] = -1; // doesn't matter
-                        break;
-                    case 1:
-                        // only left overlap -> participate in current phase
-                        schedule[i] = phase;
-                        break;
-                    case 2:
-                        // only right overlap, start with phase 0
-                        phase = 0;
-                        schedule[i] = phase;
-                        break;
-                    case 3:
-                        // separate overlaps left and right -> switch phase
-                        schedule[i] = phase; // left overlap starts with current phase
-                        phase = 1 - phase;
-                        break;
-                    case 4:
-                        // overlap with both: left and right => keep phase
-                        schedule[i] = phase;
-                        break;
-                    default:
-                        assert(false);
-                        break;
-                }
+        /*
+         * for each split bucket, exclusively in a subcommunicator
+         */
+        db.for_each_split_seq_2phase(comm, [&](size_t gbegin, size_t gend, const mxx::comm& subcomm) {
+            if (active.size() == 0) {
+                assert(gbegin == gend);
+                return;
             }
 
-            // scatter the schedule to the processors
-            MPI_Scatter(&schedule[0], 1, MPI_INT, &my_schedule, 1, MPI_INT, 0, comm);
-        } else {
-            // send out my overlap type
-            MPI_Gather(&overlap_type, 1, MPI_INT, NULL, 1, MPI_INT, 0, comm);
-
-            // ... let master processor solve the schedule
-
-            // receive schedule:
-            MPI_Scatter(NULL, 1, MPI_INT, &my_schedule, 1, MPI_INT, 0, comm);
-        }
-
-
-        // two phase sorting across boundaries using sub communicators
-        for (int phase = 0; phase <= 1; ++phase) {
-            std::vector<TwoBSA<index_t> > border_bucket = left_bucket;
-            // the leftmost processor of a group will be used as split
-            int left_p = part.target_processor(first_bucket_begin);
-            bool participate = (overlap_type != 0 && my_schedule == phase);
-            std::size_t bucket_offset = 0; // left bucket starts from beginning
-            std::size_t rebucket_offset = first_bucket_begin;
-            if ((my_schedule != phase && overlap_type == 3) || (my_schedule == phase && overlap_type == 2)) {
-                // starting a bucket at the end
-                border_bucket = right_bucket;
-                left_p = comm.rank();
-                participate = true;
-                bucket_offset = right_bucket_offset;
-                rebucket_offset = prefix + bucket_offset;
+            std::vector<TwoBSA<index_t> > border_bucket;
+            size_t lbegin = std::max(gbegin, prefix) - prefix;
+            size_t lend = std::min(gend, prefix+local_size) - prefix;
+            // find `ai` for this bucket
+            size_t ai = 0;
+            while (active[ai] < lbegin)
+                ++ai;
+            assert(active[ai] == lbegin);
+            for (size_t i = lbegin; i < lend; ++i) {
+                assert(active[ai] == i);
+                TwoBSA<index_t> tuple;
+                //assert(msgit->second >= prefix && msgit->second < prefix+local_size);
+                tuple.SA = local_SA[i];
+                tuple.B1 = local_B[i];
+                tuple.B2 = b2[ai];
+                border_bucket.push_back(tuple);
+                ++ai;
             }
-
-            comm.with_subset(participate,[&](const mxx::comm& sc) {
-                // split communicator to `left_p`
-                mxx::comm subcomm = sc.split(left_p);
-
-                // sample sort the bucket with arbitrary distribution
-                mxx::sort(border_bucket.begin(), border_bucket.end(), subcomm);
+            // sample sort the bucket with arbitrary distribution
+            auto cmp = [](const TwoBSA<index_t>& x, const TwoBSA<index_t>&y) {
+                return x.B2 < y.B2 || (x.B2 == 0 && y.B2 == 0 && x.SA < y.SA);
+            };
+            mxx::sort(border_bucket.begin(), border_bucket.end(), cmp, subcomm);
 
 #ifndef NDEBUG
-                index_t first_bucket = border_bucket[0].B1;
+            index_t first_bucket = border_bucket[0].B1;
 #endif
-                // rebucket with global offset of first -> in tuple form (also updates LCP)
-                rebucket_tuples(border_bucket, subcomm, rebucket_offset, minqueries);
-                // assert first bucket index remains the same
-                assert(subcomm.rank() != 0 || first_bucket == border_bucket[0].B1);
+            size_t bucket_offset = lbegin;
+            // rebucket with global offset of first -> in tuple form (also updates LCP)
+            rebucket_bucket_gsa(border_bucket, subcomm, gbegin, minqueries, shift_by);
+            // assert first bucket index remains the same
+            assert(subcomm.rank() != 0 || first_bucket == border_bucket[0].B1);
 
-                // save into full array (if this was left -> save to beginning)
-                // (else, need offset of last)
-                assert(bucket_offset == 0 || local_B[bucket_offset-1] < border_bucket[0].B1);
-                assert(bucket_offset+border_bucket.size() <= local_size);
-                for (std::size_t i = 0; i < border_bucket.size(); ++i) {
-                    local_SA[i+bucket_offset] = border_bucket[i].SA;
-                    local_B[i+bucket_offset] = border_bucket[i].B1;
-                }
-                assert(bucket_offset+border_bucket.size() == local_size || (local_B[bucket_offset+border_bucket.size()] > local_B[bucket_offset+border_bucket.size()-1]));
-                assert(subcomm.rank() != 0 || local_B[bucket_offset] == bucket_offset+prefix+1);
-
-                /*
-                 * LCP update
-                 */
-                // LCP is updated in the custom `rebucket_tuples` function
-            });
-
-            comm.barrier();
-        }
-
-
-        // get new bucket number to the right
-        right_B = mxx::left_shift(local_B[0], comm);
-        // check if right bucket still goes over boundary
-        right_bucket_crosses_proc = (comm.rank() < p-1 && local_B.back() == right_B);
-
-        // remember all the remaining active elements
-        active_elements.clear();
-        for (auto it = msgs.begin(); it != msgs.end(); ++it) {
-            index_t j = it->second - prefix;
-            index_t i = it->second;
-            // check if this is a unresolved bucket
-            // relying on the property that for resolved buckets:
-            //   B[i] == i+1 and B[i+1] == i+2
-            //   (where `i' is the global index)
-            if (local_B[j] != i+1 || (local_B[j] == i+1
-                        && ((j < local_size-1 && local_B[j+1] == i+1)
-                            || (j == local_size-1 && comm.rank() < p-1 && right_B == i+1))))
-            {
-                // save local active indexes
-                active_elements.push_back(j);
+            // save into full array (if this was left -> save to beginning)
+            // (else, need offset of last)
+            assert(bucket_offset == 0 || local_B[bucket_offset-1] < border_bucket[0].B1);
+            assert(bucket_offset+border_bucket.size() <= local_size);
+            for (size_t i = 0; i < border_bucket.size(); ++i) {
+                local_SA[i+bucket_offset] = border_bucket[i].SA;
+                local_B[i+bucket_offset] = border_bucket[i].B1;
             }
-        }
+            assert(bucket_offset+border_bucket.size() == local_size || (local_B[bucket_offset+border_bucket.size()] > local_B[bucket_offset+border_bucket.size()-1]));
+            assert(subcomm.rank() != 0 || local_B[bucket_offset] == bucket_offset+prefix+1);
+        });
 
         /*
          * 4.1)   Update LCP
@@ -1857,10 +1174,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         if (_CONSTRUCT_LCP) {
             // time LCP separately!
             SAC_TIMER_START();
-            // get parallel-distributed RMQ for all queries, results are in
-            // `minqueries`
-            // TODO: bulk updatable RMQs [such that we don't have to construct the
-            //       RMQ for the local_LCP in each iteration]
+            // get parallel-distributed RMQ for all queries, results are in `minqueries`
             bulk_rmq(n, local_LCP, minqueries, comm);
 
             // update the new LCP values:
@@ -1871,16 +1185,18 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         }
 
         /*
-         * 4.2)  Update ISA
+         * 4.2)  Update ISA (TODO: formulate as bulk(sparse) write)
          */
         // message new bucket numbers to new SA[i] for all previously unfinished
         // buckets
         // since the message array is still available with the indices of unfinished
         // buckets -> reuse that information => no need to rescan the whole
         // local array
-        for (auto it = msgs.begin(); it != msgs.end(); ++it) {
-            it->first = local_SA[it->second - prefix]; // SA[i]
-            it->second = local_B[it->second - prefix]; // B[i]
+        std::vector<mypair<index_t> > msgs(active.size());
+        for (size_t i = 0; i < active.size(); ++i) {
+            size_t j = active[i];
+            msgs[i].first = local_SA[j]; // SA[i]
+            msgs[i].second = local_B[j]; // B[i]
         }
 
         // message exchange to processor which contains first index
@@ -1888,10 +1204,30 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 
         // update local ISA with new bucket numbers
         for (auto it = msgs.begin(); it != msgs.end(); ++it) {
+            // TODO _mm_stream
             local_ISA[it->first-prefix] = it->second;
         }
+        msgs = std::vector<mypair<index_t>>();
+
+        // update remaining active elements
+        active = get_active(local_B, active, comm, true);
+
         SAC_TIMER_END_SECTION("bucket-chaising iteration");
     }
+}
+
+void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_ISA, int dist) {
+    construct_msgs(local_B, local_ISA, dist,
+            [&](const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
+                return sparse_get_b2(active, B, SA, shift_by, comm);
+            });
+}
+
+void construct_msgs_gsa(const dist_seqs& ds, std::vector<index_t>& local_B, std::vector<index_t>& local_ISA, int dist) {
+    construct_msgs(local_B, local_ISA, dist,
+            [&](const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
+                return sparse_get_b2(ds, active, B, SA, shift_by, comm);
+            });
 }
 
 /*********************************************************************
@@ -1926,6 +1262,25 @@ void initial_kmer_lcp(unsigned int k, unsigned int bits_per_char) {
     }
 }
 
+template <typename T, typename Func>
+void for_each_lpair_2vec(const std::vector<T>& v1, const std::vector<T>& v2, Func func, const mxx::comm& comm) {
+    // assume both vectors are same size
+    MXX_ASSERT(v1.size() == v2.size() && v1.size() > 0);
+
+    // 1) getting next element to left
+    std::pair<T, T> right_el(v1.back(), v2.back());
+    std::pair<T, T> left_el = mxx::right_shift(right_el, comm);
+
+    // call for first 2 pairs
+    if (comm.rank() > 0) {
+        func(left_el.first, left_el.second, v1.front(), v2.front(), 0);
+    }
+
+    for (size_t i = 1; i < v1.size(); ++i) {
+        func(v1[i-1], v2[i-1], v1[i], v2[i], i);
+    }
+}
+
 // for pairs of two buckets: pair[i] = (B1[i], B2[i])
 void initial_kmer_lcp(unsigned int k, unsigned int bits_per_char,
                       const std::vector<index_t>& local_B2) {
@@ -1935,75 +1290,78 @@ void initial_kmer_lcp(unsigned int k, unsigned int bits_per_char,
 
     // resize to size `local_size` and set all items to max of n
     local_LCP.assign(local_size, n);
-
-    // find bucket boundaries (including across processors)
-
-    // 1) getting next element to left
-    std::pair<index_t, index_t> right_B(local_B.back(), local_B2.back());
-    std::pair<index_t, index_t> left_B = mxx::right_shift(right_B, comm);
-
-    // initialize first LCP
     if (comm.rank() == 0) {
         local_LCP[0] = 0;
-    } else {
-        if (left_B.first != local_B[0]
-            || (left_B.first == local_B[0] && left_B.second != local_B2[0])) {
-            unsigned int lcp = lcp_bitwise(left_B.first, local_B[0], k, bits_per_char);
-            if (lcp == k)
-                lcp += lcp_bitwise(left_B.second, local_B2[0], k, bits_per_char);
-            local_LCP[0] = lcp;
-        }
     }
 
-    // intialize the LCP for all other elements for bucket boundaries
-    for (std::size_t i = 1; i < local_size; ++i)
-    {
-        if (local_B[i-1] != local_B[i]
-            || (local_B[i-1] == local_B[i] && local_B2[i-1] != local_B2[i])) {
-            unsigned int lcp = lcp_bitwise(local_B[i-1], local_B[i], k, bits_per_char);
+    for_each_lpair_2vec(local_B, local_B2, [k, bits_per_char, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+        if (left1 != right1
+            || (left1 == right1 && left2 != right2)) {
+            unsigned int lcp = lcp_bitwise(left1, right1, k, bits_per_char);
             if (lcp == k)
-                lcp += lcp_bitwise(local_B2[i-1], local_B2[i], k, bits_per_char);
+                lcp += lcp_bitwise(left2, right2, k, bits_per_char);
             local_LCP[i] = lcp;
         }
-    }
+    }, comm);
 }
 
-void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
+
+// for pairs of two buckets: pair[i] = (B1[i], B2[i])
+void initial_kmer_lcp_gsa(unsigned int k, unsigned int bits_per_char,
+                          const std::vector<index_t>& local_B2) {
+    // for each bucket boundary (using both the B1 and the B2 buckets):
+    //    get the LCP by getting position of first different bit and dividing by
+    //    `bits_per_char`
+
+    // resize to size `local_size` and set all items to max of n
+    local_LCP.assign(local_size, n);
+    if (comm.rank() == 0) {
+        local_LCP[0] = 0;
+    }
+
+    for_each_lpair_2vec(local_B, local_B2, [k, bits_per_char, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+        if (left1 != right1) {
+            local_LCP[i] = lcp_bitwise(left1, right1, k, bits_per_char);
+        } else {
+            //unsigned int lcp = lcp_bitwise_no0(left1, right1, k, bits_per_char);
+            assert(left1 != 0);
+            unsigned int lcp = k - trailing_zeros(left1) / bits_per_char;
+            if (lcp == k) {
+                if(left2 != right2) {
+                    lcp += lcp_bitwise(left2, right2, k, bits_per_char);
+                    local_LCP[i] = lcp;
+                } else {
+                    if (left2 != 0) {
+                        lcp += (k - trailing_zeros(left2) / bits_per_char);
+                    }
+                    if (lcp < 2*k) {
+                        local_LCP[i] = lcp;
+                    }
+                }
+            } else {
+                // lcp is smaller than k => B1 has trailing 0
+                local_LCP[i] = lcp;
+            }
+        }
+    }, comm);
+}
+
+
+void resolve_next_lcp_old(int dist, const std::vector<index_t>& local_B2) {
     // 2.) find _new_ bucket boundaries (B1[i-1] == B1[i] && B2[i-1] != B2[i])
     // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
     // 4.) LCP[i] = dist + min_lcp[i]
 
-    std::size_t prefix_size = part.excl_prefix_size();
-
-    // get right-most element of left processor and check if it is a new
-    // bucket boundary
-    std::pair<index_t, index_t> right_B(local_B.back(), local_B2.back());
-    std::pair<index_t, index_t> left_B = mxx::right_shift(right_B, comm);
 
     // find _new_ bucket boundaries and create associated parallel distributed
     // RMQ queries.
     std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
+    std::size_t prefix_size = part.excl_prefix_size();
 
-    // check if the first element is a new bucket boundary
-    if (comm.rank() > 0 && left_B.first == local_B[0] && left_B.second != local_B2[0]) {
-        index_t left_b  = std::min(left_B.second, local_B2[0]);
-        index_t right_b = std::max(left_B.second, local_B2[0]);
-        // we need the minumum LCP of all suffixes in buckets between
-        // these two buckets. Since the first element in the left bucket
-        // is the LCP of this bucket with its left bucket and we don't need
-        // this LCP value, start one to the right:
-        // (-1 each since buffer numbers are current index + 1)
-        index_t range_left = (left_b-1) + 1;
-        index_t range_right = (right_b-1) + 1; // +1 since exclusive index
-        minqueries.emplace_back(0 + prefix_size, range_left, range_right);
-    }
-
-    // check for new bucket boundaries in all other elements
-    for (std::size_t i = 1; i < local_size; ++i) {
-        // if this is the first element of a new bucket
-        if (local_B[i - 1] == local_B[i] && local_B2[i - 1] != local_B2[i]) {
-            index_t left_b  = std::min(local_B2[i-1], local_B2[i]);
-            index_t right_b = std::max(local_B2[i-1], local_B2[i]);
+    for_each_lpair_2vec(local_B, local_B2, [prefix_size, &minqueries](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+        if (left1 == right1 && left2 != right2) {
+            index_t left_b  = std::min(left2, right2);
+            index_t right_b = std::max(left2, right2);
             // we need the minumum LCP of all suffixes in buckets between
             // these two buckets. Since the first element in the left bucket
             // is the LCP of this bucket with its left bucket and we don't need
@@ -2013,10 +1371,10 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
             index_t range_right = (right_b-1) + 1; // +1 since exclusive index
             minqueries.emplace_back(i + prefix_size, range_left, range_right);
         }
-    }
+    }, comm);
 
 #ifndef NDEBUG
-    std::size_t _nqueries = minqueries.size();
+    std::size_t nqueries = minqueries.size();
 #endif
 
     // get parallel-distributed RMQ for all queries, results are in
@@ -2024,15 +1382,63 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
     // TODO: bulk updatable RMQs [such that we don't have to construct the
     //       RMQ for the local_LCP in each iteration]
     bulk_rmq(n, local_LCP, minqueries, comm);
-    assert(minqueries.size() == _nqueries);
+    assert(minqueries.size() == nqueries);
 
 
     // update the new LCP values:
-    for (auto min_lcp : minqueries)
-    {
+    for (auto min_lcp : minqueries) {
         local_LCP[std::get<0>(min_lcp) - prefix_size] = dist + std::get<2>(min_lcp);
     }
 }
+
+void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
+    // 2.) find _new_ bucket boundaries (B1[i-1] == B1[i] && B2[i-1] != B2[i])
+    // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
+    // 4.) LCP[i] = dist + min_lcp[i]
+
+    // find _new_ bucket boundaries and create associated parallel distributed
+    // RMQ queries.
+    std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
+    std::size_t prefix_size = part.excl_prefix_size();
+
+    for_each_lpair_2vec(local_B, local_B2, [dist, prefix_size, &minqueries, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+        if (left1 == right1) {
+            if (left2 == 0 || right2 == 0) {
+                if (local_LCP[i] == n)
+                    local_LCP[i] = dist;
+            } else if (left2 != right2) {
+                index_t left_b  = std::min(left2, right2);
+                index_t right_b = std::max(left2, right2);
+                // we need the minumum LCP of all suffixes in buckets between
+                // these two buckets. Since the first element in the left bucket
+                // is the LCP of this bucket with its left bucket and we don't need
+                // this LCP value, start one to the right:
+                // (-1 each since buffer numbers are current index + 1)
+                index_t range_left = (left_b-1) + 1;
+                index_t range_right = (right_b-1) + 1; // +1 since exclusive index
+                minqueries.emplace_back(i + prefix_size, range_left, range_right);
+            }
+        }
+    }, comm);
+
+#ifndef NDEBUG
+    std::size_t nqueries = minqueries.size();
+#endif
+
+    // get parallel-distributed RMQ for all queries, results are in
+    // `minqueries`
+    // TODO: bulk updatable RMQs [such that we don't have to construct the
+    //       RMQ for the local_LCP in each iteration]
+    bulk_rmq(n, local_LCP, minqueries, comm);
+    assert(minqueries.size() == nqueries);
+
+
+    // update the new LCP values:
+    for (auto min_lcp : minqueries) {
+        local_LCP[std::get<0>(min_lcp) - prefix_size] = dist + std::get<2>(min_lcp);
+    }
+}
+
 };
 
 

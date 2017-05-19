@@ -93,11 +93,11 @@ int main(int argc, char *argv[]) {
     double start = t.elapsed();
     if (stArg.getValue()) {
         // construct SA+LCP+ST
-        suffix_array<std::string::iterator, size_t, true> sa(local_str.begin(), local_str.end(), comm);
-        sa.construct();
+        suffix_array<char, size_t, true> sa(comm);
+        sa.construct(local_str.begin(), local_str.end());
         double sa_time = t.elapsed() - start;
         // build ST
-        std::vector<size_t> local_st_nodes = construct_suffix_tree(sa, comm);
+        std::vector<size_t> local_st_nodes = construct_suffix_tree(sa, local_str.begin(), local_str.end(), comm);
         double st_time = t.elapsed() - sa_time;
         if (comm.rank() == 0) {
             std::cerr << "SA time: " << sa_time << " ms" << std::endl;
@@ -110,9 +110,9 @@ int main(int argc, char *argv[]) {
 
     } else if (lcpArg.getValue()) {
         // construct SA+LCP
-        suffix_array<std::string::iterator, index_t, true> sa(local_str.begin(), local_str.end(), comm);
+        suffix_array<char, index_t, true> sa(comm);
         // TODO choose construction method
-        sa.construct(true);
+        sa.construct(local_str.begin(), local_str.end(), true);
         double end = t.elapsed() - start;
         if (comm.rank() == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
@@ -121,9 +121,9 @@ int main(int argc, char *argv[]) {
         }
     } else {
         // construct SA
-        suffix_array<std::string::iterator, index_t, false> sa(local_str.begin(), local_str.end(), comm);
+        suffix_array<char, index_t, false> sa(comm);
         // TODO choose construction method
-        sa.construct_arr<2>(true);
+        sa.construct_arr<2>(local_str.begin(), local_str.end(), true);
         double end = t.elapsed() - start;
         if (comm.rank() == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;

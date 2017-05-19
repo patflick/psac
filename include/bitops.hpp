@@ -141,7 +141,7 @@ unsigned int reference_ceillog2(unsigned int x) {
 template <typename IntType>
 inline unsigned int floorlog2(IntType n) {
     //return log2_64(n);
-    return ((unsigned) (8*sizeof (unsigned long long) - __builtin_clzll((n)) - 1));
+    return ((unsigned) (8*sizeof(unsigned long long) - __builtin_clzll((n)) - 1));
 }
 
 template <typename IntType>
@@ -173,12 +173,45 @@ unsigned int lcp_bitwise(T x, T y, unsigned int k, unsigned int bits_per_char) {
     // XOR the two values and then find the MSB that isn't zero (since
     // the k-mer strings start (have first character) at MSB)
     T z = x ^ y;
-    // get leading zeros (TODO: in bitops implement faster version for 32bit)
+    // get leading zeros
     unsigned int lz = leading_zeros(z);
 
     // get leading zeros in the k-mer representation
-    unsigned int kmer_leading_zeros = lz - (sizeof(T)*8 - k*bits_per_char);
-    unsigned int lcp = kmer_leading_zeros / bits_per_char;
+    unsigned int kmer_lz = lz - (sizeof(T)*8 - k*bits_per_char);
+    unsigned int lcp = kmer_lz / bits_per_char;
+    return lcp;
+}
+
+/**
+ * @brief   Returns the number identical characters of two strings in k-mer
+ *          compressed bit representation with `bits_per_char` bits per
+ *          character in the word of type `T`. This version does not count
+ *          trailing `0`s towards the LCP.
+ *
+ * @tparam T                The type of the values (an integer type).
+ * @param x                 The first value to compare.
+ * @param y                 The second value to compare.
+ * @param k                 The total number of characters stored in
+ *                          one word of type `T`.
+ * @param bits_per_char     The number of bits per character in the k-mer
+ *                          representation of `x` and `y`.
+ * @return  The longest common prefix, i.e., the number of sequential characters
+ *          equal in the two values `x` and `y`, ignoring the trailing 0s.
+ */
+template <typename T>
+unsigned int lcp_bitwise_no0(T x, T y, unsigned int k, unsigned int bits_per_char) {
+    if (x == y)
+        return k;
+    // XOR the two values and then find the MSB that isn't zero (since
+    // the k-mer strings start (have first character) at MSB)
+    T z = x ^ y;
+    unsigned int lz = leading_zeros(z);
+    // if x==y, then return the trailing zeroes of both combined, else 0
+    unsigned int tz = trailing_zeros((!(x == y)) & (x | y));
+
+    // get leading zeros in the k-mer representation
+    unsigned int kmer_lz = lz - (sizeof(T)*8 - k*bits_per_char);
+    unsigned int lcp = kmer_lz/bits_per_char - tz/bits_per_char;
     return lcp;
 }
 
