@@ -637,8 +637,7 @@ void sort_array_tuples(std::vector<std::array<index_t, L+1> >& tuples) {
 
     // parallel, distributed sample-sorting of tuples (B1, B2, SA)
     mxx::sort(tuples.begin(), tuples.end(),
-    [] (const std::array<index_t, L+1>& x,
-        const std::array<index_t, L+1>& y) {
+    [] (const std::array<index_t, L+1>& x, const std::array<index_t, L+1>& y) {
         for (unsigned int i = 1; i < L+1; ++i) {
             if (x[i] != y[i])
                 return x[i] < y[i];
@@ -1346,50 +1345,6 @@ void initial_kmer_lcp_gsa(unsigned int k, unsigned int bits_per_char,
     }, comm);
 }
 
-
-void resolve_next_lcp_old(int dist, const std::vector<index_t>& local_B2) {
-    // 2.) find _new_ bucket boundaries (B1[i-1] == B1[i] && B2[i-1] != B2[i])
-    // 3.) bulk-parallel-distributed RMQ for ranges (B2[i-1],B2[i]+1) to get min_lcp[i]
-    // 4.) LCP[i] = dist + min_lcp[i]
-
-
-    // find _new_ bucket boundaries and create associated parallel distributed
-    // RMQ queries.
-    std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
-    std::size_t prefix_size = part.excl_prefix_size();
-
-    for_each_lpair_2vec(local_B, local_B2, [prefix_size, &minqueries](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
-        if (left1 == right1 && left2 != right2) {
-            index_t left_b  = std::min(left2, right2);
-            index_t right_b = std::max(left2, right2);
-            // we need the minumum LCP of all suffixes in buckets between
-            // these two buckets. Since the first element in the left bucket
-            // is the LCP of this bucket with its left bucket and we don't need
-            // this LCP value, start one to the right:
-            // (-1 each since buffer numbers are current index + 1)
-            index_t range_left = (left_b-1) + 1;
-            index_t range_right = (right_b-1) + 1; // +1 since exclusive index
-            minqueries.emplace_back(i + prefix_size, range_left, range_right);
-        }
-    }, comm);
-
-#ifndef NDEBUG
-    std::size_t nqueries = minqueries.size();
-#endif
-
-    // get parallel-distributed RMQ for all queries, results are in
-    // `minqueries`
-    // TODO: bulk updatable RMQs [such that we don't have to construct the
-    //       RMQ for the local_LCP in each iteration]
-    bulk_rmq(n, local_LCP, minqueries, comm);
-    assert(minqueries.size() == nqueries);
-
-
-    // update the new LCP values:
-    for (auto min_lcp : minqueries) {
-        local_LCP[std::get<0>(min_lcp) - prefix_size] = dist + std::get<2>(min_lcp);
-    }
-}
 
 void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
     // 2.) find _new_ bucket boundaries (B1[i-1] == B1[i] && B2[i-1] != B2[i])

@@ -24,7 +24,7 @@
 #include <mxx/future.hpp>
 #include <mxx/partition.hpp>
 
-#include "dvector.hpp"
+//#include "dvector.hpp"
 
 
 /*********************************************************************
@@ -241,33 +241,6 @@ void multi_shift_inplace(std::vector<std::array<T, 1+L> >& tuples, mxx::partitio
     }
 }
 
-template <template<class, class> class DRange, typename T, typename D>
-mxx::requests isend_to_global_range(const DRange<T, D>& dr, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end) {
-    assert(src_end > src_begin);
-    assert(dst_end > dst_begin);
-    assert(src_end - src_begin == dst_end - dst_begin);
-
-    size_t prefix = dr.eprefix();
-    assert(dr.eprefix() <= src_begin && src_end <= dr.iprefix());
-
-    mxx::requests r;
-    size_t send_size = src_end - src_begin;
-    // possibly split [dst_begin, dst_end) by distribution
-    size_t recv_begin = dst_begin;
-    size_t send_begin = src_begin;
-    int p = dr.rank_of(dst_begin);
-    while (send_size > 0) {
-        size_t pend = std::min<size_t>(dst_end, dr.iprefix(p));
-        size_t send_cnt = pend - recv_begin;
-        mxx::datatype dt = mxx::get_datatype<T>();
-        MPI_Isend(const_cast<T*>(dr.data_at(send_begin-prefix)), send_cnt, dt.type(), p, 0, dr.comm(), &r.add());
-        recv_begin += send_cnt;
-        send_begin += send_cnt;
-        send_size -= send_cnt;
-        ++p;
-    }
-    return r;
-}
 
 template <typename T>
 mxx::requests isend_to_global_range(const std::vector<T>& src, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
@@ -297,35 +270,6 @@ mxx::requests isend_to_global_range(const std::vector<T>& src, mxx::partition::b
     return r;
 }
 
-template <template<class, class> class DRange, typename T, typename D>
-mxx::requests irecv_from_global_range(DRange<T, D>& dr, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end) {
-    assert(src_end > src_begin);
-    assert(dst_end > dst_begin);
-    assert(src_end - src_begin == dst_end - dst_begin);
-
-    size_t prefix = dr.eprefix();
-    size_t local_size = dr.local_size();
-    assert(prefix <= dst_begin && dst_end <= prefix + local_size);
-
-    mxx::requests r;
-    //size_t send_size = src_end - src_begin;
-    size_t recv_size = dst_end - dst_begin;
-    // possibly split [dst_begin, dst_end) by distribution
-    size_t recv_begin = dst_begin;
-    size_t send_begin = src_begin;
-    int p = dr.rank_of(send_begin);
-    while (recv_size > 0) {
-        size_t pend = std::min<size_t>(src_end, dr.iprefix(p));
-        size_t recv_cnt = pend - send_begin;
-        mxx::datatype dt = mxx::get_datatype<T>();
-        MPI_Irecv(dr.data_at(recv_begin-prefix), recv_cnt, dt.type(), p, 0, dr.comm(), &r.add());
-        recv_begin += recv_cnt;
-        send_begin += recv_cnt;
-        recv_size -= recv_cnt;
-        ++p;
-    }
-    return r;
-}
 
 template <typename T>
 mxx::requests irecv_from_global_range(std::vector<T>& dst, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
@@ -359,6 +303,7 @@ mxx::requests irecv_from_global_range(std::vector<T>& dst, mxx::partition::block
 
 
 
+/*
 
 template <template<class, class> class DRange, typename T, typename D>
 dvector<T, typename DRange<T, D>::dist_type> left_shift_drange(const DRange<T, D>& src, size_t shift_by) {
@@ -392,41 +337,7 @@ std::vector<T> left_shift_dvec(const std::vector<T>& vec, const mxx::comm& comm,
     dvector<T, blk_dist> result = left_shift_drange(src, shift_by);
     return result.vec;
 }
-
-template <typename DRangeSrc, typename DRangeDst>
-mxx::requests icopy_global_range(const DRangeSrc& src, size_t src_begin, size_t src_end, DRangeDst& dst, size_t dst_begin, size_t dst_end) {
-    using Tsrc = typename DRangeSrc::value_type;
-    using Tdst = typename DRangeDst::value_type;
-    // TODO: relax once ranges have their own datatype (possibly MPI_Vector with skips)
-    static_assert(std::is_same<Tsrc, Tdst>::value, "Types for receiving and sending range must be the same");
-
-    assert(src_begin < src_end);
-    assert(dst_begin < dst_end);
-    assert(src_end - src_begin == dst_end - dst_begin);
-
-    mxx::requests req;
-
-    // truncate for send
-    size_t my_src_begin = std::max(src_begin, src.eprefix());
-    size_t my_src_end = std::min(src_end, src.iprefix());
-    if (my_src_begin < my_src_end) {
-        // send
-        size_t re_dst_begin = (my_src_begin - src_begin) + dst_begin;
-        size_t re_dst_end = re_dst_begin + (my_src_end - my_src_begin);
-        req.insert(isend_to_global_range(src, my_src_begin, my_src_end, re_dst_begin, re_dst_end));
-    }
-
-    // truncate for receive
-    size_t my_dst_begin = std::max(dst_begin, src.eprefix());
-    size_t my_dst_end = std::min(dst_end, src.iprefix());
-    if (my_dst_begin < my_dst_end) {
-        // receive
-        size_t re_src_begin = (my_dst_begin - dst_begin) + src_begin;
-        size_t re_src_end = re_src_begin + (my_dst_end - my_dst_begin);
-        req.insert(irecv_from_global_range(dst, re_src_begin, re_src_end, my_dst_begin, my_dst_end));
-    }
-    return req;
-}
+*/
 
 template <typename T>
 mxx::requests icopy_global_range(const std::vector<T>& src, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, std::vector<T>& dst, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
@@ -459,11 +370,6 @@ mxx::requests icopy_global_range(const std::vector<T>& src, mxx::partition::bloc
         req.insert(irecv_from_global_range(dst, dist, re_src_begin, re_src_end, my_dst_begin, my_dst_end, comm));
     }
     return req;
-}
-
-template <typename DRangeSrc, typename DRangeDst>
-void copy_global_range(const DRangeSrc& src, size_t src_begin, size_t src_end, DRangeDst& dst, size_t dst_begin, size_t dst_end) {
-    icopy_global_range(src, src_begin, src_end, dst, dst_begin, dst_end).waitall();
 }
 
 

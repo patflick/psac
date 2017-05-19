@@ -14,29 +14,6 @@
 #include <cxx-prettyprint/prettyprint.hpp>
 
 
-// TODO: as GTEST
-void test_global_copy() {
-    // generate input
-    mxx::comm c;
-    std::vector<int> x;
-    int n = 20;
-    if (c.rank() == 0) {
-        x.resize(n);
-        for (size_t i = 0; i < x.size(); ++i) {
-            x[i] = i;
-        }
-    }
-    // distribute equally
-    mxx::stable_distribute_inplace(x, c);
-
-    // TODO: create ranges + test global copies
-    dvector_const_wrapper<int, blk_dist> src(x, c);
-    dvector<int, blk_dist> dst(c, x.size());
-    copy_global_range(src, 4, 13, dst, 1, 10);
-    mxx::sync_cout(c) << dst.vec << std::endl;
-}
-
-
 std::vector<int> rand_buckets(size_t n, size_t max_bs, const mxx::comm& c) {
     std::vector<int> seq;
     if (c.rank() == 0) {
