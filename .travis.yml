@@ -72,16 +72,20 @@ before_script:
 script:
     # build mxx and run tests
     - make
-    - ./bin/test-rmq 
+    - ./bin/test-rmq
     - ./bin/test-bitops
     - ./bin/test-psac
     - ./bin/test-ansv
     - ./bin/test-suffixtree
+    - ./bin/test-gsa
     - mpiexec -np 4 ./bin/test-psac
     - mpiexec -np 13 ./bin/test-psac
     - mpiexec -np 4 ./bin/test-ansv
     - mpiexec -np 13 ./bin/test-ansv
     - mpiexec -np 4 ./bin/test-suffixtree
+    - mpiexec -np 13 ./bin/test-gsa
+    - mpiexec -np 4 ./bin/test-gsa
+    - mpiexec -np 4 ./bin/test-ss
 
 after_success:
   # only collect coverage if compiled with gcc
