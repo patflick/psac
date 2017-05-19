@@ -96,8 +96,7 @@ std::vector<T> shift_vector(const std::vector<T>& vec, mxx::partition::block_dec
                 local_split = dist.prefix_size(p1) + shift_by - prev_size;
                 // send to first processor
                 assert(p1 != comm.rank());
-                MPI_Send(&vec[0], local_split,
-                         mpidt.type(), p1, 0, comm);
+                MPI_Send(const_cast<T*>(&vec[0]), local_split, mpidt.type(), p1, 0, comm);
             } else {
                 // p1 doesn't exist, then there is no prefix to add
                 local_split = shift_by - prev_size;
@@ -108,8 +107,7 @@ std::vector<T> shift_vector(const std::vector<T>& vec, mxx::partition::block_dec
         }
 
         if (p2 != comm.rank()) {
-            MPI_Send(&vec[0] + local_split, local_size - local_split,
-                     mpidt.type(), p2, 0, comm);
+            MPI_Send(const_cast<T*>(&vec[0] + local_split), local_size - local_split, mpidt.type(), p2, 0, comm);
         } else {
             // in this case the split should be exactly at `shift_by`
             assert(local_split == shift_by);
