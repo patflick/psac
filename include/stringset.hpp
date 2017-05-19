@@ -26,34 +26,9 @@
 #include <mxx/comm.hpp>
 #include "shifting.hpp"
 
-// generate a distributed string set with splits
-std::string random_dstringset(size_t lsize, const mxx::comm& c) {
-    std::string local_str;
-    local_str.resize(lsize);
-    char alpha[] = {'a', 'b', 'c', 'd', 'a', 'b', 'c', 'd', 'a', 'b', 'c', 'd', 'a', 'b', 'c', 'd', '$'};
-    srand(c.rank()*13 + 23);
-    std::generate(local_str.begin(), local_str.end(), [&alpha]() {
-        return alpha[rand() % sizeof(alpha)];
-    });
-    return local_str;
-}
-
 // distributed stringset with strings split across boundaries
 // and each string not necessarily starting in memory right after the previous
-// each string is represented as ptr/gidx + size
-// where size can be represented as size[i] = prefix_size[i]-prefix_size[i-1]
-//
-// alternatives for representing split strings:
-// bool first_split, etc...
-// just last_left etc doesn't work for non-contiguous sequences
-// there is some dependency on the parser, eg. it somehow needs to parse across
-// processor boundaries to figure out how sequences are split/if theyare split
-
-// create explicit representation from implicit parser, or via specific separating character?
-// (corresponding to fasta/fastq?)
-//
-
-
+// each string is represented as ptr + size
 class simple_dstringset {
 public:
     bool first_split, last_split;
@@ -551,22 +526,6 @@ std::ostream& operator<<(std::ostream& os, const dist_seqs_buckets& ds) {
         return os << "(" << ds.left_sep << "@" << ds.left_sep_rank << "), [" << ds.first_sep << ",...," << ds.last_sep << "), (" << ds.right_sep << "@" << ds.right_sep_rank << ")";
     else
         return os << "(" << ds.left_sep << "@" << ds.left_sep_rank << "), [], (" << ds.right_sep << "@" << ds.right_sep_rank << ")";
-}
-
-// for use with mxx::sync_cout
-std::ostream& operator<<(std::ostream& os, const simple_dstringset& ss) {
-    for (size_t i = 0; i < ss.sizes.size(); ++i) {
-        if (!(ss.first_split && i == 0)) {
-            os << "\"";
-        }
-        std::string s(ss.str_begins[i], ss.str_begins[i]+ss.sizes[i]);
-        os << s;
-        if (!(ss.last_split && i == ss.sizes.size()-1)) {
-            os << "\", ";
-        }
-    }
-    os.flush();
-    return os;
 }
 
 
