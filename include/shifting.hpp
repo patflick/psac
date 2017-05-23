@@ -32,11 +32,11 @@
  *********************************************************************/
 
 template <typename T>
-std::vector<T> shift_vector(const std::vector<T>& vec, mxx::partition::block_decomposition_buffered<size_t>& dist, std::size_t shift_by, const mxx::comm& comm) {
+std::vector<T> shift_vector(const std::vector<T>& vec, mxx::blk_dist& dist, std::size_t shift_by, const mxx::comm& comm) {
     // get # elements to the left
     assert(dist.local_size() == vec.size());
     size_t local_size = vec.size();
-    size_t prev_size = dist.excl_prefix_size();
+    size_t prev_size = dist.eprefix_size();
 
 
     std::vector<T> result(local_size);
@@ -48,9 +48,9 @@ std::vector<T> shift_vector(const std::vector<T>& vec, mxx::partition::block_dec
     // receive elements from the right
     if (prev_size + shift_by < dist.global_size()) {
         std::size_t right_first_gl_idx = prev_size + shift_by;
-        int p1 = dist.target_processor(right_first_gl_idx);
+        int p1 = dist.rank_of(right_first_gl_idx);
 
-        std::size_t p1_gl_end = dist.prefix_size(p1);
+        std::size_t p1_gl_end = dist.iprefix_size(p1);
         std::size_t p1_recv_cnt = p1_gl_end - right_first_gl_idx;
 
         if (p1 != comm.rank()) {
@@ -84,16 +84,16 @@ std::vector<T> shift_vector(const std::vector<T>& vec, mxx::partition::block_dec
         int p1 = -1;
         if (prev_size >= shift_by) {
             std::size_t first_gl_idx = prev_size - shift_by;
-            p1 = dist.target_processor(first_gl_idx);
+            p1 = dist.rank_of(first_gl_idx);
         }
         std::size_t last_gl_idx = prev_size + local_size - 1 - shift_by;
-        int p2 = dist.target_processor(last_gl_idx);
+        int p2 = dist.rank_of(last_gl_idx);
 
         std::size_t local_split;
         if (p1 != p2) {
             // local start index of area for second processor
             if (p1 >= 0) {
-                local_split = dist.prefix_size(p1) + shift_by - prev_size;
+                local_split = dist.iprefix_size(p1) + shift_by - prev_size;
                 // send to first processor
                 assert(p1 != comm.rank());
                 MPI_Send(const_cast<T*>(&vec[0]), local_split, mpidt.type(), p1, 0, comm);
@@ -126,11 +126,11 @@ std::vector<T> shift_vector(const std::vector<T>& vec, mxx::partition::block_dec
 // shifting with arrays (custom data types)
 // shifts (L-1) times into the (L-1) additional Bucket entries
 template <typename T, std::size_t L>
-void multi_shift_inplace(std::vector<std::array<T, 1+L> >& tuples, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t shift_by, const mxx::comm& comm) {
+void multi_shift_inplace(std::vector<std::array<T, 1+L> >& tuples, mxx::blk_dist& dist, size_t shift_by, const mxx::comm& comm) {
     // get # elements to the left
     size_t local_size = tuples.size();
     assert(local_size == dist.local_size());
-    std::size_t prev_size = dist.excl_prefix_size();
+    std::size_t prev_size = dist.eprefix_size();
 
     mxx::datatype mpidt = mxx::get_datatype<T>();
 
@@ -144,9 +144,9 @@ void multi_shift_inplace(std::vector<std::array<T, 1+L> >& tuples, mxx::partitio
         // receive elements from the right
         if (prev_size + k < dist.global_size()) {
             std::size_t right_first_gl_idx = prev_size + k;
-            int p1 = dist.target_processor(right_first_gl_idx);
+            int p1 = dist.rank_of(right_first_gl_idx);
 
-            std::size_t p1_gl_end = dist.prefix_size(p1);
+            std::size_t p1_gl_end = dist.iprefix_size(p1);
             std::size_t p1_recv_cnt = p1_gl_end - right_first_gl_idx;
 
             if (p1 != comm.rank()) {
@@ -186,16 +186,16 @@ void multi_shift_inplace(std::vector<std::array<T, 1+L> >& tuples, mxx::partitio
             int p1 = -1;
             if (prev_size >= k) {
                 std::size_t first_gl_idx = prev_size - k;
-                p1 = dist.target_processor(first_gl_idx);
+                p1 = dist.rank_of(first_gl_idx);
             }
             std::size_t last_gl_idx = prev_size + local_size - 1 - k;
-            int p2 = dist.target_processor(last_gl_idx);
+            int p2 = dist.rank_of(last_gl_idx);
 
             std::size_t local_split;
             if (p1 != p2) {
                 // local start index of area for second processor
                 if (p1 >= 0) {
-                    local_split = dist.prefix_size(p1) + k - prev_size;
+                    local_split = dist.iprefix_size(p1) + k - prev_size;
                     // send to first processor
                     assert(p1 != comm.rank());
                     MPI_Type_vector(local_split,1,L+1,mpidt.type(),&dts[n_dts]);
@@ -243,12 +243,12 @@ void multi_shift_inplace(std::vector<std::array<T, 1+L> >& tuples, mxx::partitio
 
 
 template <typename T>
-mxx::requests isend_to_global_range(const std::vector<T>& src, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
+mxx::requests isend_to_global_range(const std::vector<T>& src, mxx::blk_dist& dist, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
     assert(src_end > src_begin);
     assert(dst_end > dst_begin);
     assert(src_end - src_begin == dst_end - dst_begin);
 
-    size_t prefix = dist.excl_prefix_size();
+    size_t prefix = dist.eprefix_size();
     //assert(dr.eprefix() <= src_begin && src_end <= dr.iprefix());
 
     mxx::requests r;
@@ -256,9 +256,9 @@ mxx::requests isend_to_global_range(const std::vector<T>& src, mxx::partition::b
     // possibly split [dst_begin, dst_end) by distribution
     size_t recv_begin = dst_begin;
     size_t send_begin = src_begin;
-    int p = dist.target_processor(dst_begin);
+    int p = dist.rank_of(dst_begin);
     while (send_size > 0) {
-        size_t pend = std::min<size_t>(dst_end, dist.prefix_size(p));
+        size_t pend = std::min<size_t>(dst_end, dist.iprefix_size(p));
         size_t send_cnt = pend - recv_begin;
         mxx::datatype dt = mxx::get_datatype<T>();
         MPI_Isend(const_cast<T*>(&src[send_begin-prefix]), send_cnt, dt.type(), p, 0, comm, &r.add());
@@ -272,12 +272,12 @@ mxx::requests isend_to_global_range(const std::vector<T>& src, mxx::partition::b
 
 
 template <typename T>
-mxx::requests irecv_from_global_range(std::vector<T>& dst, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
+mxx::requests irecv_from_global_range(std::vector<T>& dst, mxx::blk_dist& dist, size_t src_begin, size_t src_end, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
     assert(src_end > src_begin);
     assert(dst_end > dst_begin);
     assert(src_end - src_begin == dst_end - dst_begin);
 
-    size_t prefix = dist.excl_prefix_size();
+    size_t prefix = dist.eprefix_size();
     size_t local_size = dist.local_size();
     assert(prefix <= dst_begin && dst_end <= prefix + local_size);
 
@@ -287,9 +287,9 @@ mxx::requests irecv_from_global_range(std::vector<T>& dst, mxx::partition::block
     // possibly split [dst_begin, dst_end) by distribution
     size_t recv_begin = dst_begin;
     size_t send_begin = src_begin;
-    int p = dist.target_processor(send_begin);
+    int p = dist.rank_of(send_begin);
     while (recv_size > 0) {
-        size_t pend = std::min<size_t>(src_end, dist.prefix_size(p));
+        size_t pend = std::min<size_t>(src_end, dist.iprefix_size(p));
         size_t recv_cnt = pend - send_begin;
         mxx::datatype dt = mxx::get_datatype<T>();
         MPI_Irecv(&dst[recv_begin-prefix], recv_cnt, dt.type(), p, 0, comm, &r.add());
@@ -340,15 +340,15 @@ std::vector<T> left_shift_dvec(const std::vector<T>& vec, const mxx::comm& comm,
 */
 
 template <typename T>
-mxx::requests icopy_global_range(const std::vector<T>& src, mxx::partition::block_decomposition_buffered<size_t>& dist, size_t src_begin, size_t src_end, std::vector<T>& dst, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
+mxx::requests icopy_global_range(const std::vector<T>& src, mxx::blk_dist& dist, size_t src_begin, size_t src_end, std::vector<T>& dst, size_t dst_begin, size_t dst_end, const mxx::comm& comm) {
     assert(src_begin < src_end);
     assert(dst_begin < dst_end);
     assert(src_end - src_begin == dst_end - dst_begin);
 
     mxx::requests req;
 
-    size_t eprefix = dist.excl_prefix_size();
-    size_t iprefix = dist.prefix_size();
+    size_t eprefix = dist.eprefix_size();
+    size_t iprefix = dist.iprefix_size();
 
     // truncate for send
     size_t my_src_begin = std::max(src_begin, eprefix);
@@ -381,7 +381,7 @@ std::vector<T> shift_buckets_ds(const DistSeqs& ss, const std::vector<T>& vec, s
 
     size_t local_size = vec.size();
     size_t global_size = mxx::allreduce(local_size, comm);
-    mxx::partition::block_decomposition_buffered<size_t> dist(global_size, comm.size(), comm.rank());
+    mxx::blk_dist dist(global_size, comm.size(), comm.rank());
 
     // for each bucket which is split across processors, use global range communication
     mxx::requests req;
@@ -395,7 +395,7 @@ std::vector<T> shift_buckets_ds(const DistSeqs& ss, const std::vector<T>& vec, s
 
     // for all purely internal buckets: shift using simple std::copy
     if (ss.has_inner_seqs() > 0) {
-        size_t sb = ss.prefix_sizes[0] - dist.excl_prefix_size();
+        size_t sb = ss.prefix_sizes[0] - dist.eprefix_size();
         auto iit = vec.begin() + sb;
         auto oit = result.begin() + sb;
         for (size_t i = 0; i < ss.prefix_sizes.size()-1; ++i) {

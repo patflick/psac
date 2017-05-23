@@ -11,7 +11,7 @@
  */
 
 template <typename T, typename index_t>
-void bulk_permute_inplace(std::vector<T>& vec, std::vector<T>& idx, mxx::partition::block_decomposition_buffered<index_t>& part, const mxx::comm& comm) {
+void bulk_permute_inplace(std::vector<T>& vec, std::vector<index_t>& idx, mxx::blk_dist& part, const mxx::comm& comm) {
     assert(idx.size() == vec.size());
 
     //SAC_TIMER_START();
@@ -20,7 +20,7 @@ void bulk_permute_inplace(std::vector<T>& vec, std::vector<T>& idx, mxx::partiti
     // counting the number of elements for each processor
     std::vector<size_t> send_counts(comm.size(), 0);
     for (index_t gi : idx) {
-        int target_p = part.target_processor(gi);
+        int target_p = part.rank_of(gi);
         assert(0 <= target_p && target_p < comm.size());
         ++send_counts[target_p];
     }
@@ -40,7 +40,7 @@ void bulk_permute_inplace(std::vector<T>& vec, std::vector<T>& idx, mxx::partiti
         // break if all buckets are done
         if (cur_p == comm.size()-1)
             break;
-        int target_p = part.target_processor(idx[i]);
+        int target_p = part.rank_of(idx[i]);
         assert(0 <= target_p && target_p < comm.size());
         if (target_p == cur_p) {
             // item correctly placed
@@ -62,7 +62,7 @@ void bulk_permute_inplace(std::vector<T>& vec, std::vector<T>& idx, mxx::partiti
     //SAC_TIMER_END_SECTION("sa2isa_all2all");
 
     // locally rearrange (assign to correct index)
-    size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.eprefix_size();
     for (std::size_t i = 0; i < idx.size(); ++i) {
         index_t out_idx = idx[i] - prefix;
         assert(0 <= out_idx && out_idx < idx.size());

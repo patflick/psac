@@ -27,6 +27,19 @@
 
 #include <bulk_rma.hpp>
 
+/**
+ * This function effectively constructs the Suffix Tree structure independently
+ * for each internal node and leaf node in the form of edges pointing to the
+ * parent node. This first solves the ANSV on the LCP array, and then calls
+ * the given function for each (node, parent) edge in the form of:
+ *
+        func(i, global_size + prefix + i, parent, lcp_val);
+
+ * where:
+ *  i: the local index of the node corresponding to the local LCP array
+ *  parent: the index of the parent node (corresponding to a global index into the LCP array)
+ *  lcp_val: the LCP value for the edge
+ */
 template <typename Func, typename char_t, typename index_t = std::size_t>
 void for_each_parent(const suffix_array<char_t, index_t, true>& sa, Func func, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
@@ -224,93 +237,9 @@ constexpr int edgechar_default = edgechar_bulk_rma;
 #endif
 */
 
-
-/*
- * A rather in-efficient method, that requires two complete global shuffles
- * to request the edge character data
- *
- * This can be deleted eventually.
- */
-template <typename Iterator, typename char_t, typename index_t = std::size_t>
-std::vector<size_t> construct_st_2phase(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, const mxx::comm& comm) {
-    mxx::section_timer t(std::cerr, comm);
-    // get input sizes
-    size_t local_size = sa.local_SA.size();
-    size_t global_size = mxx::allreduce(local_size, comm);
-    size_t prefix = mxx::exscan(local_size, comm);
-    // assert n >= p, or rather at least one element per process
-    MXX_ASSERT(mxx::all_of(local_size >= 1, comm));
-
-    std::vector<std::tuple<size_t, size_t, size_t>> parent_reqs;
-    parent_reqs.reserve(2*local_size);
-    // parent request where the character is the last `$`/`0` character
-    // these don't have to be requested, but are locally fulfilled
-    std::vector<std::tuple<size_t, size_t, size_t>> dollar_reqs;
-
-    for_each_parent(sa, [&](size_t i, size_t gidx, size_t parent, size_t lcp_val) {
-        if (sa.local_SA[i] + lcp_val >= global_size) {
-            MXX_ASSERT(sa.local_SA[i] + lcp_val == global_size);
-            dollar_reqs.emplace_back(parent, gidx, 0);
-        } else {
-            parent_reqs.emplace_back(parent, gidx, sa.local_SA[i] + lcp_val);
-        }
-    }, comm);
-    t.end_section("locally calc parents");
-
-    //typedef typename std::iterator_traits<InputIterator>::value_type CharT;
-    std::vector<char_t> edge_chars;
-
-    // This is a slower method, because it sends all edges to the position
-    // of the character first, and then back to the position of the parent.
-    // Most parents are on the same processor as the child node, thus
-    // this requires a lot more communication then necessary
-    // 1) send tuples (parent, i, SA[i]+LCP[i]) to 3rd index)
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
-    // send all requests to the process on which the character for the
-    // character request lies
-    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<2>(t));}, comm);
-    t.end_section("all2all_func: req characters");
-
-    // replace string request with character from original string
-    for (size_t i = 0; i < parent_reqs.size(); ++i) {
-        size_t offset = std::get<2>(parent_reqs[i]);
-        if (offset == global_size) {
-            // the artificial last `$` character is mapped to 0
-            std::get<2>(parent_reqs[i]) = 0;
-        } else {
-            // get character from that global string position
-            std::get<2>(parent_reqs[i]) = sa.alpha.encode(static_cast<size_t>(*(str_begin+(std::get<2>(parent_reqs[i])-prefix))));
-        }
-    }
-    // append the "dollar" requests
-    parent_reqs.insert(parent_reqs.end(), dollar_reqs.begin(), dollar_reqs.end());
-    dollar_reqs.clear(); dollar_reqs.shrink_to_fit();
-
-    t.end_section("locally answer char queries");
-
-    // 2) send tuples (parent, i, S[SA[i]+LCP[i]) to 1st index) [to parent]
-    mxx::all2all_func(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
-    t.end_section("all2all_func: send to parent");
-
-    // one internal node for each LCP entry, each internal node is sigma cells
-    std::vector<size_t> internal_nodes((sa.alpha.sigma()+1)*local_size);
-    for (size_t i = 0; i < parent_reqs.size(); ++i) {
-        size_t parent = std::get<0>(parent_reqs[i]);
-        size_t node_idx = (parent - prefix)*(sa.alpha.sigma()+1);
-        uint16_t c = std::get<2>(parent_reqs[i]);
-        MXX_ASSERT(0 <= c && c < sa.alpha.sigma()+1);
-        size_t cell_idx = node_idx + c;
-        internal_nodes[cell_idx] = std::get<1>(parent_reqs[i]);
-    }
-
-    t.end_section("locally: create internal nodes");
-
-    return internal_nodes;
-}
-
 // original implementation used for SC16 and IPDPS17 papers
 template <typename Iterator, typename char_t, typename index_t = std::size_t, int edgechar_method = edgechar_default>
-std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, Iterator str_end, const mxx::comm& comm) {
+std::vector<size_t> construct_suffix_tree_old(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, Iterator str_end, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
     // get input sizes
     size_t local_size = sa.local_SA.size();
@@ -339,10 +268,10 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, tr
     //typedef typename std::iterator_traits<InputIterator>::value_type CharT;
     std::vector<char_t> edge_chars;
     if (edgechar_method == edgechar_bulk_rma) {
-        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        mxx::blk_dist part(global_size, comm.size(), comm.rank());
         // send those edges for which the parent lies on a remote processor
         typedef std::tuple<size_t, size_t, size_t> Tp;
-        mxx::all2all_func(remote_reqs, [&part](const Tp& t) {return part.target_processor(std::get<0>(t));}, comm);
+        mxx::all2all_func(remote_reqs, [&part](const Tp& t) {return part.rank_of(std::get<0>(t));}, comm);
         parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
         remote_reqs = std::vector<Tp>();
         t.end_section("bulk_rma: send to parent");
@@ -356,7 +285,7 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, tr
 
         // bucket the String index by target processor (the character we need for this edge)
         // as a pre-step for the bulk_rma (which requires things to be bucketed by target processor)
-        std::vector<size_t> send_counts = mxx::bucketing(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) { return part.target_processor(std::get<2>(t));}, comm.size());
+        std::vector<size_t> send_counts = mxx::bucketing(parent_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) { return part.rank_of(std::get<2>(t));}, comm.size());
         t.end_section("bulk_rma: bucketing by char index");
         // create request address vector
         std::vector<size_t> global_indexes(parent_reqs.size());
@@ -368,9 +297,9 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, tr
         edge_chars = bulk_rma(str_begin, str_end, global_indexes, send_counts, comm);
         t.end_section("bulk_rma: bulk_rma");
     } else {
-        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        mxx::blk_dist part(global_size, comm.size(), comm.rank());
         // send those edges for which the parent lies on a remote processor
-        mxx::all2all_func(remote_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.target_processor(std::get<0>(t));}, comm);
+        mxx::all2all_func(remote_reqs, [&part](const std::tuple<size_t,size_t,size_t>& t) {return part.rank_of(std::get<0>(t));}, comm);
         parent_reqs.insert(parent_reqs.end(), remote_reqs.begin(), remote_reqs.end());
         t.end_section("all2all_func: send to parent");
 
@@ -450,8 +379,39 @@ std::ostream& operator<<(std::ostream& os, const edge& e) {
 
 MXX_CUSTOM_STRUCT(edge, parent, gidx);
 
+template <typename Func, typename char_t, typename index_t = std::size_t>
+void for_each_local_parent(const suffix_array<char_t, index_t, true>& sa, const mxx::comm& comm, Func func) {
+    size_t prefix = sa.part.eprefix_size();
+    size_t local_size = sa.local_SA.size();
+
+    using redge_t = std::tuple<edge, size_t, size_t>;
+    std::vector<redge_t> remote_edges;
+
+    for_each_parent(sa, [&](size_t i, size_t gidx, size_t parent, size_t lcp_val) {
+        //size_t char_idx = sa.local_SA[i] + lcp_val;
+        // remote or local?
+        if (prefix <= parent && parent < prefix + local_size) {
+            func(parent, gidx, sa.local_SA[i], lcp_val);
+        } else {
+            remote_edges.emplace_back(edge(parent, gidx), sa.local_SA[i], lcp_val);
+        }
+    }, comm);
+
+    // send those edges for which the parent lies on a remote processor
+    const mxx::blk_dist& part = sa.part;
+    mxx::all2all_func(remote_edges, [&part](const redge_t& e) {
+        return part.rank_of(std::get<0>(e).parent);
+    }, comm);
+
+    // call function for those remote edges
+    for (auto& p : remote_edges) {
+        func(std::get<0>(p).parent, std::get<0>(p).gidx, std::get<1>(p), std::get<2>(p));
+    }
+}
+
+
 template <typename Iterator, typename char_t, typename index_t = std::size_t, int edgechar_method = edgechar_default>
-std::vector<size_t> construct_suffix_tree_edges(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, Iterator str_end, const mxx::comm& comm) {
+std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, Iterator str_end, const mxx::comm& comm) {
     mxx::section_timer t(std::cerr, comm);
 
     // get input sizes
@@ -470,9 +430,10 @@ std::vector<size_t> construct_suffix_tree_edges(const suffix_array<char_t, index
     // parent request where the character is the last `$`/`0` character
     // these don't have to be requested, but are locally fulfilled
     std::vector<edge> dollar_edges;
-    std::vector<std::pair<edge, size_t>> remote_edges;
+    //std::vector<std::pair<edge, size_t>> remote_edges;
     //std::vector<size_t> remote_char_indexes;
 
+#if 0
     for_each_parent(sa, [&](size_t i, size_t gidx, size_t parent, size_t lcp_val) {
         size_t char_idx = sa.local_SA[i] + lcp_val;
         // remote or local?
@@ -493,11 +454,10 @@ std::vector<size_t> construct_suffix_tree_edges(const suffix_array<char_t, index
 
     // TODO: plus distinguish between dollar/parent req only for the first method
     //typedef typename std::iterator_traits<InputIterator>::value_type CharT;
-    std::vector<char_t> edge_chars;
 
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    mxx::blk_dist part(global_size, comm.size(), comm.rank());
     // send those edges for which the parent lies on a remote processor
-    mxx::all2all_func(remote_edges, [&part](const std::pair<edge,size_t>& e) {return part.target_processor(e.first.parent);}, comm);
+    mxx::all2all_func(remote_edges, [&part](const std::pair<edge,size_t>& e) {return part.rank_of(e.first.parent);}, comm);
     for (auto& p : remote_edges) {
         if (p.second < global_size) {
             edges.emplace_back(p.first);
@@ -506,25 +466,33 @@ std::vector<size_t> construct_suffix_tree_edges(const suffix_array<char_t, index
             dollar_edges.emplace_back(p.first);
         }
     }
-    t.end_section("bulk_rma: send to parent");
+#endif
 
-    if (edgechar_method == edgechar_bulk_rma) {
-        // use global bulk RMA for getting the corresponding characters
-        edge_chars = bulk_rma(str_begin, str_end, char_indexes, comm);
-        t.end_section("bulk_rma: bulk_rma");
-    } else {
-        // shared memory versions
-        if (edgechar_method == edgechar_mpi_osc_rma) {
-            edge_chars = bulk_rma_mpiwin(str_begin, str_end, char_indexes, comm);
-        } else if (edgechar_method == edgechar_rma_shared) {
-            edge_chars = bulk_rma_shm_mpi(str_begin, str_end, char_indexes, comm);
-        } else if (edgechar_method == edgechar_posix_sm) {
-            edge_chars = bulk_rma_shm_posix(str_begin, str_end, char_indexes, comm);
-        } else if (edgechar_method == edgechar_posix_sm_split) {
-            edge_chars = bulk_rma_shm_posix_split(str_begin, str_end, char_indexes, comm);
+    for_each_local_parent(sa, comm, [&](size_t parent, size_t gidx, size_t sa_val, size_t lcp_val) {
+        size_t char_idx = sa_val + lcp_val;
+        if (char_idx < global_size) {
+            edges.emplace_back(parent, gidx);
+            char_indexes.push_back(char_idx);
+        } else {
+            dollar_edges.emplace_back(parent, gidx);
         }
-        t.end_section("RMA read chars");
+    });
+    t.end_section("edges send to parent");
+
+    // use global bulk RMA for getting the first char per edge
+    std::vector<char_t> edge_chars;
+    if (edgechar_method == edgechar_bulk_rma) {
+        edge_chars = bulk_rma(str_begin, str_end, char_indexes, comm);
+    } else if (edgechar_method == edgechar_mpi_osc_rma) {
+        edge_chars = bulk_rma_mpiwin(str_begin, str_end, char_indexes, comm);
+    } else if (edgechar_method == edgechar_rma_shared) {
+        edge_chars = bulk_rma_shm_mpi(str_begin, str_end, char_indexes, comm);
+    } else if (edgechar_method == edgechar_posix_sm) {
+        edge_chars = bulk_rma_shm_posix(str_begin, str_end, char_indexes, comm);
+    } else if (edgechar_method == edgechar_posix_sm_split) {
+        edge_chars = bulk_rma_shm_posix_split(str_begin, str_end, char_indexes, comm);
     }
+    t.end_section("RMA read chars");
 
     unsigned int sigma = sa.alpha.sigma();
 
@@ -687,9 +655,9 @@ std::vector<size_t> construct_suffix_tree_sm(const suffix_array<char_t, index_t,
 
     /* process remote edges */
 
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    mxx::blk_dist part(global_size, comm.size(), comm.rank());
     // send those edges for which the parent lies on a remote processor
-    mxx::all2all_func(remote_edges, [&part](const std::pair<edge,size_t>& e) {return part.target_processor(e.first.parent);}, comm);
+    mxx::all2all_func(remote_edges, [&part](const std::pair<edge,size_t>& e) {return part.rank_of(e.first.parent);}, comm);
     for (auto& p : remote_edges) {
         if (p.second < global_size) {
             size_t local_nodeidx = sigma*(p.first.parent-prefix);

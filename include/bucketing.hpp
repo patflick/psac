@@ -66,7 +66,7 @@ std::pair<size_t,size_t> rebucket(std::vector<T>& v1, std::vector<T>& v2, bool c
     size_t local_size = v1.size();
 
     // get my global starting index
-    //size_t prefix = part.excl_prefix_size();
+    //size_t prefix = part.eprefix_size();
     size_t prefix = mxx::exscan(local_size, comm);
 
     /*
@@ -180,7 +180,7 @@ std::pair<size_t,size_t> rebucket_arr(std::vector<std::array<T, L+1> >& tuples, 
     std::pair<size_t,size_t> result;
     // get my global starting index
     size_t local_size = tuples.size();
-    //size_t prefix = part.excl_prefix_size();
+    //size_t prefix = part.eprefix_size();
     size_t prefix = mxx::exscan(local_size, comm);
     size_t local_max = 0;
 

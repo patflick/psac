@@ -243,16 +243,16 @@ public:
         std::tie(right_sep,right_sep_rank) = mxx::exscan(std::make_pair(first_sep, comm.rank()), minpair, comm.reverse());
         if (comm.rank() == comm.size() - 1) {
             //right_sep = dist.iprefix();
-            right_sep = dist.prefix_size();
+            right_sep = dist.iprefix_size();
             right_sep_rank = comm.rank();
         }
-        if (right_sep == dist.prefix_size()) {
+        if (right_sep == dist.iprefix_size()) {
             last_sep = right_sep;
         }
         if (comm.rank() == 0) {
             first_sep = 0;
         }
-        if (first_sep == dist.excl_prefix_size()) {
+        if (first_sep == dist.eprefix_size()) {
             left_sep = first_sep;
             left_sep_rank = comm.rank();
         }
@@ -376,7 +376,7 @@ public:
 // equally distributed prefix sizes
 // with shadow elements for left and right processor boundaries
 struct dist_seqs : public dist_seqs_base {
-    mxx::partition::block_decomposition_buffered<size_t> part;
+    mxx::blk_dist part;
     size_t global_size;
     std::vector<size_t> prefix_sizes;
     //bool shadow_initialized;
@@ -389,7 +389,7 @@ struct dist_seqs : public dist_seqs_base {
         size_t ss_global_size = mxx::allreduce(ss_local_size, comm);
         size_t ss_prefix = mxx::exscan(ss_local_size, comm);
 
-        part = mxx::partition::block_decomposition_buffered<size_t>(ss_global_size, comm.size(), comm.rank());
+        part = mxx::blk_dist(ss_global_size, comm.size(), comm.rank());
         global_size = ss_global_size;
 
         std::vector<size_t> send_counts(comm.size(), 0);
@@ -399,20 +399,20 @@ struct dist_seqs : public dist_seqs_base {
         size_t size_sum = ss_prefix;
         int pi;
         if (!dss.first_split) {
-            pi = part.target_processor(ss_prefix);
+            pi = part.rank_of(ss_prefix);
             ++send_counts[pi];
             gidx.emplace_back(size_sum);
         } else {
-            pi = part.target_processor(ss_prefix+dss.sizes[0]);
+            pi = part.rank_of(ss_prefix+dss.sizes[0]);
         }
-        size_t pi_end = part.prefix_size(pi);
+        size_t pi_end = part.iprefix_size(pi);
 
         // create prefix sums and keep track the processor id for their target
         for (size_t i = 0; i < dss.sizes.size()-1; ++i) {
             size_sum += dss.sizes[i];
             while (size_sum >= pi_end) {
                 ++pi;
-                pi_end = part.prefix_size(pi);
+                pi_end = part.iprefix_size(pi);
             }
             gidx.emplace_back(size_sum);
             ++send_counts[pi];
@@ -476,7 +476,7 @@ struct dist_seqs : public dist_seqs_base {
 };
 
 struct dist_seqs_buckets : public dist_seqs_base {
-    mxx::partition::block_decomposition_buffered<size_t> part;
+    mxx::blk_dist part;
     size_t global_size;
     bool has_local_els;
 
@@ -487,7 +487,7 @@ struct dist_seqs_buckets : public dist_seqs_base {
         dist_seqs_buckets d;
         d.has_local_els = seq.size() > 0;
         d.global_size = mxx::allreduce(seq.size(), comm);
-        d.part = mxx::partition::block_decomposition_buffered<size_t>(d.global_size, comm.size(), comm.rank());
+        d.part = mxx::blk_dist(d.global_size, comm.size(), comm.rank());
 
         // set these three:
         T prev = mxx::right_shift(seq.back(), comm);
@@ -495,19 +495,19 @@ struct dist_seqs_buckets : public dist_seqs_base {
         if (d.has_local_seps) {
             // find first
             if (comm.is_first() || !f(prev, seq.front())) {
-                d.first_sep = d.part.excl_prefix_size();
+                d.first_sep = d.part.eprefix_size();
             } else {
                 size_t i = 0;
                 while (i+1 < seq.size() && f(seq[i], seq[i+1]))
                     ++i;
-                d.first_sep = i+1 + d.part.excl_prefix_size();
+                d.first_sep = i+1 + d.part.eprefix_size();
             }
 
             // find first entry of sequence equal to last element
             size_t i = seq.size()-1;
             while (i > 0 && f(seq[i-1],seq[i]))
                 --i;
-            d.last_sep = i + d.part.excl_prefix_size();
+            d.last_sep = i + d.part.eprefix_size();
         }
         d.init_split_sequences(d.part, comm);
 

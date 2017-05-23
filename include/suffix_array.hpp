@@ -121,7 +121,7 @@ public:
         local_size = std::distance(begin, end);
         n = mxx::allreduce(local_size, this->comm);
         // get distribution
-        part = mxx::partition::block_decomposition_buffered<index_t>(n, comm.size(), comm.rank());
+        part = mxx::blk_dist(n, comm.size(), comm.rank());
 
         // assert a block decomposition
         if (part.local_size() != local_size)
@@ -145,10 +145,12 @@ private:
     /// number of processes = size of the communicator
     int p;
 
-    // The block decomposition for the suffix array
-    mxx::partition::block_decomposition_buffered<size_t> part;
 
 public:
+
+    // The block decomposition for the suffix array
+    mxx::blk_dist part;
+
     /// Iterators over the local input string
     //InputIterator input_begin;
     /// End iterator for local input string
@@ -178,7 +180,7 @@ void init_size(size_t lsize) {
     local_size = lsize;
     n = mxx::allreduce(local_size, this->comm);
     // get distribution
-    part = mxx::partition::block_decomposition_buffered<size_t>(n, comm.size(), comm.rank());
+    part = mxx::blk_dist(n, comm.size(), comm.rank());
 
     p = comm.size();
 
@@ -443,7 +445,7 @@ void construct_arr(Iterator begin, Iterator end, bool fast_resolval = true) {
          *  fill tuples  *
          *****************/
         std::vector<std::array<index_t, L+1> > tuples(local_size);
-        std::size_t offset = part.excl_prefix_size();
+        std::size_t offset = part.eprefix_size();
         for (std::size_t i = 0; i < local_size; ++i) {
             tuples[i][0] = i + offset;
             tuples[i][1] = local_B[i];
@@ -655,7 +657,7 @@ void kmer_sorting() {
     std::vector<mypair<index_t> > tuple_vec(local_size);
 
     // get global index offset
-    std::size_t str_offset = part.excl_prefix_size();
+    std::size_t str_offset = part.eprefix_size();
 
     // fill tuple vector
     for (std::size_t i = 0; i < local_size; ++i) {
@@ -706,7 +708,7 @@ void rebucket_kmer() {
 
 
     // get my global starting index
-    size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.eprefix_size();
     size_t local_max = 0;
 
     /*
@@ -778,8 +780,8 @@ void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& com
         }
         if (_CONSTRUCT_LCP) {
             if (prev.B2 == 0 || cur.B2 == 0) {
-                if (local_LCP[i+prefix - part.excl_prefix_size()] == n)
-                    local_LCP[i+prefix - part.excl_prefix_size()] = shift_by;
+                if (local_LCP[i+prefix - part.eprefix_size()] == n)
+                    local_LCP[i+prefix - part.eprefix_size()] = shift_by;
             } else if (prev.B2 != cur.B2) {
                 index_t left_b  = std::min(prev.B2, cur.B2);
                 index_t right_b = std::max(prev.B2, cur.B2);
@@ -841,7 +843,7 @@ std::vector<index_t> get_active(const std::vector<index_t>& B, const std::vector
     // get next element from right
     index_t right_B = mxx::left_shift(B[0], comm);
     // get global offset
-    size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.eprefix_size();
 
     size_t unresolved_els = 0;
     size_t unfinished_b = 0;
@@ -925,7 +927,7 @@ std::vector<index_t> local_get_sparse_b2(const dist_seqs& ds, const std::vector<
         while (i < local_queries.size() && local_queries[argsort[i]] < str_end) {
             size_t qi = argsort[i];
             if (local_queries[qi] - shift_by >= str_beg) {
-                results[qi] = B[local_queries[qi] - part.excl_prefix_size()];
+                results[qi] = B[local_queries[qi] - part.eprefix_size()];
             } else {
                 results[qi] = 0;
             }
@@ -942,11 +944,11 @@ template <typename T>
 std::vector<T> sparse_doubling(const dist_seqs& ds, const std::vector<T>& vec, const std::vector<size_t>& rma_reqs, size_t shift_by, const mxx::comm& comm) {
     size_t local_size = vec.size();
     size_t global_size = mxx::allreduce(local_size, comm);
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    mxx::blk_dist part(global_size, comm.size(), comm.rank());
 
     std::vector<size_t> original_pos;
     std::vector<size_t> bucketed_rma;
-    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&part](size_t gidx) { return part.target_processor(gidx); }, comm.size(), bucketed_rma, original_pos);
+    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&part](size_t gidx) { return part.rank_of(gidx); }, comm.size(), bucketed_rma, original_pos);
 
     std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
 
@@ -1015,7 +1017,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
     SAC_TIMER_START();
 
     // get global offset
-    size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.eprefix_size();
 
     // get active elements
     std::vector<index_t> active = get_active(local_B, comm, true);
@@ -1199,7 +1201,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         }
 
         // message exchange to processor which contains first index
-        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
+        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.rank_of(x.first);}, comm);
 
         // update local ISA with new bucket numbers
         for (auto it = msgs.begin(); it != msgs.end(); ++it) {
@@ -1354,7 +1356,7 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
     // find _new_ bucket boundaries and create associated parallel distributed
     // RMQ queries.
     std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
-    std::size_t prefix_size = part.excl_prefix_size();
+    std::size_t prefix_size = part.eprefix_size();
 
     for_each_lpair_2vec(local_B, local_B2, [dist, prefix_size, &minqueries, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
         if (left1 == right1) {
