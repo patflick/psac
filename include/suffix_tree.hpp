@@ -430,43 +430,6 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, tr
     // parent request where the character is the last `$`/`0` character
     // these don't have to be requested, but are locally fulfilled
     std::vector<edge> dollar_edges;
-    //std::vector<std::pair<edge, size_t>> remote_edges;
-    //std::vector<size_t> remote_char_indexes;
-
-#if 0
-    for_each_parent(sa, [&](size_t i, size_t gidx, size_t parent, size_t lcp_val) {
-        size_t char_idx = sa.local_SA[i] + lcp_val;
-        // remote or local?
-        if (prefix <= parent && parent < prefix + local_size) {
-            if (char_idx < global_size) {
-                edges.emplace_back(parent, gidx);
-                char_indexes.push_back(char_idx);
-            } else {
-                dollar_edges.emplace_back(parent, gidx);
-            }
-        } else {
-            remote_edges.emplace_back(edge(parent, gidx), char_idx);
-        }
-    }, comm);
-    t.end_section("locally calc parents");
-
-    mxx::sync_cout(comm) << "regular edges: " << edges.size() << "/" << 2*local_size << ", dollar: " << dollar_edges.size() << ", remote: " << remote_edges.size() << std::endl;
-
-    // TODO: plus distinguish between dollar/parent req only for the first method
-    //typedef typename std::iterator_traits<InputIterator>::value_type CharT;
-
-    mxx::blk_dist part(global_size, comm.size(), comm.rank());
-    // send those edges for which the parent lies on a remote processor
-    mxx::all2all_func(remote_edges, [&part](const std::pair<edge,size_t>& e) {return part.rank_of(e.first.parent);}, comm);
-    for (auto& p : remote_edges) {
-        if (p.second < global_size) {
-            edges.emplace_back(p.first);
-            char_indexes.push_back(p.second);
-        } else {
-            dollar_edges.emplace_back(p.first);
-        }
-    }
-#endif
 
     for_each_local_parent(sa, comm, [&](size_t parent, size_t gidx, size_t sa_val, size_t lcp_val) {
         size_t char_idx = sa_val + lcp_val;
@@ -485,8 +448,10 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, tr
         edge_chars = bulk_rma(str_begin, str_end, char_indexes, comm);
     } else if (edgechar_method == edgechar_mpi_osc_rma) {
         edge_chars = bulk_rma_mpiwin(str_begin, str_end, char_indexes, comm);
+#if MPI_VERSION > 2
     } else if (edgechar_method == edgechar_rma_shared) {
         edge_chars = bulk_rma_shm_mpi(str_begin, str_end, char_indexes, comm);
+#endif
     } else if (edgechar_method == edgechar_posix_sm) {
         edge_chars = bulk_rma_shm_posix(str_begin, str_end, char_indexes, comm);
     } else if (edgechar_method == edgechar_posix_sm_split) {
