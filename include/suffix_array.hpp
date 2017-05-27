@@ -912,6 +912,7 @@ std::vector<index_t> sparse_get_b2(const std::vector<index_t>& active, const std
     return b2;
 }
 
+/*
 std::vector<index_t> local_get_sparse_b2(const dist_seqs& ds, const std::vector<index_t>& B, const std::vector<size_t>& local_queries, size_t shift_by) {
     // argsort the local_queries
     std::vector<size_t> argsort(local_queries.size());
@@ -961,6 +962,7 @@ std::vector<T> sparse_doubling(const dist_seqs& ds, const std::vector<T>& vec, c
     std::vector<index_t> rma_b2 = permute(results, original_pos);
     return rma_b2;
 }
+*/
 
 std::vector<index_t> sparse_get_b2(const dist_seqs& ds, const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
     // create RMA requests for the doubled positions
@@ -972,7 +974,14 @@ std::vector<index_t> sparse_get_b2(const dist_seqs& ds, const std::vector<index_
         }
     }
 
-    std::vector<index_t> rma_b2 = sparse_doubling(ds, B, rma_reqs, shift_by, comm);
+    //std::vector<index_t> rma_b2 = sparse_doubling(ds, B, rma_reqs, shift_by, comm);
+    std::vector<index_t> rma_b2 = bulk_query_ds(ds, B, rma_reqs, comm, [&](size_t gidx, size_t str_beg, size_t) {
+            if (gidx - shift_by >= str_beg) {
+                return B[gidx - part.eprefix_size()];
+            } else {
+                return static_cast<index_t>(0);
+            }
+    });
 
     auto b2in = rma_b2.begin();
     assert(rma_b2.size() == rma_reqs.size());

@@ -412,6 +412,33 @@ void for_each_local_parent(const suffix_array<char_t, index_t, true>& sa, const 
 
 template <typename Iterator, typename char_t, typename index_t = std::size_t, int edgechar_method = edgechar_default>
 std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, true>& sa, Iterator str_begin, Iterator str_end, const mxx::comm& comm) {
+    if (edgechar_method == edgechar_bulk_rma) {
+        return construct_suffix_tree(sa, comm, [str_begin, str_end](std::vector<size_t>& char_indexes, const mxx::comm& comm) {
+            return bulk_rma(str_begin, str_end, char_indexes, comm);
+        });
+    } else if (edgechar_method == edgechar_mpi_osc_rma) {
+        return construct_suffix_tree(sa, comm, [str_begin, str_end](std::vector<size_t>& char_indexes, const mxx::comm& comm) {
+            return bulk_rma_mpiwin(str_begin, str_end, char_indexes, comm);
+        });
+#if MPI_VERSION > 2
+    } else if (edgechar_method == edgechar_rma_shared) {
+        return construct_suffix_tree(sa, comm, [str_begin, str_end](std::vector<size_t>& char_indexes, const mxx::comm& comm) {
+            return bulk_rma_shm_mpi(str_begin, str_end, char_indexes, comm);
+        });
+#endif
+    } else if (edgechar_method == edgechar_posix_sm) {
+        return construct_suffix_tree(sa, comm, [str_begin, str_end](std::vector<size_t>& char_indexes, const mxx::comm& comm) {
+            return bulk_rma_shm_posix(str_begin, str_end, char_indexes, comm);
+        });
+    } else if (edgechar_method == edgechar_posix_sm_split) {
+        return construct_suffix_tree(sa, comm, [str_begin, str_end](std::vector<size_t>& char_indexes, const mxx::comm& comm) {
+            return bulk_rma_shm_posix_split(str_begin, str_end, char_indexes, comm);
+        });
+    }
+}
+
+template <typename char_t, typename index_t = std::size_t, typename EdgeCharFunc>
+std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, true>& sa, const mxx::comm& comm, EdgeCharFunc ecf) {
     mxx::section_timer t(std::cerr, comm);
 
     // get input sizes
@@ -440,23 +467,10 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, tr
             dollar_edges.emplace_back(parent, gidx);
         }
     });
-    t.end_section("edges send to parent");
+    t.end_section("compute & send parent edges");
 
     // use global bulk RMA for getting the first char per edge
-    std::vector<char_t> edge_chars;
-    if (edgechar_method == edgechar_bulk_rma) {
-        edge_chars = bulk_rma(str_begin, str_end, char_indexes, comm);
-    } else if (edgechar_method == edgechar_mpi_osc_rma) {
-        edge_chars = bulk_rma_mpiwin(str_begin, str_end, char_indexes, comm);
-#if MPI_VERSION > 2
-    } else if (edgechar_method == edgechar_rma_shared) {
-        edge_chars = bulk_rma_shm_mpi(str_begin, str_end, char_indexes, comm);
-#endif
-    } else if (edgechar_method == edgechar_posix_sm) {
-        edge_chars = bulk_rma_shm_posix(str_begin, str_end, char_indexes, comm);
-    } else if (edgechar_method == edgechar_posix_sm_split) {
-        edge_chars = bulk_rma_shm_posix_split(str_begin, str_end, char_indexes, comm);
-    }
+    std::vector<char_t> edge_chars = ecf(char_indexes, comm);
     t.end_section("RMA read chars");
 
     unsigned int sigma = sa.alpha.sigma();
@@ -483,6 +497,116 @@ std::vector<size_t> construct_suffix_tree(const suffix_array<char_t, index_t, tr
 
     return internal_nodes;
 }
+
+std::vector<char> gst_edgechars(const simple_dstringset& ss, std::vector<size_t>& idx, const alphabet<char>& alpha, const mxx::comm& comm) {
+    // convert ss to dist_seq of chars
+    std::vector<char> sscat(ss.sum_sizes);
+    // for each string: concatenate into equally distributed char array
+    auto oit = sscat.begin();
+    for (size_t i = 0; i < ss.str_begins.size(); ++i) {
+        oit = std::copy(ss.str_begins[i], ss.str_begins[i]+ss.sizes[i], oit);
+    }
+    mxx::stable_distribute_inplace(sscat, comm);
+    dist_seqs ds = dist_seqs::from_dss(ss, comm);
+
+    auto queryf = [&](size_t gidx, size_t str_beg, size_t) {
+        if (gidx == str_beg)
+            return (char)0;
+        else
+            return (char)alpha.encode(sscat[gidx]);
+    };
+    return bulk_query_ds(ds, sscat, idx, comm, queryf);
+}
+
+template <typename char_t, typename index_t = std::size_t, typename EdgeCharFunc>
+std::vector<size_t> construct_gst(const suffix_array<char_t, index_t, true>& sa, simple_dstringset& ss, const mxx::comm& comm) {
+    mxx::section_timer t(std::cerr, comm);
+
+    // get input sizes
+    mxx::blk_dist dist = sa.part;
+    // assert n >= p, or rather at least one element per process
+    MXX_ASSERT(mxx::all_of(sa.local_SA.size() >= 1, comm));
+
+    std::vector<edge> edges;
+    edges.reserve(2*dist.local_size());
+
+    std::vector<size_t> char_indexes;
+    char_indexes.reserve(2*dist.local_size());
+
+    // parent request where the character is the last `$`/`0` character
+    // these don't have to be requested, but are locally fulfilled
+    std::vector<edge> dollar_edges;
+    std::vector<edge> root_edges;
+
+    for_each_local_parent(sa, comm, [&](size_t parent, size_t gidx, size_t sa_val, size_t lcp_val) {
+        size_t char_idx = sa_val + lcp_val;
+        if (char_idx < dist.global_size()) {
+            if (lcp_val == 0) {
+                assert(parent == 0);
+                root_edges.emplace_back(parent, gidx);
+            } else {
+                edges.emplace_back(parent, gidx);
+                char_indexes.push_back(char_idx);
+            }
+        } else {
+            dollar_edges.emplace_back(parent, gidx);
+        }
+    });
+    t.end_section("compute & send parent edges");
+
+    // query such that if the requested char falls exactly on a string
+    // boundary, then return the 0 character
+    std::vector<char_t> edge_chars = gst_edgechars(ss, char_indexes, sa.alpha, comm);
+    t.end_section("RMA read chars");
+
+    unsigned int sigma = sa.alpha.sigma();
+
+    // one internal node for each LCP entry, each internal node is sigma cells
+    std::vector<size_t> internal_nodes((sigma+2)*dist.local_size());
+    for (size_t i = 0; i < edges.size(); ++i) {
+        size_t node_idx = (edges[i].parent - dist.eprefix_size())*(sigma+2);
+        uint16_t c = edge_chars[i];
+        MXX_ASSERT(0 <= c && c < sigma+1);
+        size_t cell_idx = node_idx + c + 1;
+        if (c > 0) {
+            assert(internal_nodes[cell_idx] == 0);
+            internal_nodes[cell_idx] = edges[i].gidx;
+        } else {
+            if (internal_nodes[node_idx+1] == 0) {
+                internal_nodes[node_idx] = internal_nodes[node_idx+1] = edges[i].gidx;
+            } else {
+                if (internal_nodes[node_idx] > edges[i].gidx) {
+                    internal_nodes[node_idx] = edges[i].gidx;
+                }
+                if (internal_nodes[node_idx+1] < edges[i].gidx) {
+                    internal_nodes[node_idx+1] = edges[i].gidx;
+                }
+            }
+        }
+    }
+
+    // process dollar edges
+    for (size_t i = 0; i < dollar_edges.size(); ++i) {
+        size_t parent = dollar_edges[i].parent;
+        size_t node_idx = (parent - dist.eprefix_size())*(sigma+2);
+        if (internal_nodes[node_idx+1] == 0) {
+            internal_nodes[node_idx] = dollar_edges[i].gidx;
+            internal_nodes[node_idx+1] = dollar_edges[i].gidx;
+        } else {
+            if (internal_nodes[node_idx] > dollar_edges[i].gidx) {
+                internal_nodes[node_idx] = dollar_edges[i].gidx;
+            }
+            if (internal_nodes[node_idx+1] < dollar_edges[i].gidx) {
+                internal_nodes[node_idx+1] = dollar_edges[i].gidx;
+            }
+        }
+    }
+
+    t.end_section("locally: create internal nodes");
+
+    return internal_nodes;
+}
+
 
 // interleave SA and LCP and get index after
 inline size_t interleaved_val(size_t idx, size_t global_size) {

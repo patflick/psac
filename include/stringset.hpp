@@ -25,6 +25,7 @@
 
 #include <mxx/comm.hpp>
 #include "shifting.hpp"
+#include "bulk_rma.hpp"
 
 // distributed stringset with strings split across boundaries
 // and each string not necessarily starting in memory right after the previous
@@ -381,7 +382,7 @@ struct dist_seqs : public dist_seqs_base {
     std::vector<size_t> prefix_sizes;
     //bool shadow_initialized;
 
-    void init_from_dss(simple_dstringset& dss, const mxx::comm& comm) {
+    void init_from_dss(const simple_dstringset& dss, const mxx::comm& comm) {
         // input distributed stringset might not be (equally) block distributed
         // with regards to character count. Thus we redistribute prefix_size
         // seqeuences so that they are
@@ -423,7 +424,7 @@ struct dist_seqs : public dist_seqs_base {
         prefix_sizes = mxx::all2allv(gidx, send_counts, comm);
     }
 
-    static dist_seqs from_dss(simple_dstringset& dss, const mxx::comm& comm) {
+    static dist_seqs from_dss(const simple_dstringset& dss, const mxx::comm& comm) {
         dist_seqs res;
         res.init_from_dss(dss, comm);
         if (!res.prefix_sizes.empty()) {
@@ -527,6 +528,57 @@ std::ostream& operator<<(std::ostream& os, const dist_seqs_buckets& ds) {
     else
         return os << "(" << ds.left_sep << "@" << ds.left_sep_rank << "), [], (" << ds.right_sep << "@" << ds.right_sep_rank << ")";
 }
+
+
+/*
+ * bulk queries on dist_seqs
+ */
+
+template <typename Func>
+std::vector<typename std::result_of<Func(size_t,size_t,size_t)>::type>
+local_ds_rma(const dist_seqs& ds, const std::vector<size_t>& local_queries, Func query) {
+    //
+    using T = typename std::result_of<Func(size_t,size_t,size_t)>::type;
+    // argsort the local_queries
+    std::vector<size_t> argsort(local_queries.size());
+    std::iota(argsort.begin(), argsort.end(), 0);
+    std::sort(argsort.begin(), argsort.end(), [&local_queries](size_t i, size_t j) { return local_queries[i] < local_queries[j]; });
+
+    std::vector<T> results(local_queries.size());
+    size_t i = 0;
+    // linear in number of local strings + number of queries
+    ds.for_each_seq([&](size_t str_beg, size_t str_end) {
+        while (i < local_queries.size() && local_queries[argsort[i]] < str_end) {
+            size_t qi = argsort[i];
+            results[qi] = query(local_queries[qi], str_beg, str_end);
+            ++i;
+        }
+    });
+    return results;
+}
+
+template <typename T, typename Func>
+std::vector<T> bulk_query_ds(const dist_seqs& ds, const std::vector<T>& vec, const std::vector<size_t>& rma_reqs, const mxx::comm& comm, Func query) {
+    size_t local_size = vec.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
+    mxx::blk_dist dist(global_size, comm.size(), comm.rank());
+
+    std::vector<size_t> original_pos;
+    std::vector<size_t> bucketed_rma;
+    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&dist](size_t gidx) { return dist.rank_of(gidx); }, comm.size(), bucketed_rma, original_pos);
+
+    std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
+
+    // send all queries via all2all
+    std::vector<size_t> local_queries = mxx::all2allv(bucketed_rma, send_counts, recv_counts, comm);
+
+    std::vector<T> results = local_ds_rma(ds, local_queries, query);
+    results = mxx::all2allv(results, recv_counts, send_counts, comm);
+
+    std::vector<T> rma_b2 = permute(results, original_pos);
+    return rma_b2;
+}
+
 
 
 std::string flatten_strings(const std::vector<std::string>& v, const char sep = '$') {

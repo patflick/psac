@@ -68,7 +68,6 @@ void check_suffix_tree(const std::string& s, const std::vector<size_t>& sa, cons
 
         if (range_left == range_right) {
             // leaf node with parent `prev_pos` with lcp `prev_min`
-            // TODO: get character at SA[i]+LCP[i]
             size_t i = range_left-1;
             size_t c;
             if (sa[i] + prev_min == s.size()) {
