@@ -195,22 +195,18 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
     /***********************
      *  Initial bucketing  *
      ***********************/
-
-    // detect alphabet and get encoding
-    // TODO: get alphabet from string set
-    //alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
-
     unsigned int k = get_optimal_k<index_t>(alpha, ss.sum_sizes, comm);
     if(comm.rank() == 0) {
-        INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
+        INFO("Alphabet: " << alpha);
     }
     SAC_TIMER_END_SECTION("alphabet detection");
 
-    // create initial k-mers and use these as the initial bucket numbers
-    // for each character position
+    // create distributed sequences helper structure for the distributed stringset
     dist_seqs ds = dist_seqs::from_dss(ss, comm);
+
+    // create all kmers
     local_B = kmer_gen_stringset<index_t>(ss, k, alpha, comm);
+    // equally distribute kmers
     mxx::stable_distribute_inplace(local_B, comm);
     init_size(local_B.size());
     SAC_TIMER_END_SECTION("kmer generation");
@@ -219,21 +215,27 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
     std::vector<index_t> local_B_SA;
     size_t unfinished_buckets, unfinished_elements;
     for (shift_by = k; shift_by < n; shift_by <<= 1) {
+        SAC_TIMER_LOOP_START();
+
         // 1) doubling by shifting into tuples (2BSA kind of structure)
         std::vector<index_t> B2 = shift_buckets_ds(ds, local_B, shift_by, comm);
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets-ds");
 
         // 2) sort by (B1, B2)
         local_SA = idxsort_vectors<index_t, index_t, true>(local_B, B2, comm);
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "SA2ISA-idxsort");
 
         // 4) rebucket (B1, B2) -> B1 and LCP contruction
         if (shift_by == k) {
             if (_CONSTRUCT_LCP) {
                 initial_kmer_lcp_gsa(k, alpha.bits_per_char(), B2);
+                SAC_TIMER_END_LOOP_SECTION(shift_by, "init-lcp");
             }
             std::tie(unfinished_buckets, unfinished_elements) = rebucket_gsa_kmers(local_B, B2, true, comm, alpha.bits_per_char());
         } else {
             if (_CONSTRUCT_LCP) {
                 resolve_next_lcp(shift_by, B2);
+                SAC_TIMER_END_LOOP_SECTION(shift_by, "resove-lcp");
             }
             std::tie(unfinished_buckets, unfinished_elements) = rebucket_gsa(local_B, B2, true, comm);
         }
@@ -247,6 +249,7 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
             // original SA
             std::vector<index_t> cpy_SA(local_SA);
             bulk_permute_inplace(local_B, cpy_SA, part, comm);
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA2ISA-bulk-permute");
         //} else if (unfinished_elements < n/10) {
         } else if (true) {
             // switch to A2: bucket chaising
@@ -255,11 +258,16 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
             std::vector<index_t> cpy_SA(local_SA);
             local_B_SA = local_B; // copy
             bulk_permute_inplace(local_B, cpy_SA, part, comm);
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA2ISA-bulk-permute");
             break;
         } else {
             bulk_permute_inplace(local_B, local_SA, part, comm);
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA2ISA-bulk-permute");
             //SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
+        // end iteratior
+        SAC_TIMER_END_SECTION("sac-iteration");
+
         if (unfinished_buckets == 0)
             break;
     }
@@ -398,8 +406,7 @@ void construct(Iterator begin, Iterator end, bool fast_resolval = true, unsigned
     alpha = alphabet_type::from_sequence(begin, end, comm);
     k = get_optimal_k<index_t>(alpha, local_size, comm, k);
     if(comm.rank() == 0) {
-        INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
+        INFO("Alphabet: " << alpha);
     }
 
     construct(begin, end, fast_resolval, alpha, k);

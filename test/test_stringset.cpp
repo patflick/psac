@@ -156,8 +156,6 @@ void test_dist_ss() {
 
     SDEBUG(randseq);
     SDEBUG(ss.sizes);
-    SDEBUG(ss.left_size);
-    SDEBUG(ss.right_size);
 
     // TODO; create vector from stringset (everything but the separating characters)
     size_t num_b = std::accumulate(ss.sizes.begin(), ss.sizes.end(), 0);
@@ -168,8 +166,6 @@ void test_dist_ss() {
     for (size_t i = 0; i < ss.sizes.size(); ++i) {
         oit = std::copy(ss.str_begins[i], ss.str_begins[i]+ss.sizes[i], oit);
     }
-
-    //mxx::sync_cout(c) << ss;
 
     // create the distributed sequences prefix_sizes format (with shadow els)
     dist_seqs ds = dist_seqs::from_dss(ss, c);
@@ -209,7 +205,6 @@ TEST(PsacDistStringSet, DSKmerGen) {
     std::string flatstrs;
     if (c.rank() == 0) {
         strs = {"cctgtggtataagagctttgggctttcgcagtcccgactagtctgaacttacccagactcccagtctgtagtgaataaggtgaaaaga", "tttggtttgcctcaaacatcccagacgccgcgcggacctctggaagacggtaagaca", "gtctgcgg", "aaactcataatgagggcgaa", "gca", "ggtc", "t", "gc", "cgc", "t", "a", "ggacaaggctt"};
-        //strs = {"accctgca", "aca", "t", "gct"};
         flatstrs = flatten_strings(strs);
     }
     flatstrs = mxx::stable_distribute(flatstrs, c);

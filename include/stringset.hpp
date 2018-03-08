@@ -33,14 +33,14 @@
 class simple_dstringset {
 public:
     bool first_split, last_split;
-    size_t left_size, right_size;
+    //size_t left_size, right_size;
     //const char* data_begin, data_end;
-    std::vector<const char*> str_begins;
+    std::vector<const char*> str_begins; // use offsets instead for the file index!?
     std::vector<size_t> sizes;
     size_t sum_sizes;
 
     template <typename Iterator>
-    void parse(Iterator begin, Iterator end, const mxx::comm& comm) {
+    void parse(Iterator begin, Iterator end, const mxx::comm& comm, char sep) {
         size_t local_size = std::distance(begin, end);
 
         assert(local_size > 0);
@@ -51,12 +51,12 @@ public:
         // parse
         Iterator it = begin;
         // skip over separator characters
-        while(it != end && *it == '$')
+        while(it != end && *it == sep)
             ++it;
         while (it != end) {
             // find end of string
             Iterator e = it;
-            while (e != end && *e != '$')
+            while (e != end && *e != sep)
                 ++e;
 
             // found valid substring [it, e)
@@ -66,20 +66,21 @@ public:
 
             // skip over non string chars
             it = e;
-            while(it != end && *it == '$')
+            while(it != end && *it == sep)
                 ++it;
             // `it` now marks the beginning of the next string (if not ==end).
         }
 
-        if (comm.rank() > 0 && *begin != '$' && left_char != '$') {
+        if (comm.rank() > 0 && *begin != sep && left_char != sep) {
             first_split = true;
         }
 
-        if (comm.rank() != comm.size()-1 && *(end-1) != '$' && right_char != '$') {
+        if (comm.rank() != comm.size()-1 && *(end-1) != sep && right_char != sep) {
             last_split = true;
         }
     }
 
+    /*
     void get_split_sizes(const mxx::comm& comm) {
         bool any_splits = first_split || last_split;
         any_splits = mxx::any_of(any_splits, comm);
@@ -139,13 +140,14 @@ public:
             right_size = right_sums.second;
         }
     }
+    */
 
     // parse!
     template <typename Iterator>
-    simple_dstringset(Iterator begin, Iterator end, const mxx::comm& comm)
+    simple_dstringset(Iterator begin, Iterator end, const mxx::comm& comm, char sep = '$')
         : first_split(false), last_split(false), str_begins(), sizes() {
-            parse(begin, end, comm);
-            get_split_sizes(comm);
+            parse(begin, end, comm, sep);
+            //get_split_sizes(comm);
     }
 };
 

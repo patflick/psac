@@ -15,6 +15,10 @@ project(psac-main)
 add_executable(psac psac.cpp)
 target_link_libraries(psac ${EXTRA_LIBS} rt)
 
+add_executable(gsac gsac.cpp)
+target_link_libraries(gsac ${EXTRA_LIBS} rt)
+target_link_libraries(gsac divsufsort)
+target_link_libraries(gsac divsufsort64)
 
 ################
 #  benchmarks  #

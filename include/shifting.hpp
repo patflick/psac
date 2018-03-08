@@ -24,15 +24,13 @@
 #include <mxx/future.hpp>
 #include <mxx/partition.hpp>
 
-//#include "dvector.hpp"
-
 
 /*********************************************************************
  *               Shifting buckets (i -> i + 2^l) => B2               *
  *********************************************************************/
 
 template <typename T>
-std::vector<T> shift_vector(const std::vector<T>& vec, mxx::blk_dist& dist, std::size_t shift_by, const mxx::comm& comm) {
+std::vector<T> shift_vector(const std::vector<T>& vec, const mxx::blk_dist& dist, std::size_t shift_by, const mxx::comm& comm) {
     // get # elements to the left
     assert(dist.local_size() == vec.size());
     size_t local_size = vec.size();

@@ -11,7 +11,7 @@
  */
 
 template <typename T, typename index_t>
-void bulk_permute_inplace(std::vector<T>& vec, std::vector<index_t>& idx, mxx::blk_dist& part, const mxx::comm& comm) {
+void bulk_permute_inplace(std::vector<T>& vec, std::vector<index_t>& idx, const mxx::blk_dist& part, const mxx::comm& comm) {
     assert(idx.size() == vec.size());
 
     //SAC_TIMER_START();

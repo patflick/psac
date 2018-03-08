@@ -25,9 +25,21 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <iterator>
+#include <type_traits>
+
+#include <mxx/comm.hpp>
 
 #include "suffix_array.hpp"
 #include "lcp.hpp"
+
+// if this is not included as part of google test, define our own assert functions!
+#ifndef GTEST_INCLUDE_GTEST_GTEST_H_
+#define ASSERT_TRUE(x) {if (!(x)) { std::cerr << "[ERROR]: Assertion failed in " __FILE__ ":" << __LINE__ << std::endl;return;}} std::cerr << ""
+#define ASSERT_EQ(x, y) ASSERT_TRUE((x) == (y))
+#define ASSERT_GT(x, y) ASSERT_TRUE((x) > (y))
+#define ASSERT_LT(x, y) ASSERT_TRUE((x) < (y))
+#endif
 
 /**
  * @brief   Checks whether a given suffix array is correct. This function is
@@ -169,5 +181,89 @@ void gl_check_correct(const suffix_array<char_t, index_t, test_lcp>& sa,
     }
 }
 
+/**
+ * @brief   Checks the correctness of the distributed suffix array.
+ *
+ * This is a truly distributed correctness check for the distributed suffix array.
+ * Currently does not support checking the correctness of the LCP array.
+ *
+ * This method checks for the following conditions:
+ *   1) SA is a permutation of {0...n-1}
+ *   2) (if suffix_array contains ISA): ISA is the inverse permutation of SA
+ *   3) S[SA[i-1]] <= S[SA[i]] for all i in 1,...,n-1
+ *   4) if (S[SA[i-1]] == S[SA[i]]) => ISA[SA[i-1]+1] < ISA[SA[i]+1]
+ *
+ * @tparam InputIterator    The type of the char/string input iterator.
+ * @tparam index_t          The type of the index (e.g. uint32_t, uint64_t).
+ *
+ * @param sa            The distributed suffix array instance.
+ * @param str_begin     Iterator to the string for which the suffix array was
+ *                      constructed.
+ * @param str_end       End Iterator to the string for which the suffix array
+ *                      was constructed.
+ * @param comm          The communictor.
+ */
+template <typename InputIterator, typename char_t, typename index_t>
+void d_check_sa(const suffix_array<char_t, index_t, false>& sa,
+                      InputIterator str_begin, InputIterator str_end,
+                      const mxx::comm& comm) {
+    static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, char_t>::value,
+                  "InputIterator has to have value_type `char_t`.");
+
+    /* Condition (1): SA is a permutation of {0...n-1} */
+
+    // To check (1), sort SA, check that its 0...n-1
+    std::vector<index_t> sa_cpy(sa.local_SA);
+    // check sizes of sa
+    ASSERT_TRUE(sa_cpy.size() == sa.part.local_size());
+    //ASSERT_TRUE(mxx::allreduce(sa_cpy.size(), comm) == sa.n);
+    // sort and check that the result is 0...n-1
+    mxx::sort(sa_cpy.begin(), sa_cpy.end(), comm);
+    ASSERT_TRUE(sa_cpy.size() == sa.part.local_size());
+    for (size_t i = 0; i < sa_cpy.size(); ++i) {
+        ASSERT_TRUE(sa_cpy[i] == sa.part.eprefix_size() + i);
+    }
+
+    // create ISA from SA
+    std::vector<index_t> isa_cpy(std::move(sa_cpy)); // 0...n-1
+    sa_cpy = sa.local_SA;
+    bulk_permute_inplace(isa_cpy, sa_cpy, sa.part, comm);
+    ASSERT_TRUE(isa_cpy.size() == sa.part.local_size());
+
+    // check ISA equal to the one we created here
+    if (sa.local_B.size() > 0) {
+        ASSERT_TRUE(sa.local_B.size() == sa.part.local_size());
+        for (size_t i = 0; i < isa_cpy.size(); ++i) {
+            ASSERT_TRUE(sa.local_B[i] == isa_cpy[i]);
+        }
+    }
+
+
+    // To check (3)+(4), we need to pair each SA location i with
+    //   S[SA[i]] and ISA[SA[i]+1] (rank of next suffix)
+
+    std::vector<index_t> isa_cpy2(isa_cpy);
+    std::vector<index_t> isa_shift = shift_vector(isa_cpy, sa.part, 1, comm);
+    bulk_permute_inplace(isa_shift, isa_cpy2, sa.part, comm);
+
+    std::vector<char_t> sa_str(str_begin, str_end);
+    bulk_permute_inplace(sa_str, isa_cpy, sa.part, comm);
+    ASSERT_TRUE(sa_str.size() == sa.part.local_size());
+
+    char prev_str = mxx::right_shift(sa_str.back(), comm);
+    index_t prev_isa = mxx::right_shift(isa_shift.back(), comm);
+    if (comm.rank() > 0) {
+        ASSERT_TRUE(prev_str <= sa_str[0]);
+        if(prev_str == sa_str[0]) {
+            ASSERT_TRUE(prev_isa < isa_shift[0]);
+        }
+    }
+    for (size_t i = 1; i < sa.part.local_size(); ++i) {
+        ASSERT_TRUE(sa_str[i-1] <= sa_str[i]);
+        if (sa_str[i-1] == sa_str[i]) {
+            ASSERT_TRUE(isa_shift[i-1] < isa_shift[i]);
+        }
+    }
+}
 
 #endif // CHECK_SUFFIX_ARRAY_HPP

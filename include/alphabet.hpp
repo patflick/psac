@@ -42,19 +42,33 @@ std::string rand_dna(std::size_t size, int seed) {
 }
 
 template<typename T, typename Iterator>
-std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0) {
-    if (size == 0)
-        size = static_cast<std::size_t>(*std::max_element(begin, end)) + 1;
-    std::vector<T> hist(size);
-
+void update_histogram(Iterator begin, Iterator end, std::vector<T>& hist) {
     while (begin != end) {
         char c = *begin;
         std::size_t s = (unsigned char)c;
         ++hist[s];
         ++begin;
     }
+}
 
+template<typename T, typename Iterator>
+std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0) {
+    if (size == 0)
+        size = static_cast<std::size_t>(*std::max_element(begin, end)) + 1;
+    std::vector<T> hist(size);
+    update_histogram(begin, end, hist);
     return hist;
+}
+
+template <typename index_t, typename StringSet>
+std::vector<index_t> alphabet_histogram(const StringSet& ss, const mxx::comm& comm) {
+    std::vector<index_t> hist(256, 0);
+    for (size_t i = 0; i < ss.sizes.size(); ++i) {
+        // add all local characters to the histogram
+        update_histogram(ss.str_begins[i], ss.str_begins[i] + ss.sizes[i], hist);
+    }
+    std::vector<index_t> out_hist = mxx::allreduce(hist, comm);
+    return out_hist;
 }
 
 
@@ -66,6 +80,7 @@ std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, 
     std::vector<index_t> out_hist = mxx::allreduce(hist, comm);
     return out_hist;
 }
+
 
 template<typename CharType>
 class alphabet {
@@ -164,6 +179,12 @@ public:
 
     static alphabet from_string(const std::string& str, const mxx::comm& comm) {
         return alphabet::from_sequence(str.begin(), str.end(), comm);
+    }
+
+    template <typename StringSet>
+    static alphabet from_stringset(const StringSet& ss, const mxx::comm& comm) {
+        std::vector<size_t> alphabet_hist = alphabet_histogram<size_t>(ss, comm);
+        return alphabet::from_hist(alphabet_hist);
     }
 
     inline unsigned int sigma() const {

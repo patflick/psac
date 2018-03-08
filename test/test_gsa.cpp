@@ -120,7 +120,7 @@ void test_repeats(const std::string& seq, size_t reps, const mxx::comm& comm) {
         // create stringset, dist_seq
         simple_dstringset ss(flatstrs.begin(), flatstrs.end(), c);
 
-        // construct SA
+        // construct SA from stringset
         alphabet<char> a = alphabet<char>::from_string(seq, c);
         suffix_array<char, uint64_t, true> sa(c);
         sa.construct_ss(ss, a);
