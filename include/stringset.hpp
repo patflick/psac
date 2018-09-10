@@ -25,6 +25,7 @@
 
 #include <mxx/comm.hpp>
 #include "shifting.hpp"
+#include "bulk_rma.hpp"
 
 // distributed stringset with strings split across boundaries
 // and each string not necessarily starting in memory right after the previous
@@ -32,14 +33,14 @@
 class simple_dstringset {
 public:
     bool first_split, last_split;
-    size_t left_size, right_size;
+    //size_t left_size, right_size;
     //const char* data_begin, data_end;
-    std::vector<const char*> str_begins;
+    std::vector<const char*> str_begins; // use offsets instead for the file index!?
     std::vector<size_t> sizes;
     size_t sum_sizes;
 
     template <typename Iterator>
-    void parse(Iterator begin, Iterator end, const mxx::comm& comm) {
+    void parse(Iterator begin, Iterator end, const mxx::comm& comm, char sep) {
         size_t local_size = std::distance(begin, end);
 
         assert(local_size > 0);
@@ -50,12 +51,12 @@ public:
         // parse
         Iterator it = begin;
         // skip over separator characters
-        while(it != end && *it == '$')
+        while(it != end && *it == sep)
             ++it;
         while (it != end) {
             // find end of string
             Iterator e = it;
-            while (e != end && *e != '$')
+            while (e != end && *e != sep)
                 ++e;
 
             // found valid substring [it, e)
@@ -65,20 +66,21 @@ public:
 
             // skip over non string chars
             it = e;
-            while(it != end && *it == '$')
+            while(it != end && *it == sep)
                 ++it;
             // `it` now marks the beginning of the next string (if not ==end).
         }
 
-        if (comm.rank() > 0 && *begin != '$' && left_char != '$') {
+        if (comm.rank() > 0 && *begin != sep && left_char != sep) {
             first_split = true;
         }
 
-        if (comm.rank() != comm.size()-1 && *(end-1) != '$' && right_char != '$') {
+        if (comm.rank() != comm.size()-1 && *(end-1) != sep && right_char != sep) {
             last_split = true;
         }
     }
 
+    /*
     void get_split_sizes(const mxx::comm& comm) {
         bool any_splits = first_split || last_split;
         any_splits = mxx::any_of(any_splits, comm);
@@ -138,13 +140,14 @@ public:
             right_size = right_sums.second;
         }
     }
+    */
 
     // parse!
     template <typename Iterator>
-    simple_dstringset(Iterator begin, Iterator end, const mxx::comm& comm)
+    simple_dstringset(Iterator begin, Iterator end, const mxx::comm& comm, char sep = '$')
         : first_split(false), last_split(false), str_begins(), sizes() {
-            parse(begin, end, comm);
-            get_split_sizes(comm);
+            parse(begin, end, comm, sep);
+            //get_split_sizes(comm);
     }
 };
 
@@ -243,16 +246,16 @@ public:
         std::tie(right_sep,right_sep_rank) = mxx::exscan(std::make_pair(first_sep, comm.rank()), minpair, comm.reverse());
         if (comm.rank() == comm.size() - 1) {
             //right_sep = dist.iprefix();
-            right_sep = dist.prefix_size();
+            right_sep = dist.iprefix_size();
             right_sep_rank = comm.rank();
         }
-        if (right_sep == dist.prefix_size()) {
+        if (right_sep == dist.iprefix_size()) {
             last_sep = right_sep;
         }
         if (comm.rank() == 0) {
             first_sep = 0;
         }
-        if (first_sep == dist.excl_prefix_size()) {
+        if (first_sep == dist.eprefix_size()) {
             left_sep = first_sep;
             left_sep_rank = comm.rank();
         }
@@ -376,12 +379,12 @@ public:
 // equally distributed prefix sizes
 // with shadow elements for left and right processor boundaries
 struct dist_seqs : public dist_seqs_base {
-    mxx::partition::block_decomposition_buffered<size_t> part;
+    mxx::blk_dist part;
     size_t global_size;
     std::vector<size_t> prefix_sizes;
     //bool shadow_initialized;
 
-    void init_from_dss(simple_dstringset& dss, const mxx::comm& comm) {
+    void init_from_dss(const simple_dstringset& dss, const mxx::comm& comm) {
         // input distributed stringset might not be (equally) block distributed
         // with regards to character count. Thus we redistribute prefix_size
         // seqeuences so that they are
@@ -389,7 +392,7 @@ struct dist_seqs : public dist_seqs_base {
         size_t ss_global_size = mxx::allreduce(ss_local_size, comm);
         size_t ss_prefix = mxx::exscan(ss_local_size, comm);
 
-        part = mxx::partition::block_decomposition_buffered<size_t>(ss_global_size, comm.size(), comm.rank());
+        part = mxx::blk_dist(ss_global_size, comm.size(), comm.rank());
         global_size = ss_global_size;
 
         std::vector<size_t> send_counts(comm.size(), 0);
@@ -399,20 +402,20 @@ struct dist_seqs : public dist_seqs_base {
         size_t size_sum = ss_prefix;
         int pi;
         if (!dss.first_split) {
-            pi = part.target_processor(ss_prefix);
+            pi = part.rank_of(ss_prefix);
             ++send_counts[pi];
             gidx.emplace_back(size_sum);
         } else {
-            pi = part.target_processor(ss_prefix+dss.sizes[0]);
+            pi = part.rank_of(ss_prefix+dss.sizes[0]);
         }
-        size_t pi_end = part.prefix_size(pi);
+        size_t pi_end = part.iprefix_size(pi);
 
         // create prefix sums and keep track the processor id for their target
         for (size_t i = 0; i < dss.sizes.size()-1; ++i) {
             size_sum += dss.sizes[i];
             while (size_sum >= pi_end) {
                 ++pi;
-                pi_end = part.prefix_size(pi);
+                pi_end = part.iprefix_size(pi);
             }
             gidx.emplace_back(size_sum);
             ++send_counts[pi];
@@ -423,7 +426,7 @@ struct dist_seqs : public dist_seqs_base {
         prefix_sizes = mxx::all2allv(gidx, send_counts, comm);
     }
 
-    static dist_seqs from_dss(simple_dstringset& dss, const mxx::comm& comm) {
+    static dist_seqs from_dss(const simple_dstringset& dss, const mxx::comm& comm) {
         dist_seqs res;
         res.init_from_dss(dss, comm);
         if (!res.prefix_sizes.empty()) {
@@ -476,7 +479,7 @@ struct dist_seqs : public dist_seqs_base {
 };
 
 struct dist_seqs_buckets : public dist_seqs_base {
-    mxx::partition::block_decomposition_buffered<size_t> part;
+    mxx::blk_dist part;
     size_t global_size;
     bool has_local_els;
 
@@ -487,7 +490,7 @@ struct dist_seqs_buckets : public dist_seqs_base {
         dist_seqs_buckets d;
         d.has_local_els = seq.size() > 0;
         d.global_size = mxx::allreduce(seq.size(), comm);
-        d.part = mxx::partition::block_decomposition_buffered<size_t>(d.global_size, comm.size(), comm.rank());
+        d.part = mxx::blk_dist(d.global_size, comm.size(), comm.rank());
 
         // set these three:
         T prev = mxx::right_shift(seq.back(), comm);
@@ -495,19 +498,19 @@ struct dist_seqs_buckets : public dist_seqs_base {
         if (d.has_local_seps) {
             // find first
             if (comm.is_first() || !f(prev, seq.front())) {
-                d.first_sep = d.part.excl_prefix_size();
+                d.first_sep = d.part.eprefix_size();
             } else {
                 size_t i = 0;
                 while (i+1 < seq.size() && f(seq[i], seq[i+1]))
                     ++i;
-                d.first_sep = i+1 + d.part.excl_prefix_size();
+                d.first_sep = i+1 + d.part.eprefix_size();
             }
 
             // find first entry of sequence equal to last element
             size_t i = seq.size()-1;
             while (i > 0 && f(seq[i-1],seq[i]))
                 --i;
-            d.last_sep = i + d.part.excl_prefix_size();
+            d.last_sep = i + d.part.eprefix_size();
         }
         d.init_split_sequences(d.part, comm);
 
@@ -527,6 +530,57 @@ std::ostream& operator<<(std::ostream& os, const dist_seqs_buckets& ds) {
     else
         return os << "(" << ds.left_sep << "@" << ds.left_sep_rank << "), [], (" << ds.right_sep << "@" << ds.right_sep_rank << ")";
 }
+
+
+/*
+ * bulk queries on dist_seqs
+ */
+
+template <typename Func>
+std::vector<typename std::result_of<Func(size_t,size_t,size_t)>::type>
+local_ds_rma(const dist_seqs& ds, const std::vector<size_t>& local_queries, Func query) {
+    //
+    using T = typename std::result_of<Func(size_t,size_t,size_t)>::type;
+    // argsort the local_queries
+    std::vector<size_t> argsort(local_queries.size());
+    std::iota(argsort.begin(), argsort.end(), 0);
+    std::sort(argsort.begin(), argsort.end(), [&local_queries](size_t i, size_t j) { return local_queries[i] < local_queries[j]; });
+
+    std::vector<T> results(local_queries.size());
+    size_t i = 0;
+    // linear in number of local strings + number of queries
+    ds.for_each_seq([&](size_t str_beg, size_t str_end) {
+        while (i < local_queries.size() && local_queries[argsort[i]] < str_end) {
+            size_t qi = argsort[i];
+            results[qi] = query(local_queries[qi], str_beg, str_end);
+            ++i;
+        }
+    });
+    return results;
+}
+
+template <typename T, typename Func>
+std::vector<T> bulk_query_ds(const dist_seqs& ds, const std::vector<T>& vec, const std::vector<size_t>& rma_reqs, const mxx::comm& comm, Func query) {
+    size_t local_size = vec.size();
+    size_t global_size = mxx::allreduce(local_size, comm);
+    mxx::blk_dist dist(global_size, comm.size(), comm.rank());
+
+    std::vector<size_t> original_pos;
+    std::vector<size_t> bucketed_rma;
+    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&dist](size_t gidx) { return dist.rank_of(gidx); }, comm.size(), bucketed_rma, original_pos);
+
+    std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
+
+    // send all queries via all2all
+    std::vector<size_t> local_queries = mxx::all2allv(bucketed_rma, send_counts, recv_counts, comm);
+
+    std::vector<T> results = local_ds_rma(ds, local_queries, query);
+    results = mxx::all2allv(results, recv_counts, send_counts, comm);
+
+    std::vector<T> rma_b2 = permute(results, original_pos);
+    return rma_b2;
+}
+
 
 
 std::string flatten_strings(const std::vector<std::string>& v, const char sep = '$') {

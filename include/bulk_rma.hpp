@@ -87,6 +87,7 @@ std::vector<size_t> idxbucketing(const std::vector<T>& vec, Func key_func, size_
     }
     return send_counts;
 }
+
 template <typename T, typename Func>
 std::vector<size_t> idxbucketing_inplace(std::vector<T>& vec, Func key_func, size_t num_buckets, std::vector<size_t>& original_pos) {
     // TODO: inplace optimizations?
@@ -119,13 +120,13 @@ bulk_rma(InputIter local_begin, InputIter local_end,
     size_t global_size = mxx::allreduce(local_size, comm);
     // get the block decomposition class and check that input is actuall block
     // decomposed
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    mxx::blk_dist part(global_size, comm.size(), comm.rank());
     MXX_ASSERT(part.local_size() == local_size);
 
 
     std::vector<size_t> bucketed_indexes;
     std::vector<size_t> original_pos;
-    std::vector<size_t> send_counts = idxbucketing(global_indexes, [&part](size_t gidx) { return part.target_processor(gidx); }, comm.size(), bucketed_indexes, original_pos);
+    std::vector<size_t> send_counts = idxbucketing(global_indexes, [&part](size_t gidx) { return part.rank_of(gidx); }, comm.size(), bucketed_indexes, original_pos);
 
     std::vector<value_type> results = bulk_rma(local_begin, local_end, bucketed_indexes, send_counts, comm);
     bucketed_indexes = std::vector<size_t>();
@@ -143,7 +144,7 @@ bulk_rma_mpiwin(InputIter local_begin, InputIter local_end,
     // get local and global size
     size_t local_size = std::distance(local_begin, local_end);
     size_t global_size = mxx::allreduce(local_size, comm);
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    mxx::blk_dist part(global_size, comm.size(), comm.rank());
 
     // create MPI_Win for input string, create character array for size of parents
     // and use RMA to request (read) all characters which are not `$`
@@ -157,8 +158,8 @@ bulk_rma_mpiwin(InputIter local_begin, InputIter local_end,
     std::vector<value_type> results(global_indexes.size());
     for (size_t i = 0; i < results.size(); ++i) {
         size_t offset = global_indexes[i];
-        int proc = part.target_processor(offset);
-        size_t proc_offset = offset - part.excl_prefix_size(proc);
+        int proc = part.rank_of(offset);
+        size_t proc_offset = offset - part.eprefix_size(proc);
         // request proc_offset from processor `proc` in window win
         MPI_Get(&results[i], 1, dt.type(), proc, proc_offset, 1, dt.type(), win);
     }
@@ -195,7 +196,7 @@ public:
         local_size = std::distance(local_begin, local_end);
         prefix = mxx::exscan(local_size, comm);
         global_size = mxx::allreduce(local_size, comm);
-        mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+        mxx::blk_dist part(global_size, comm.size(), comm.rank());
 
         mxx::datatype dt = mxx::get_datatype<value_type>();
 

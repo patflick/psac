@@ -71,6 +71,14 @@ protected:
 
 
 public:
+
+    rmq() : n(0) {}
+
+    rmq(const rmq& o) = default;
+    rmq(rmq&& o) = default;
+    rmq& operator=(const rmq& o) = default;
+    rmq& operator=(rmq&& o) = default;
+
     rmq(Iterator begin, Iterator end,
         index_t superblock_size = DEFAULT_SUPERBLOCK_SIZE,
         index_t block_size = DEFAULT_BLOCK_SIZE)
@@ -174,7 +182,7 @@ public:
         //assert(check_block_correctness());
     }
 
-    Iterator query(Iterator range_begin, Iterator range_end) {
+    Iterator query(Iterator range_begin, Iterator range_end) const {
         // find superblocks fully contained within range
         index_t begin_idx = std::distance(_begin, range_begin);
         index_t end_idx = std::distance(_begin, range_end);

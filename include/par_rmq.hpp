@@ -52,11 +52,11 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     //     f.) for each range: get RMQ of intermediary processors
     //                         min(min_p_left, RMQ(p_left+1,p_right-1), min_p_right)
 
-    mxx::partition::block_decomposition_buffered<index_t> part(n, comm.size(), comm.rank());
+    mxx::blk_dist part(n, comm.size(), comm.rank());
 
     // get size parameters
     std::size_t local_size = local_els.size();
-    std::size_t prefix_size = part.excl_prefix_size();
+    std::size_t prefix_size = part.eprefix_size();
 
     // create RMQ for local elements
     rmq<typename std::vector<index_t>::const_iterator> local_rmq(local_els.begin(), local_els.end());
@@ -94,7 +94,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     mxx::all2all_func(
         ranges,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return part.target_processor(std::get<1>(x));
+            return part.rank_of(std::get<1>(x));
         }, comm);
     // find mins from start to right border locally
     for (auto it = ranges.begin(); it != ranges.end(); ++it)
@@ -114,14 +114,14 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     mxx::all2all_func(
         ranges,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return part.target_processor(std::get<0>(x));
+            return part.rank_of(std::get<0>(x));
         }, comm);
 
     // second communication
     mxx::all2all_func(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return part.target_processor(std::get<2>(x)-1);
+            return part.rank_of(std::get<2>(x)-1);
         }, comm);
     // find mins from start to right border locally
     for (auto it = ranges_right.begin(); it != ranges_right.end(); ++it)
@@ -141,7 +141,7 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
     mxx::all2all_func(
         ranges_right,
         [&](const std::tuple<index_t, index_t, index_t>& x) {
-            return part.target_processor(std::get<0>(x));
+            return part.rank_of(std::get<0>(x));
         }, comm);
 
     // get total min and save into ranges
@@ -175,8 +175,8 @@ void bulk_rmq(const std::size_t n, const std::vector<index_t>& local_els,
         // if the answer is different
         if (left_min_idx != right_min_idx)
         {
-            int p_left = part.target_processor(left_min_idx);
-            int p_right = part.target_processor(right_min_idx);
+            int p_left = part.rank_of(left_min_idx);
+            int p_right = part.rank_of(right_min_idx);
             // get minimum of both elements
             if (p_left + 1 < p_right)
             {

@@ -26,14 +26,6 @@
 #include <string>
 #include <iostream>
 
-// if this is not included as part of google test, define our own assert functions!
-#ifndef GTEST_INCLUDE_GTEST_GTEST_H_
-#define ASSERT_TRUE(x) {if (!(x)) { std::cerr << "[ERROR]: Assertion failed in " __FILE__ ":" << __LINE__ << std::endl;return;}} std::cerr << ""
-#define ASSERT_EQ(x, y) ASSERT_TRUE((x) == (y))
-#define ASSERT_GT(x, y) ASSERT_TRUE((x) > (y))
-#define ASSERT_LT(x, y) ASSERT_TRUE((x) < (y))
-#endif
-
 #include "suffix_array.hpp"
 #include "alphabet.hpp"
 #include "rmq.hpp"
@@ -68,7 +60,6 @@ void check_suffix_tree(const std::string& s, const std::vector<size_t>& sa, cons
 
         if (range_left == range_right) {
             // leaf node with parent `prev_pos` with lcp `prev_min`
-            // TODO: get character at SA[i]+LCP[i]
             size_t i = range_left-1;
             size_t c;
             if (sa[i] + prev_min == s.size()) {

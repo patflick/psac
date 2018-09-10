@@ -121,7 +121,7 @@ public:
         local_size = std::distance(begin, end);
         n = mxx::allreduce(local_size, this->comm);
         // get distribution
-        part = mxx::partition::block_decomposition_buffered<index_t>(n, comm.size(), comm.rank());
+        part = mxx::blk_dist(n, comm.size(), comm.rank());
 
         // assert a block decomposition
         if (part.local_size() != local_size)
@@ -145,10 +145,12 @@ private:
     /// number of processes = size of the communicator
     int p;
 
-    // The block decomposition for the suffix array
-    mxx::partition::block_decomposition_buffered<size_t> part;
 
 public:
+
+    // The block decomposition for the suffix array
+    mxx::blk_dist part;
+
     /// Iterators over the local input string
     //InputIterator input_begin;
     /// End iterator for local input string
@@ -178,7 +180,7 @@ void init_size(size_t lsize) {
     local_size = lsize;
     n = mxx::allreduce(local_size, this->comm);
     // get distribution
-    part = mxx::partition::block_decomposition_buffered<size_t>(n, comm.size(), comm.rank());
+    part = mxx::blk_dist(n, comm.size(), comm.rank());
 
     p = comm.size();
 
@@ -193,22 +195,18 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
     /***********************
      *  Initial bucketing  *
      ***********************/
-
-    // detect alphabet and get encoding
-    // TODO: get alphabet from string set
-    //alpha = alphabet_type::from_sequence(input_begin, input_end, comm);
-
     unsigned int k = get_optimal_k<index_t>(alpha, ss.sum_sizes, comm);
     if(comm.rank() == 0) {
-        INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
+        INFO("Alphabet: " << alpha);
     }
     SAC_TIMER_END_SECTION("alphabet detection");
 
-    // create initial k-mers and use these as the initial bucket numbers
-    // for each character position
+    // create distributed sequences helper structure for the distributed stringset
     dist_seqs ds = dist_seqs::from_dss(ss, comm);
+
+    // create all kmers
     local_B = kmer_gen_stringset<index_t>(ss, k, alpha, comm);
+    // equally distribute kmers
     mxx::stable_distribute_inplace(local_B, comm);
     init_size(local_B.size());
     SAC_TIMER_END_SECTION("kmer generation");
@@ -217,21 +215,27 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
     std::vector<index_t> local_B_SA;
     size_t unfinished_buckets, unfinished_elements;
     for (shift_by = k; shift_by < n; shift_by <<= 1) {
+        SAC_TIMER_LOOP_START();
+
         // 1) doubling by shifting into tuples (2BSA kind of structure)
         std::vector<index_t> B2 = shift_buckets_ds(ds, local_B, shift_by, comm);
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "shift-buckets-ds");
 
         // 2) sort by (B1, B2)
         local_SA = idxsort_vectors<index_t, index_t, true>(local_B, B2, comm);
+        SAC_TIMER_END_LOOP_SECTION(shift_by, "SA2ISA-idxsort");
 
         // 4) rebucket (B1, B2) -> B1 and LCP contruction
         if (shift_by == k) {
             if (_CONSTRUCT_LCP) {
                 initial_kmer_lcp_gsa(k, alpha.bits_per_char(), B2);
+                SAC_TIMER_END_LOOP_SECTION(shift_by, "init-lcp");
             }
             std::tie(unfinished_buckets, unfinished_elements) = rebucket_gsa_kmers(local_B, B2, true, comm, alpha.bits_per_char());
         } else {
             if (_CONSTRUCT_LCP) {
                 resolve_next_lcp(shift_by, B2);
+                SAC_TIMER_END_LOOP_SECTION(shift_by, "resove-lcp");
             }
             std::tie(unfinished_buckets, unfinished_elements) = rebucket_gsa(local_B, B2, true, comm);
         }
@@ -245,6 +249,7 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
             // original SA
             std::vector<index_t> cpy_SA(local_SA);
             bulk_permute_inplace(local_B, cpy_SA, part, comm);
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA2ISA-bulk-permute");
         //} else if (unfinished_elements < n/10) {
         } else if (true) {
             // switch to A2: bucket chaising
@@ -253,11 +258,16 @@ void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
             std::vector<index_t> cpy_SA(local_SA);
             local_B_SA = local_B; // copy
             bulk_permute_inplace(local_B, cpy_SA, part, comm);
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA2ISA-bulk-permute");
             break;
         } else {
             bulk_permute_inplace(local_B, local_SA, part, comm);
+            SAC_TIMER_END_LOOP_SECTION(shift_by, "SA2ISA-bulk-permute");
             //SAC_TIMER_END_LOOP_SECTION(shift_by, "SA-to-ISA");
         }
+        // end iteratior
+        SAC_TIMER_END_SECTION("sac-iteration");
+
         if (unfinished_buckets == 0)
             break;
     }
@@ -396,8 +406,7 @@ void construct(Iterator begin, Iterator end, bool fast_resolval = true, unsigned
     alpha = alphabet_type::from_sequence(begin, end, comm);
     k = get_optimal_k<index_t>(alpha, local_size, comm, k);
     if(comm.rank() == 0) {
-        INFO("Alphabet: " << alpha.unique_chars());
-        INFO("Detecting sigma=" << alpha.sigma() << " => l=" << alpha.bits_per_char() << ", k=" << k);
+        INFO("Alphabet: " << alpha);
     }
 
     construct(begin, end, fast_resolval, alpha, k);
@@ -443,7 +452,7 @@ void construct_arr(Iterator begin, Iterator end, bool fast_resolval = true) {
          *  fill tuples  *
          *****************/
         std::vector<std::array<index_t, L+1> > tuples(local_size);
-        std::size_t offset = part.excl_prefix_size();
+        std::size_t offset = part.eprefix_size();
         for (std::size_t i = 0; i < local_size; ++i) {
             tuples[i][0] = i + offset;
             tuples[i][1] = local_B[i];
@@ -655,7 +664,7 @@ void kmer_sorting() {
     std::vector<mypair<index_t> > tuple_vec(local_size);
 
     // get global index offset
-    std::size_t str_offset = part.excl_prefix_size();
+    std::size_t str_offset = part.eprefix_size();
 
     // fill tuple vector
     for (std::size_t i = 0; i < local_size; ++i) {
@@ -706,7 +715,7 @@ void rebucket_kmer() {
 
 
     // get my global starting index
-    size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.eprefix_size();
     size_t local_max = 0;
 
     /*
@@ -778,8 +787,8 @@ void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& com
         }
         if (_CONSTRUCT_LCP) {
             if (prev.B2 == 0 || cur.B2 == 0) {
-                if (local_LCP[i+prefix - part.excl_prefix_size()] == n)
-                    local_LCP[i+prefix - part.excl_prefix_size()] = shift_by;
+                if (local_LCP[i+prefix - part.eprefix_size()] == n)
+                    local_LCP[i+prefix - part.eprefix_size()] = shift_by;
             } else if (prev.B2 != cur.B2) {
                 index_t left_b  = std::min(prev.B2, cur.B2);
                 index_t right_b = std::max(prev.B2, cur.B2);
@@ -841,7 +850,7 @@ std::vector<index_t> get_active(const std::vector<index_t>& B, const std::vector
     // get next element from right
     index_t right_B = mxx::left_shift(B[0], comm);
     // get global offset
-    size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.eprefix_size();
 
     size_t unresolved_els = 0;
     size_t unfinished_b = 0;
@@ -910,6 +919,7 @@ std::vector<index_t> sparse_get_b2(const std::vector<index_t>& active, const std
     return b2;
 }
 
+/*
 std::vector<index_t> local_get_sparse_b2(const dist_seqs& ds, const std::vector<index_t>& B, const std::vector<size_t>& local_queries, size_t shift_by) {
     // argsort the local_queries
     std::vector<size_t> argsort(local_queries.size());
@@ -925,7 +935,7 @@ std::vector<index_t> local_get_sparse_b2(const dist_seqs& ds, const std::vector<
         while (i < local_queries.size() && local_queries[argsort[i]] < str_end) {
             size_t qi = argsort[i];
             if (local_queries[qi] - shift_by >= str_beg) {
-                results[qi] = B[local_queries[qi] - part.excl_prefix_size()];
+                results[qi] = B[local_queries[qi] - part.eprefix_size()];
             } else {
                 results[qi] = 0;
             }
@@ -942,11 +952,11 @@ template <typename T>
 std::vector<T> sparse_doubling(const dist_seqs& ds, const std::vector<T>& vec, const std::vector<size_t>& rma_reqs, size_t shift_by, const mxx::comm& comm) {
     size_t local_size = vec.size();
     size_t global_size = mxx::allreduce(local_size, comm);
-    mxx::partition::block_decomposition_buffered<size_t> part(global_size, comm.size(), comm.rank());
+    mxx::blk_dist part(global_size, comm.size(), comm.rank());
 
     std::vector<size_t> original_pos;
     std::vector<size_t> bucketed_rma;
-    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&part](size_t gidx) { return part.target_processor(gidx); }, comm.size(), bucketed_rma, original_pos);
+    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&part](size_t gidx) { return part.rank_of(gidx); }, comm.size(), bucketed_rma, original_pos);
 
     std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
 
@@ -959,6 +969,7 @@ std::vector<T> sparse_doubling(const dist_seqs& ds, const std::vector<T>& vec, c
     std::vector<index_t> rma_b2 = permute(results, original_pos);
     return rma_b2;
 }
+*/
 
 std::vector<index_t> sparse_get_b2(const dist_seqs& ds, const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
     // create RMA requests for the doubled positions
@@ -970,7 +981,14 @@ std::vector<index_t> sparse_get_b2(const dist_seqs& ds, const std::vector<index_
         }
     }
 
-    std::vector<index_t> rma_b2 = sparse_doubling(ds, B, rma_reqs, shift_by, comm);
+    //std::vector<index_t> rma_b2 = sparse_doubling(ds, B, rma_reqs, shift_by, comm);
+    std::vector<index_t> rma_b2 = bulk_query_ds(ds, B, rma_reqs, comm, [&](size_t gidx, size_t str_beg, size_t) {
+            if (gidx - shift_by >= str_beg) {
+                return B[gidx - part.eprefix_size()];
+            } else {
+                return static_cast<index_t>(0);
+            }
+    });
 
     auto b2in = rma_b2.begin();
     assert(rma_b2.size() == rma_reqs.size());
@@ -1015,7 +1033,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
     SAC_TIMER_START();
 
     // get global offset
-    size_t prefix = part.excl_prefix_size();
+    size_t prefix = part.eprefix_size();
 
     // get active elements
     std::vector<index_t> active = get_active(local_B, comm, true);
@@ -1199,7 +1217,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         }
 
         // message exchange to processor which contains first index
-        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.target_processor(x.first);}, comm);
+        mxx::all2all_func(msgs, [&](const mypair<index_t>& x){return part.rank_of(x.first);}, comm);
 
         // update local ISA with new bucket numbers
         for (auto it = msgs.begin(); it != msgs.end(); ++it) {
@@ -1354,7 +1372,7 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
     // find _new_ bucket boundaries and create associated parallel distributed
     // RMQ queries.
     std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
-    std::size_t prefix_size = part.excl_prefix_size();
+    std::size_t prefix_size = part.eprefix_size();
 
     for_each_lpair_2vec(local_B, local_B2, [dist, prefix_size, &minqueries, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
         if (left1 == right1) {

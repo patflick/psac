@@ -62,7 +62,7 @@ int main(int argc, char *argv[]) {
 
     try {
     // define commandline usage
-    TCLAP::CmdLine cmd("Parallel distirbuted suffix array and LCP construction.");
+    TCLAP::CmdLine cmd("Parallel distributed suffix array and LCP construction.");
     TCLAP::ValueArg<std::string> fileArg("f", "file", "Input filename.", true, "", "filename");
     TCLAP::ValueArg<std::size_t> randArg("r", "random", "Random input size", true, 0, "size");
     cmd.xorAdd(fileArg, randArg);
@@ -115,7 +115,6 @@ int main(int argc, char *argv[]) {
     } else if (lcpArg.getValue()) {
         // construct SA+LCP
         suffix_array<char, index_t, true> sa(comm);
-        // TODO choose construction method
         sa.construct(local_str.begin(), local_str.end(), true);
         double end = t.elapsed() - start;
         if (comm.rank() == 0)
@@ -131,13 +130,12 @@ int main(int argc, char *argv[]) {
     } else {
         // construct SA
         suffix_array<char, index_t, false> sa(comm);
-        // TODO choose construction method
-        sa.construct_arr<2>(local_str.begin(), local_str.end(), true);
+        sa.construct(local_str.begin(), local_str.end(), true);
         double end = t.elapsed() - start;
         if (comm.rank() == 0)
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
-            gl_check_correct(sa, local_str.begin(), local_str.end(), comm);
+            d_check_sa(sa, local_str.begin(), local_str.end(), comm);
         }
         if (oArg.getValue() != "") {
             // output suffix array as binary sa64
