@@ -56,6 +56,44 @@ Here's a short overview over the different binaries and their function:
   verifies the results against each other and outputs run-times of both.
 - `test_*` various test executables, testing a variety of our internal methods.
 
+### Example: Creating Suffix Array for an example file
+
+The `psac` executable can be used to create the *Suffix Array* and *LCP* array and save them as binary output files.
+
+This small example shows how to do so:
+```sh
+cd build/bin
+
+# create example input file with string S=mississippi
+printf "mississippi" > text.txt
+
+# in parallel, create suffix array for text.txt
+# with options: 
+#    -f text.txt: sets the input file
+#    -l: create LCP array alongside Suffix Array
+#    -c: run correctness test
+#    -o text.idx: sets basename for binary output files text.idx.sa64 & text.idx.lcp64
+mpirun -np 4 ./psac -l -c -f text.txt -o text.idx
+
+# verify output with ./print64
+./print64 text.idx.sa64
+```
+
+The last command outputs the suffix array for string `S=mississippi` in decimal format:
+```sh
+10
+7
+4
+1
+0
+9
+8
+6
+3
+5
+2
+```
+
 ## Licensing
 
 Our code is licensed under the
