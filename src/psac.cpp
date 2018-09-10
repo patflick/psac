@@ -66,6 +66,8 @@ int main(int argc, char *argv[]) {
     TCLAP::ValueArg<std::string> fileArg("f", "file", "Input filename.", true, "", "filename");
     TCLAP::ValueArg<std::size_t> randArg("r", "random", "Random input size", true, 0, "size");
     cmd.xorAdd(fileArg, randArg);
+    TCLAP::ValueArg<std::string> oArg("o", "file", "Output file base name.", false, "", "filename");
+    cmd.add(oArg);
     TCLAP::ValueArg<int> seedArg("s", "seed", "Sets the seed for the ranom input generation", false, 0, "int");
     cmd.add(seedArg);
     TCLAP::SwitchArg  lcpArg("l", "lcp", "Construct the LCP alongside the SA.", false);
@@ -107,7 +109,9 @@ int main(int argc, char *argv[]) {
         if (checkArg.getValue())  {
             gl_check_suffix_tree(local_str, sa, local_st_nodes, comm);
         }
-
+        if(oArg.getValue() != "") {
+            std::cerr << "Error, output of ST not supported" << std::endl;
+        }
     } else if (lcpArg.getValue()) {
         // construct SA+LCP
         suffix_array<char, index_t, true> sa(comm);
@@ -119,6 +123,11 @@ int main(int argc, char *argv[]) {
         if (checkArg.getValue()) {
             gl_check_correct(sa, local_str.begin(), local_str.end(), comm);
         }
+        if (oArg.getValue() != "") {
+            // output suffix array as binary sa64
+            mxx::write_ordered(oArg.getValue() + ".sa64", sa.local_SA, comm);
+            mxx::write_ordered(oArg.getValue() + ".lcp64", sa.local_LCP, comm);
+        }
     } else {
         // construct SA
         suffix_array<char, index_t, false> sa(comm);
@@ -129,6 +138,10 @@ int main(int argc, char *argv[]) {
             std::cerr << "PSAC time: " << end << " ms" << std::endl;
         if (checkArg.getValue()) {
             gl_check_correct(sa, local_str.begin(), local_str.end(), comm);
+        }
+        if (oArg.getValue() != "") {
+            // output suffix array as binary sa64
+            mxx::write_ordered(oArg.getValue() + ".sa64", sa.local_SA, comm);
         }
     }
 
