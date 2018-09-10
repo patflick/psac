@@ -66,7 +66,7 @@ int main(int argc, char *argv[]) {
     TCLAP::ValueArg<std::string> fileArg("f", "file", "Input filename.", true, "", "filename");
     TCLAP::ValueArg<std::size_t> randArg("r", "random", "Random input size", true, 0, "size");
     cmd.xorAdd(fileArg, randArg);
-    TCLAP::ValueArg<std::string> oArg("o", "file", "Output file base name.", false, "", "filename");
+    TCLAP::ValueArg<std::string> oArg("o", "outfile", "Output file base name.", false, "", "filename");
     cmd.add(oArg);
     TCLAP::ValueArg<int> seedArg("s", "seed", "Sets the seed for the ranom input generation", false, 0, "int");
     cmd.add(seedArg);

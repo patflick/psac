@@ -36,6 +36,10 @@ target_link_libraries(benchmark_k ${EXTRA_LIBS} rt)
 add_executable(benchmark-ansv benchmark_ansv.cpp)
 target_link_libraries(benchmark-ansv ${EXTRA_LIBS} rt)
 
+################
+# tools/utils  #
+################
+add_executable(print64 print64.cpp)
 
 ################
 #  divsufsort  #
