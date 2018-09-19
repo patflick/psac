@@ -71,6 +71,13 @@ std::vector<index_t> alphabet_histogram(const StringSet& ss, const mxx::comm& co
     return out_hist;
 }
 
+template <typename index_t, typename InputIterator>
+std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end) {
+    static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, char>::value, "Iterator must be of value type `char`.");
+    // get local histogram of alphabet characters
+    std::vector<index_t> hist = get_histogram<index_t>(begin, end, 256);
+    return hist;
+}
 
 template <typename index_t, typename InputIterator>
 std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, const mxx::comm& comm) {
@@ -80,6 +87,7 @@ std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, 
     std::vector<index_t> out_hist = mxx::allreduce(hist, comm);
     return out_hist;
 }
+
 
 
 template<typename CharType>
@@ -105,7 +113,6 @@ public:
     }
 
 private:
-
 
     std::vector<bool> chars_used;
 
@@ -169,6 +176,17 @@ public:
         return a;
     }
 
+
+    // sequential version
+    template <typename Iterator>
+    static alphabet from_sequence(Iterator begin, Iterator end) {
+        static_assert(std::is_same<char_type, typename std::iterator_traits<Iterator>::value_type>::value, "Character type of alphabet must match the value type of input sequence");
+        std::vector<size_t> alphabet_hist = alphabet_histogram<size_t>(begin, end);
+        return alphabet::from_hist(alphabet_hist);
+    }
+
+
+    // MPI parallel version (performs reduction over histogram)
     template <typename Iterator>
     static alphabet from_sequence(Iterator begin, Iterator end, const mxx::comm& comm) {
         static_assert(std::is_same<char_type, typename std::iterator_traits<Iterator>::value_type>::value, "Character type of alphabet must match the value type of input sequence");

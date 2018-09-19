@@ -67,11 +67,14 @@ std::vector<std::string> decode_kmers(const std::vector<word_type>& kmers, unsig
  */
 
 /* sequential kmer generation on purely local sequence (no communication) */
-template <typename word_type, typename InputIterator>
-std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha) {
+
+template <typename word_type, typename InputIterator, typename Func>
+void for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, Func func) {
     assert(k > 0);
     size_t size = std::distance(begin, end);
     unsigned int l = alpha.bits_per_char();
+    assert(l*k < sizeof(word_type)*8);
+
     // get k-mer mask
     word_type kmer_mask = ((static_cast<word_type>(1) << (l*k)) - static_cast<word_type>(1));
     if (kmer_mask == 0)
@@ -83,45 +86,35 @@ std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, u
     word_type kmer = 0;
     for (size_t i = 0; i < std::min<size_t>(k-1, size); ++i) {
         kmer <<= l;
-        word_type s = (unsigned char)(*str_it);
-        kmer |= alpha.encode(s);
+        kmer |= alpha.encode(*str_it);
         ++str_it;
     }
     if (size < k-1) {
         kmer <<= l*(k-1 - size);
     }
 
-    // init output
-    std::vector<word_type> kmers(size);
-    auto buk_it = kmers.begin();
     // continue to create all k-mers
     while (str_it != end) {
         // get next kmer
         kmer <<= l;
-        word_type s = (unsigned char)(*str_it);
-        kmer |= alpha.encode(s);
+        kmer |= alpha.encode(*str_it);
         kmer &= kmer_mask;
         // add to bucket number array
-        *buk_it = kmer;
+        func(kmer);
         // iterate
         ++str_it;
-        ++buk_it;
     }
 
     // last k-1 kmers are filled with 0
     for (size_t i = 0; i < std::min<size_t>(k-1, size); ++i) {
         kmer <<= l;
         kmer &= kmer_mask;
-        *buk_it = kmer;
-        ++buk_it;
+        func(kmer);
     }
-
-    return kmers;
 }
 
-template <typename word_type, typename InputIterator>
-std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm) {
-    size_t local_size = std::distance(begin, end);
+template <typename word_type, typename InputIterator, typename Func>
+void par_for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm, Func func) {
     unsigned int l = alpha.bits_per_char();
     // get k-mer mask
     word_type kmer_mask = ((static_cast<word_type>(1) << (l*k)) - static_cast<word_type>(1));
@@ -134,8 +127,7 @@ std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, u
     word_type kmer = 0;
     for (unsigned int i = 0; i < k-1; ++i) {
         kmer <<= l;
-        word_type s = (unsigned char)(*str_it);
-        kmer |= alpha.encode(s);
+        kmer |= alpha.encode(*str_it);
         ++str_it;
     }
 
@@ -143,21 +135,15 @@ std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, u
     // TODO: use async left shift!
     word_type last_kmer = mxx::left_shift(kmer, comm);
 
-    // init output
-    std::vector<word_type> kmers(local_size);
-    auto buk_it = kmers.begin();
     // continue to create all k-mers
     while (str_it != end) {
         // get next kmer
         kmer <<= l;
-        word_type s = (unsigned char)(*str_it);
-        kmer |= alpha.encode(s);
+        kmer |= alpha.encode(*str_it);
         kmer &= kmer_mask;
-        // add to bucket number array
-        *buk_it = kmer;
+        func(kmer);
         // iterate
         ++str_it;
-        ++buk_it;
     }
 
     // finish the receive to get the last k-1 k-kmers with string data from the
@@ -180,13 +166,81 @@ std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, u
         kmer <<= l;
         kmer |= (last_kmer >> (l*(k-i-2)));
         kmer &= kmer_mask;
+        func(kmer);
+    }
+}
 
-        // add to bucket number array
+template <typename word_type, typename InputIterator>
+std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha) {
+    assert(k > 0);
+    size_t size = std::distance(begin, end);
+
+    // init output
+    std::vector<word_type> kmers(size);
+    auto buk_it = kmers.begin();
+
+    // create vector of all kmers
+    for_each_kmer<word_type>(begin, end, k, alpha, [&buk_it](word_type kmer) {
         *buk_it = kmer;
         ++buk_it;
-    }
+    });
 
     return kmers;
+}
+
+template <typename word_type, typename InputIterator>
+std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm) {
+    size_t local_size = std::distance(begin, end);
+    // init output
+    std::vector<word_type> kmers(local_size);
+    auto buk_it = kmers.begin();
+
+    // create vector of local kmers
+    par_for_each_kmer<word_type>(begin, end, k, alpha, comm, [&buk_it](word_type kmer){
+        *buk_it = kmer;
+        ++buk_it;
+    });
+
+    return kmers;
+}
+
+
+template <typename word_type, typename InputIterator>
+std::vector<word_type> kmer_hist(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha) {
+    // compute sizes
+    assert(k > 0);
+    unsigned int l = alpha.bits_per_char();
+    assert(l*k < sizeof(word_type)*8);
+    size_t tbl_size = 1 << (l*k);
+
+    // init output
+    std::vector<word_type> hist(tbl_size, 0);
+
+    // create histogram
+    for_each_kmer<word_type>(begin, end, k, alpha, [&hist](word_type kmer){
+        ++hist[kmer];
+    });
+
+    return hist;
+}
+
+template <typename word_type, typename InputIterator>
+std::vector<word_type> kmer_hist(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm) {
+    // compute sizes
+    assert(k > 0);
+    unsigned int l = alpha.bits_per_char();
+    assert(l*k < sizeof(word_type)*8);
+    size_t tbl_size = 1 << (l*k);
+
+    // init output
+    std::vector<word_type> hist(tbl_size, 0);
+
+    // create histogram of local kmers
+    par_for_each_kmer<word_type>(begin, end, k, alpha, comm, [&hist](word_type kmer){
+        ++hist[kmer];
+    });
+
+    return hist;
 }
 
 /// kmer generation from a stringset (for GSA, GST, etc)
