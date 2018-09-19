@@ -29,10 +29,10 @@ std::vector<std::string> repeat_inc_seq(const std::string& seq = "ab", size_t re
     return res;
 }
 
-std::vector<size_t> repeat_inc_gsa(size_t slen, size_t reps) {
+std::vector<uint64_t> repeat_inc_gsa(size_t slen, size_t reps) {
     size_t m = reps*(reps+1)/2;
     size_t n = slen*m;
-    std::vector<size_t> gsa(n);
+    std::vector<uint64_t> gsa(n);
     for (size_t i = 0; i < slen; ++i) {
         auto oit = gsa.begin()+i*m;
         for (size_t j = 0; j < reps; ++j) {
@@ -48,10 +48,10 @@ std::vector<size_t> repeat_inc_gsa(size_t slen, size_t reps) {
     return gsa;
 }
 
-std::vector<size_t> repeat_inc_glcp(size_t slen, size_t reps) {
+std::vector<uint64_t> repeat_inc_glcp(size_t slen, size_t reps) {
     size_t m = reps*(reps+1)/2;
     size_t n = slen*m;
-    std::vector<size_t> lcp(n);
+    std::vector<uint64_t> lcp(n);
     for (size_t i = 0; i < slen; ++i) {
         auto oit = lcp.begin()+i*m;
         *oit = 0;
