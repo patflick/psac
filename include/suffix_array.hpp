@@ -130,7 +130,7 @@ public:
     */
     virtual ~suffix_array() {}
 
-private:
+public:
     /// The global size of the input string and suffix array
     std::size_t n;
 
@@ -566,6 +566,8 @@ void construct_arr(Iterator begin, Iterator end, bool fast_resolval = true) {
     }
     SAC_TIMER_END_SECTION("fix-isa");
 }
+
+private:
 
 #if 0
 void construct_fast() {

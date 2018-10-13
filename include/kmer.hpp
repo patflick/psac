@@ -61,11 +61,6 @@ std::vector<std::string> decode_kmers(const std::vector<word_type>& kmers, unsig
     return results;
 }
 
-/* TODO:
- * - [ ] refactor kmer generation for less code duplication
- * - [ ] kmer helper class?
- */
-
 /* sequential kmer generation on purely local sequence (no communication) */
 
 template <typename word_type, typename InputIterator, typename Func>
@@ -239,6 +234,9 @@ std::vector<word_type> kmer_hist(InputIterator begin, InputIterator end, unsigne
     par_for_each_kmer<word_type>(begin, end, k, alpha, comm, [&hist](word_type kmer){
         ++hist[kmer];
     });
+
+    // allreduce the whole kmer table
+    hist = mxx::allreduce(hist, comm);
 
     return hist;
 }
