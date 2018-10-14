@@ -106,7 +106,7 @@ class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 
 
 // distributed suffix array
-template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
+template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false, bool _CONSTRUCT_LC = false>
 class suffix_array {
 private:
 public:
@@ -168,6 +168,9 @@ public:
     std::vector<index_t> local_B;
     /// The local LCP array (remains empty if no LCP is constructed)
     std::vector<index_t> local_LCP;
+
+    // left-branching character
+    std::vector<char> local_Lc;
 
 private:
 
@@ -1313,15 +1316,37 @@ void initial_kmer_lcp(unsigned int k, unsigned int bits_per_char,
         local_LCP[0] = 0;
     }
 
-    for_each_lpair_2vec(local_B, local_B2, [k, bits_per_char, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
-        if (left1 != right1
-            || (left1 == right1 && left2 != right2)) {
-            unsigned int lcp = lcp_bitwise(left1, right1, k, bits_per_char);
-            if (lcp == k)
-                lcp += lcp_bitwise(left2, right2, k, bits_per_char);
-            local_LCP[i] = lcp;
-        }
-    }, comm);
+    if (_CONSTRUCT_LC) {
+
+        local_Lc.resize(local_size);
+
+        for_each_lpair_2vec(local_B, local_B2, [k, bits_per_char, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+            if (left1 != right1
+                || (left1 == right1 && left2 != right2)) {
+                unsigned int lcp = lcp_bitwise(left1, right1, k, bits_per_char);
+                if (lcp == k) {
+                    unsigned int lcp2 = lcp_bitwise(left2, right2, k, bits_per_char);
+                    lcp += lcp2;
+                    // decode left-branching character
+                    local_Lc[i] = get_kmer_char(left2, k, alpha, lcp2);
+                } else {
+                    local_Lc[i] = get_kmer_char(left1, k, alpha, lcp);
+                }
+                local_LCP[i] = lcp;
+            }
+        }, comm);
+    } else {
+
+        for_each_lpair_2vec(local_B, local_B2, [k, bits_per_char, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+            if (left1 != right1
+                || (left1 == right1 && left2 != right2)) {
+                unsigned int lcp = lcp_bitwise(left1, right1, k, bits_per_char);
+                if (lcp == k)
+                    lcp += lcp_bitwise(left2, right2, k, bits_per_char);
+                local_LCP[i] = lcp;
+            }
+        }, comm);
+    }
 }
 
 
@@ -1402,8 +1427,6 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
 
     // get parallel-distributed RMQ for all queries, results are in
     // `minqueries`
-    // TODO: bulk updatable RMQs [such that we don't have to construct the
-    //       RMQ for the local_LCP in each iteration]
     bulk_rmq(n, local_LCP, minqueries, comm);
     assert(minqueries.size() == nqueries);
 

@@ -55,3 +55,7 @@ runlog/
 blah.nodes
 block_node137.sh
 reldeb/
+timings/
+TODO.txt
+human_32M
+hu32M_res.txt

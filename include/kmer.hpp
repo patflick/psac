@@ -61,6 +61,13 @@ std::vector<std::string> decode_kmers(const std::vector<word_type>& kmers, unsig
     return results;
 }
 
+// TODO: function to get a specfic character from a kmer
+template <typename word_type, typename char_type>
+inline char_type get_kmer_char(const word_type kmer, unsigned int k, const alphabet<char_type>& alpha, unsigned int i) {
+    const unsigned int l = alpha.bits_per_char();
+    return alpha.decode((kmer >> ((k-1-i)*l)) & ((1 << l) - 1));
+}
+
 /* sequential kmer generation on purely local sequence (no communication) */
 
 template <typename word_type, typename InputIterator, typename Func>

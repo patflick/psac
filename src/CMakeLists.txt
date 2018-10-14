@@ -20,6 +20,11 @@ target_link_libraries(gsac ${EXTRA_LIBS} rt)
 target_link_libraries(gsac divsufsort)
 target_link_libraries(gsac divsufsort64)
 
+add_executable(desa-main desa_main.cpp)
+target_link_libraries(desa-main ${EXTRA_LIBS} rt)
+target_link_libraries(desa-main divsufsort)
+target_link_libraries(desa-main divsufsort64)
+
 ################
 #  benchmarks  #
 ################
@@ -40,6 +45,8 @@ target_link_libraries(benchmark-ansv ${EXTRA_LIBS} rt)
 # tools/utils  #
 ################
 add_executable(print64 print64.cpp)
+
+add_executable(mkpattern mkpattern.cpp)
 
 ################
 #  divsufsort  #

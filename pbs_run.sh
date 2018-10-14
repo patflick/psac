@@ -1,28 +1,28 @@
 #!/bin/sh
 
-# NOTE: just change the processor number here to something power of 2 plus 4
+#PBS -q swarm
+#PBS -l nodes=1:ppn=16
+#PBS -l walltime=0:30:00
 
-#PBS -o BATCH_OUTPUT
-#PBS -e BATCH_ERRORS
-#PBS -lnodes=100:ppn=16:compute,walltime=0:30:00
+# set up env
+module purge
+module load gcc/4.9.0
+module load mvapich2/2.2
+#module load openmpi/1.8
+#module load impi/5.1.1.109
+#module load openmpi
 
-NUM_VOTE_OFF=8
 
+#BIN_FOLDER=./release-ompi/bin
+BIN_FOLDER=./release3/bin
+#BIN_FOLDER=./debug/bin
 
-# set up compiler and MPI runtime environment
-#source /home/pflick/gcc48env.sh
-module load compilers/gcc-5.2
-MPIRUN=/usr/mpi/gcc/mvapich2-1.7-qlc/bin/mpirun
-
-BIN_FOLDER=./release/bin
+#GPFS=/gpfs/pace1/project/cse-aluru/pflick3
 
 # Change to directory from which qsub command was issued
 cd $PBS_O_WORKDIR
 
-# define executable to run
-#EXE=./release/bin/benchmark_sac
-EXE=$BIN_FOLDER/psac
-BM=$BIN_FOLDER/mxx-bm-vote-off
+EXE=$BIN_FOLDER/desa-main
 
 # prepare log folder
 OUT_FOLDER=runlog
@@ -33,55 +33,52 @@ rm $OUT_FOLDER/newest
 ln -s $NOW $OUT_FOLDER/newest
 
 # input args for executable
-INFILE=/lustre/alurugroup/pflick/human_g1k_v37.actg
-#INFILE=/lustre/alurugroup/pflick/Pabies10.actg
-#INFILE=/lustre/alurugroup/pflick/human2g.actg
-#INFILE=$HOME/data/human_g1k_v37_chr22.actg
-# srirams 5.7 GB file
-# INFILE=/work/alurugroup/jnk/bhavani/data/SRR797058/half30m.fwd.txt
+INFILE=$HOME/data/human_g1k_v37.actg
+PATTERN_FILE=$HOME/data/patterns_human_32M_20.txt
 
-NAME="BM-all2all-char-$PBS_NUM_NODES"
+#INFILE=$HOME/data/human_g1k_v37_chr22.actg
+#PATTERN_FILE=$HOME/data/chr22_patterns.txt
+
+NAME="desa-$PBS_NUM_NODES"
 
 NUM_NODES=$(cat $PBS_NODEFILE | wc -l)
-echo "[$NOW]: $NAME, exe=$EXE, file=$INFILE, nnodes=$NUM_NODES, ppn=$PBS_NUM_PPN, jobid=$PBS_JOBID, nodes:" >> $OUT_FOLDER/jobs.log
+echo "[$NOW]: $NAME, exe=$EXE, file=$INFILE, nnodes=$PBS_NUM_NODES, ppn=$PBS_NUM_PPN, jobid=$PBS_JOBID, nodes:" >> $OUT_FOLDER/jobs.log
 MY_NODES=$(cat $PBS_NODEFILE | sort -u | tr '\n' ', ')
+cat $PBS_NODEFILE > $OUT_FOLDER/latest-nodefile.txt
 echo "      $MY_NODES" >> $OUT_FOLDER/jobs.log
 echo ""
 
 # Old num nodes and PPN
 PPN=$PBS_NUM_PPN
-NUMNODES=$PBS_NUM_NODES
-NEW_NUMNODES=`expr $NUMNODES - $NUM_VOTE_OFF`
-NP=$(expr $NUMNODES \* $PPN)
-
-#HOSTFILE=$PBS_NODEFILE
-NEW_HOSTFILE=new_nodefile_$NEW_NUMNODES.txt
-# run all-pairs bandwidth benchmark and exclude $NUM_VOTE_OFF worst nodes from the next job
-$MPIRUN -np $NP -errfile-pattern=$LOG_FOLDER/bm-err-$NP-%r.log -outfile-pattern=$LOG_FOLDER/bm-out-$NP-%r.log $BM $NUM_VOTE_OFF $NEW_HOSTFILE
-
-
-#HOSTFILE=$PBS_NODEFILE
-HOSTFILE=$NEW_HOSTFILE
-
-# sort nodes by their node-id
-cat $HOSTFILE | sort > sorted_$HOSTFILE
-HOSTFILE=sorted_$HOSTFILE
-
-NUM_NODES=$(cat $HOSTFILE | wc -l)
-NP=$(expr $NUM_NODES \* $PPN)
+NUM_NODES=$PBS_NUM_NODES
+NP=$(expr $NUM_NODES \\* $PPN)
 NP2=$(expr $NP / 2)
 
-for p in $NP $NP2
-#for p in 1024 512 256
-#for p in 1600 1280 1024
-#for p in 256 128
-do
-	for i in 1 2 3 4 5
-	do
-		printf "### Running psac iteration $i with p = $p processors ###\n" 1>&2
-		/usr/bin/time $MPIRUN -np $p -hostfile $HOSTFILE -ppn $PPN -errfile-pattern=$LOG_FOLDER/err-$p-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-%r.log $EXE -t -f $INFILE
-		#printf "### Running psac iteration $i with p = $p processors and LCP ###\n" 1>&2
-		#$MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-%r.log $EXE -t -r 1000000
-		#/usr/bin/time $MPIRUN -np $p -errfile-pattern=$LOG_FOLDER/err-$p-$i-lcp-%r.log -outfile-pattern=$LOG_FOLDER/out-$p-$i-lcp-%r.log $EXE --lcp -f $INFILE
-	done
-done
+
+echo "MPI is:"
+echo `which mpirun`
+echo `which mpiexec`
+echo `which mpirun_rsh`
+
+#-outfile-pattern=${LOG_FOLDER}/stdout-%r.log -errfile-pattern=${LOG_FOLDER}/stderr-%r.log 
+
+#mpirun -np $p -ppn $PPN gdb -batch -ex run -ex bt $EXE $INFILE $PATTERN_FILE
+#mpiexec -np $p -ppn $PPN $EXE $INFILE $PATTERN_FILE
+
+TIMING_FILE="desa_timings_human32M_${NUM_NODES}_$(date +"%H%M").csv"
+
+mpirun_rsh -rsh -np $NP -hostfile $PBS_NODEFILE $EXE $INFILE $PATTERN_FILE 2> $TIMING_FILE
+#mpirun_rsh -rsh -np $NP -hostfile $PBS_NODEFILE gdb -batch -ex run -ex bt -ex "frame 5" -ex "print l" -ex "print r" --args $EXE $INFILE $PATTERN_FILE
+
+#for p in $NP $NP2
+#do
+#	for i in 1 2 3
+#	do
+#		printf "### Running psac iteration $i with p = $p processors ###\n" 1>&2
+#		mpirun -np $p -ppn $PPN $EXE $INFILE $PATTERN_FILE
+#		#mpirun -np $p --map-by ppr:$PPN:node $EXE -f $INFILE
+#	done
+#done
+
+
+
