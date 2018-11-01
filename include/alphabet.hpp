@@ -224,7 +224,8 @@ public:
     }
 
     // TODO: datatypes?
-    inline uint16_t encode(char_type c) const {
+    inline uint16_t encode(unsigned char c) const {
+        // TODO: make unsigned char_type
         uint32_t index = static_cast<uint32_t>(c);
         assert(0 <= index && index < mapping_table.size());
         return mapping_table[index];
