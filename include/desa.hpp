@@ -21,13 +21,15 @@ std::vector<T> redistr(const std::vector<T>& v, size_t gbeg, size_t gend, const 
     return res;
 }
 
-template <typename index_t>
-void redistr_sa(suffix_array<char, index_t, true>& sa, size_t gbeg, size_t gend, const mxx::comm& comm) {
+template <typename index_t, bool CONSTRUCT_LC>
+void redistr_sa(suffix_array<char, index_t, true, CONSTRUCT_LC>& sa, size_t gbeg, size_t gend, const mxx::comm& comm) {
     sa.local_SA = redistr(sa.local_SA, gbeg, gend, comm);
     sa.local_LCP = redistr(sa.local_LCP, gbeg, gend, comm);
     sa.local_B = redistr(sa.local_B, gbeg, gend, comm);
+    if (CONSTRUCT_LC) {
+        sa.local_Lc = redistr(sa.local_Lc, gbeg, gend, comm);
+    }
 }
-
 
 struct mystring {
     char* ptr;
@@ -190,6 +192,7 @@ std::ostream& operator<<(std::ostream& os, const strings& ss) {
             os << ", ";
     }
     os << "]}";
+    return os;
 }
 
 strings all2all_strings(const strings& ss, std::vector<int>& target, std::vector<size_t>& send_counts, const mxx::comm& comm) {
@@ -249,7 +252,7 @@ strings all2all_strings(const strings& ss, std::vector<int>& target, std::vector
 
 template <typename index_t>
 struct dist_desa {
-    suffix_array<char, index_t, true> sa;
+    suffix_array<char, index_t, true, true> sa;
     using it_t = typename std::vector<index_t>::const_iterator;
     my_rmq<it_t, index_t> minq;
     lookup_index<index_t> lt; // shared kmer lookup table
@@ -274,29 +277,124 @@ struct dist_desa {
 
     dist_desa(const mxx::comm& c) : sa(c) {}
 
+
+    void naive_construct_Lc() {
+        sa.comm.with_subset(sa.local_SA.size() > 0, [&](const mxx::comm& comm) {
+        // Note:
+        //  LCP[i] = lcp(SA[i-1],SA[i])
+        //  Lc[i]  = S[SA[i-1]+LCP[i]], i=1,...n-1
+        index_t prev_SA = mxx::right_shift(sa.local_SA.back(), comm);
+
+        mxx::blk_dist dist(sa.n, comm.size(), comm.rank());
+        MXX_ASSERT(dist.local_size() == local_str.size());
+
+        std::vector<size_t> counts(comm.size(), 0);
+        if (comm.rank() > 0) {
+            if (prev_SA + sa.local_LCP[0] < sa.n) {
+                counts[dist.rank_of(prev_SA + sa.local_LCP[0])]++;
+            }
+        }
+        for (size_t i = 0; i < local_size; ++i) {
+            if (sa.local_SA[i-1] + sa.local_LCP[i] < sa.n) {
+                counts[dist.rank_of(sa.local_SA[i-1] + sa.local_LCP[i])]++;
+            }
+        }
+        std::vector<size_t> offsets = mxx::local_exscan(counts);
+        size_t total_count = std::accumulate(counts.begin(), counts.end(), static_cast<size_t>(0));
+
+        std::vector<size_t> charidx(total_count);
+        // add bucketed requests
+        if (comm.rank() > 0) {
+            if (prev_SA + sa.local_LCP[0] < sa.n) {
+                charidx[offsets[dist.rank_of(prev_SA + sa.local_LCP[0])]++] = prev_SA + sa.local_LCP[0];
+            }
+        }
+        for (size_t i = 0; i < local_size; ++i) {
+            if (sa.local_SA[i-1] + sa.local_LCP[i] < sa.n) {
+                charidx[offsets[dist.rank_of(sa.local_SA[i-1] + sa.local_LCP[i])]++] = sa.local_SA[i-1] + sa.local_LCP[i];
+            }
+        }
+
+        std::vector<char> resp_chars = bulk_rma(local_str.begin(), local_str.end(), charidx, counts, comm);
+        charidx.clear();
+
+        offsets = mxx::local_exscan(counts);
+
+        local_Lc.resize(local_size);
+
+        // add bucketed requests
+        if (comm.rank() > 0) {
+            if (prev_SA + sa.local_LCP[0] < sa.n) {
+                local_Lc[0] = resp_chars[offsets[dist.rank_of(prev_SA + sa.local_LCP[0])]++];
+            }
+        }
+        for (size_t i = 0; i < local_size; ++i) {
+            if (sa.local_SA[i-1] + sa.local_LCP[i] < sa.n) {
+                local_Lc[i] = resp_chars[offsets[dist.rank_of(sa.local_SA[i-1] + sa.local_LCP[i])]++];
+            }
+        }
+        });
+
+        // TODO: sometimes the very first element of the redistributed Lc array
+        //       doesn't match with the naive version. This doesn't make a difference
+        //       in querying, bc we never need the first character in the local array
+        //       (it's getting skipped by the top level table)
+        // TODO: eventually figure out why!? not necessary tho.:w
+        /*
+        if (sa.local_Lc != local_Lc) {
+            //std::cerr << "rank " << comm.rank() << ": local Lc arrays are different" << std::endl;
+            fprintf(stderr, "rank %i: local Lc arrays are different!\n", comm.rank()); fflush(stderr);
+            if (sa.local_Lc.size() == local_Lc.size()) {
+                size_t tot = 0;
+                for (size_t i = 0; i < sa.local_Lc.size(); ++i) {
+                    if (sa.local_Lc[i] != local_Lc[i]) {
+                        if (tot < 5) {
+                            fprintf(stderr, "rank %i: sa.lc[%lu]=%c != lc[%lu]=%c\n", comm.rank(), i, sa.local_Lc[i], i, local_Lc[i]); fflush(stdout);
+                            //std::cerr << "rank " << comm.rank() <<  ": sa.lc[" << i << "=" << sa.local_Lc[i] << " != " << local_Lc[i] << "=lc[" << i << "]" << std::endl;
+                        }
+                        ++tot;
+                    }
+                }
+                fprintf(stderr, "rank %i: total diff %lu\n", comm.rank(), tot); fflush(stderr);
+                //std::cerr << "rank " << comm.rank() << ": total diff " << tot << std::endl;
+            } else {
+            std::cerr << "SHIT SIZES DON'T MATCH" << std::endl;
+            }
+        } else {
+            std::cerr << "YAYAYAYAYAYAY the Lc array works!!!!!" << std::endl;
+        }
+        */
+    }
+
     template <typename Iterator>
     void construct(Iterator begin, Iterator end, const mxx::comm& comm) {
+        mxx::section_timer t;
         local_str = std::string(begin, end); // copy input string into data structure
         n = mxx::allreduce(local_str.size(), comm);
         str_dist = mxx::blk_dist(n, comm.size(), comm.rank());
 
+        t.end_section("desa_construct: cpy str");
+
         // create SA/LCP
         sa.construct(local_str.begin(), local_str.end()); // move comm from constructor into .construct !?
         assert(sa.local_SA.size() == str_dist.local_size());
+        t.end_section("desa_construct: SA/LCP construct");
 
-
-        // TODO: choose a good `k`
-        unsigned int k = 8;
+        // choose a "good" `k`
+        unsigned int l = sa.alpha.bits_per_char();
+        unsigned int log_size = 24; // 2^24 = 16 M (*8 = 128 M)
+        unsigned int k = log_size / l;
         // construct kmer lookup table
         std::vector<uint64_t> hist = kmer_hist<uint64_t>(begin, end, k, sa.alpha, comm);
         lt.construct_from_hist(hist, k, sa.alpha);
+        t.end_section("desa_construct: k-mer hist");
 
         // partition the lookup index by processors
         part = partition(lt.table, comm.size());
         for (int i = 0; i < comm.size(); ++i) {
             size_t kmer_l = part[i];
             size_t proc_begin = (kmer_l == 0) ? 0 : lt.table[kmer_l-1];
-            lt_proc.emplace_hint(lt_proc.end(), proc_begin, i);
+            lt_proc[proc_begin] = i;
         }
 
         // kmers from: [part[comm.rank()] .. part[comm.rank()+1])
@@ -331,10 +429,12 @@ struct dist_desa {
           assert(my_end == sa.n);
         }
 #endif
+        t.end_section("desa_construct: partition");
 
 
         redistr_sa(sa, my_begin, my_end, comm);
         local_size = my_end - my_begin;
+        t.end_section("desa_construct: redistr");
 
         mxx::sync_cout(comm) << "[Rank " << comm.rank() << "] local_size (after part): " << local_size << std::endl;
 
@@ -343,63 +443,13 @@ struct dist_desa {
         if (local_size > 0) {
             minq = my_rmq<it_t,index_t>(sa.local_LCP.begin(), sa.local_LCP.end());
         }
+        t.end_section("desa_construct: RMQ construct");
 
-        // construct local Lc array (TODO: 
-
-        // Note:
-        //  LCP[i] = lcp(SA[i-1],SA[i])
-        //  Lc[i]  = S[SA[i-1]+LCP[i]], i=1,...n-1
-        index_t prev_SA = mxx::right_shift(sa.local_SA.back(), comm);
-
-        mxx::blk_dist dist(sa.n, comm.size(), comm.rank());
-        MXX_ASSERT(dist.local_size() == std::distance(begin, end));
-
-        std::vector<size_t> counts(comm.size(), 0);
-        if (comm.rank() > 0) {
-            if (prev_SA + sa.local_LCP[0] < sa.n) {
-                counts[dist.rank_of(prev_SA + sa.local_LCP[0])]++;
-            }
-        }
-        for (size_t i = 0; i < local_size; ++i) {
-            if (sa.local_SA[i-1] + sa.local_LCP[i] < sa.n) {
-                counts[dist.rank_of(sa.local_SA[i-1] + sa.local_LCP[i])]++;
-            }
-        }
-        std::vector<size_t> offsets = mxx::local_exscan(counts);
-        size_t total_count = std::accumulate(counts.begin(), counts.end(), static_cast<size_t>(0));
-
-        std::vector<size_t> charidx(total_count);
-        // add bucketed requests
-        if (comm.rank() > 0) {
-            if (prev_SA + sa.local_LCP[0] < sa.n) {
-                charidx[offsets[dist.rank_of(prev_SA + sa.local_LCP[0])]++] = prev_SA + sa.local_LCP[0];
-            }
-        }
-        for (size_t i = 0; i < local_size; ++i) {
-            if (sa.local_SA[i-1] + sa.local_LCP[i] < sa.n) {
-                charidx[offsets[dist.rank_of(sa.local_SA[i-1] + sa.local_LCP[i])]++] = sa.local_SA[i-1] + sa.local_LCP[i];
-            }
-        }
-
-
-        std::vector<char> resp_chars = bulk_rma(begin, end, charidx, counts, comm);
-        charidx.clear();
-
-        offsets = mxx::local_exscan(counts);
-
-        local_Lc.resize(local_size);
-
-        // add bucketed requests
-        if (comm.rank() > 0) {
-            if (prev_SA + sa.local_LCP[0] < sa.n) {
-                local_Lc[0] = resp_chars[offsets[dist.rank_of(prev_SA + sa.local_LCP[0])]++];
-            }
-        }
-        for (size_t i = 0; i < local_size; ++i) {
-            if (sa.local_SA[i-1] + sa.local_LCP[i] < sa.n) {
-                local_Lc[i] = resp_chars[offsets[dist.rank_of(sa.local_SA[i-1] + sa.local_LCP[i])]++];
-            }
-        }
+        /*
+        naive_construct_Lc();
+        t.end_section("desa_construct: Lc naive construct");
+        */
+        local_Lc.swap(sa.local_Lc);
     }
 
     // a ST node is virtually represented by it's interval [l,r] and it's first
@@ -674,23 +724,6 @@ struct dist_desa {
         timer.end_section("return P2 results");
 
         return solutions;
-    }
-
-    // bulk queries API? char* with separator characters?
-    std::vector<range_t> bulk_locate(const char* lbegin, const char* lend, char sep='\n') {
-        // TODO: iterate through all patterns:
-        //       - for each:
-        //          create k-mers,
-        //          check 
-        //recv_ss.str_begins;
-        //          get processor index (use a std::map?) or fixed kmer -> processor index lookup table?
-        //
-        //      - sort string data into buckets (TODO: implement string sort)
-        //      - all2all exchange of string buffers (including the separating chars
-        //      - for each string, locate_possible locally
-        //      - attach range and single SA
-        //      - bulk sort strings by rank_of(SA)
-        //      - double check matches
     }
 };
 

@@ -541,6 +541,7 @@ struct desa_index : public esa_index<index_t> {
                 return std::pair<index_t,index_t>(res.first, res.first);
             }
         }
+        return res;
     }
 };
 
@@ -569,9 +570,12 @@ struct lookup_index {
     }
 
     template <typename Iterator>
-    void construct(Iterator begin, Iterator end, unsigned int k, const alphabet<char>& a) {
+    void construct(Iterator begin, Iterator end, unsigned int bits, const alphabet<char>& a) {
         this->alpha = a;
-        this->k = k;
+
+        unsigned int l = this->alpha.bits_per_char();
+        this->k = bits / l;
+        assert(k >= 1);
 
         // scan through string to create kmer histogram
         table = kmer_hist<index_t>(begin, end, k, alpha);
@@ -581,17 +585,16 @@ struct lookup_index {
     }
 
     template <typename Iterator>
-    void construct(Iterator begin, Iterator end, unsigned int k) {
+    void construct(Iterator begin, Iterator end, unsigned int bits) {
         // get alphabet?
         alphabet<char> a = alphabet<char>::from_sequence(begin, end);
-        this->construct(begin, end, k, a);
+        this->construct(begin, end, bits, a);
     }
 
     template <typename String>
     range_t lookup(const String& P) {
         unsigned int l = alpha.bits_per_char();
         assert(l*k < sizeof(index_t)*8);
-        size_t tbl_size = 1 << (l*k);
 
         if (P.size() >= k) {
             // create kmer from P
@@ -638,7 +641,6 @@ struct lookup_desa_index : public desa_index<index_t> {
     }
 
     std::pair<index_t,index_t> locate(const std::string& P) {
-        size_t n = this->n;
         size_t m = P.size();
 
         index_t l, r;

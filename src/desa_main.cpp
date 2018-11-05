@@ -46,7 +46,6 @@ int main(int argc, char *argv[]) {
 
     std::string pattern_file(argv[2]);
     strings ss = strings::from_dfile(pattern_file, c);
-    size_t total_num = mxx::allreduce(ss.nstrings, c);
     t.end_section("read patterns file");
 
     // run locate a couple times

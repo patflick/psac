@@ -25,6 +25,11 @@ target_link_libraries(desa-main ${EXTRA_LIBS} rt)
 target_link_libraries(desa-main divsufsort)
 target_link_libraries(desa-main divsufsort64)
 
+#add_executable(benchmark-query benchmark_query.cpp)
+#target_link_libraries(benchmark-query sdsl)
+#target_link_libraries(benchmark-query divsufsort)
+#target_link_libraries(benchmark-query divsufsort64)
+
 ################
 #  benchmarks  #
 ################
