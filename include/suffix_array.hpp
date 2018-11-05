@@ -17,9 +17,8 @@
 #ifndef SUFFIX_ARRAY_HPP
 #define SUFFIX_ARRAY_HPP
 
-#include <mpi.h>
 #include <vector>
-#include <cstring> // memcmp
+#include <iostream>
 
 #include "alphabet.hpp"
 #include "kmer.hpp"
@@ -105,6 +104,12 @@ class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 
 
 
+// TODO: template by char_type and alphabet type, sa index type, LCP index type
+// and build multiple subclasses based on common underlying templated
+// implementation?
+
+
+
 // distributed suffix array
 template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
 class suffix_array {
@@ -112,22 +117,6 @@ private:
 public:
     suffix_array(const mxx::comm& _comm) : comm(_comm.copy()) {
     }
-    /*
-    suffix_array(InputIterator begin, InputIterator end, const mxx::comm& _comm)
-        : comm(_comm.copy()), p(comm.size()),
-        input_begin(begin), input_end(end)
-    {
-        // the local size of the input
-        local_size = std::distance(begin, end);
-        n = mxx::allreduce(local_size, this->comm);
-        // get distribution
-        part = mxx::blk_dist(n, comm.size(), comm.rank());
-
-        // assert a block decomposition
-        if (part.local_size() != local_size)
-            throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
-    }
-    */
     virtual ~suffix_array() {}
 
 public:
@@ -151,14 +140,11 @@ public:
     // The block decomposition for the suffix array
     mxx::blk_dist part;
 
-    /// Iterators over the local input string
-    //InputIterator input_begin;
-    /// End iterator for local input string
-    //InputIterator input_end;
-
     //using char_type = typename std::iterator_traits<InputIterator>::value_type;
     using char_type = char_t;
-    using alphabet_type = alphabet<char_type>;
+    //using alphabet_type = alphabet<char_type>;
+    using alphabet_type = typename alphabet_helper<char_type>::alphabet_type;
+
     alphabet_type alpha;
 
 public:
@@ -169,12 +155,6 @@ public:
     /// The local LCP array (remains empty if no LCP is constructed)
     std::vector<index_t> local_LCP;
 
-private:
-
-    // MPI tags used in constructing the suffix array
-    static const int PSAC_TAG_SHIFT = 2;
-
-public:
 
 void init_size(size_t lsize) {
     local_size = lsize;
@@ -394,13 +374,9 @@ template <typename Iterator>
 void construct(Iterator begin, Iterator end, bool fast_resolval = true, unsigned int k = 0) {
 
     SAC_TIMER_START();
-    /* get sizes */
+
     // the local size of the input
     init_size(std::distance(begin, end));
-
-    /***********************
-     *  Initial bucketing  *
-     ***********************/
 
     // detect alphabet and get encoding
     alpha = alphabet_type::from_sequence(begin, end, comm);
@@ -408,6 +384,7 @@ void construct(Iterator begin, Iterator end, bool fast_resolval = true, unsigned
     if(comm.rank() == 0) {
         INFO("Alphabet: " << alpha);
     }
+    SAC_TIMER_END_SECTION("get alphabet");
 
     construct(begin, end, fast_resolval, alpha, k);
 }
