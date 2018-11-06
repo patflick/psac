@@ -33,7 +33,7 @@ public:
     rmq_tester(std::size_t size) : size(size), els(size)
     {
         std::generate(els.begin(), els.end(), [](){return std::rand();});
-        minquery = new rmq<std::vector<int>::iterator>(els.begin(), els.end(), 8, 4);
+        minquery = new rmq<std::vector<int>::iterator>(els.begin(), els.end());
     }
 
     bool test(int start, int end)
@@ -85,8 +85,8 @@ void timing_comp(std::size_t size)
     std::cerr << "Construction RMQ: " << duration_ms << std::endl;
 
     int rand_tests = size;
-    double rmq_queries = 0.0;
-    double minel_queries = 0.0;
+    //double rmq_queries = 0.0;
+    //double minel_queries = 0.0;
     start_time = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < rand_tests; ++i)
     {

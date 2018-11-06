@@ -1163,7 +1163,7 @@ void ansv_comm_param_lbub(const std::vector<std::pair<T, size_t>>& lr_mins,
     T local_min = lr_mins[n_left_mins].first;
     allmins = mxx::allgather(local_min, comm);
     typedef typename std::vector<std::pair<T, size_t>>::const_iterator pair_it;
-    pair_it lr_begin = lr_mins.cbegin();
+    //pair_it lr_begin = lr_mins.cbegin();
     if (comm.rank() > 0) {
         pair_it left_begin = lr_mins.cbegin();
         pair_it left_end = lr_mins.cbegin()+n_left_mins;
@@ -1490,7 +1490,7 @@ void gansv_impl(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::ve
                     --l_ub_begin;
 
                 // first one-sided merge everything up to the in-range
-                pair_it l_lb_begin = recved.begin() + lb_recv_displs[i];
+                //pair_it l_lb_begin = recved.begin() + lb_recv_displs[i];
                 pair_it rx = ansv_right_merge<left_type>(recved.begin(), l_not_merged+1, r_not_merged, r_in_begin);
                 assert(rx == r_in_begin);
 
@@ -1514,7 +1514,7 @@ void gansv_impl(const std::vector<T>& in, std::vector<size_t>& left_nsv, std::ve
                 // then skip (set the unmerged_iterator to the in_end)
 
                 // first one-sided merge everything up to my in-range
-                pair_it l_lb_begin = recved.begin() + lb_recv_displs[i];
+                //pair_it l_lb_begin = recved.begin() + lb_recv_displs[i];
                 pair_it r_in_begin = lr_mins.begin() + in_displs[i];
                 pair_it r_in_end = lr_mins.begin() + in_displs[i] + in_counts[i];
                 ansv_right_merge<left_type>(recved.begin(), l_not_merged+1, r_not_merged, r_in_begin);

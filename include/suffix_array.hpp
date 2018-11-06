@@ -111,7 +111,7 @@ class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 
 
 // distributed suffix array
-template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false>
+template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false, bool _CONSTRUCT_LC = false>
 class suffix_array {
 private:
 public:
@@ -155,6 +155,15 @@ public:
     /// The local LCP array (remains empty if no LCP is constructed)
     std::vector<index_t> local_LCP;
 
+    // left-branching character
+    std::vector<char> local_Lc;
+
+private:
+
+    // MPI tags used in constructing the suffix array
+    static const int PSAC_TAG_SHIFT = 2;
+
+public:
 
 void init_size(size_t lsize) {
     local_size = lsize;
@@ -743,7 +752,7 @@ void rebucket_kmer() {
 // This is used in the bucket chaising construction. The MPI_Comm will most
 // of the time be a subcommunicator (so do not use the member `comm`)
 template <typename EqualFunc>
-void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t bucket_offset, std::vector<std::tuple<index_t, index_t, index_t> >& minqueries, size_t shift_by, EqualFunc eq) {
+void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t bucket_offset, std::vector<std::pair<index_t, index_t> >& minqueries, std::vector<index_t>& minq_idx, size_t shift_by, EqualFunc eq) {
     /*
      * NOTE: buckets are indexed by the global index of the first element in
      *       the bucket with a ONE-BASED-INDEX (since bucket number `0` is
@@ -773,7 +782,8 @@ void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& com
                 index_t right_b = std::max(prev.B2, cur.B2);
                 assert(0 < left_b && left_b < n);
                 assert(0 < right_b && right_b <= n);
-                minqueries.emplace_back(i + prefix, left_b, right_b);
+                minqueries.emplace_back(left_b, right_b);
+                minq_idx.emplace_back(i + prefix);
             }
         }
     }, comm);
@@ -809,14 +819,14 @@ void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& com
     }
 }
 
-void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t gl_offset, std::vector<std::tuple<index_t, index_t, index_t> >& minqueries, size_t shift_by) {
-    rebucket_bucket(bucket, comm, gl_offset, minqueries, shift_by, [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y){
+void rebucket_bucket(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t gl_offset, std::vector<std::pair<index_t, index_t> >& minqueries, std::vector<index_t>& minq_idx, size_t shift_by) {
+    rebucket_bucket(bucket, comm, gl_offset, minqueries, minq_idx, shift_by, [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y){
         return x.B1 == y.B1 && x.B2 == y.B2;
     });
 }
 
-void rebucket_bucket_gsa(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t gl_offset, std::vector<std::tuple<index_t, index_t, index_t> >& minqueries, size_t shift_by) {
-    rebucket_bucket(bucket, comm, gl_offset, minqueries, shift_by, [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y){
+void rebucket_bucket_gsa(std::vector<TwoBSA<index_t> >& bucket, const mxx::comm& comm, std::size_t gl_offset, std::vector<std::pair<index_t, index_t> >& minqueries, std::vector<index_t>& minq_idx, size_t shift_by) {
+    rebucket_bucket(bucket, comm, gl_offset, minqueries, minq_idx, shift_by, [](const TwoBSA<index_t>& x, const TwoBSA<index_t>& y){
         return x.B1 == y.B1 && x.B2 == y.B2 && x.B2 != 0;
     });
 }
@@ -1028,7 +1038,8 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         std::vector<index_t> b2 = sparse_b2_func(active, local_ISA, local_SA, shift_by, comm);
 
         // prepare LCP queries vector
-        std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
+        std::vector<std::pair<index_t, index_t> > minqueries;
+        std::vector<index_t> minq_idx;
 
         dist_seqs_buckets db = dist_seqs_buckets::from_func(local_B, comm);
 
@@ -1096,7 +1107,8 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
                                 index_t right_b = std::max(pre_b2, cur_b2);
                                 assert(0 < left_b && left_b < n);
                                 assert(0 < right_b && right_b <= n);
-                                minqueries.emplace_back(out_idx + prefix, left_b, right_b);
+                                minqueries.emplace_back(left_b, right_b);
+                                minq_idx.emplace_back(out_idx + prefix);
                             }
                         }
                     }
@@ -1148,7 +1160,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
 #endif
             size_t bucket_offset = lbegin;
             // rebucket with global offset of first -> in tuple form (also updates LCP)
-            rebucket_bucket_gsa(border_bucket, subcomm, gbegin, minqueries, shift_by);
+            rebucket_bucket_gsa(border_bucket, subcomm, gbegin, minqueries, minq_idx, shift_by);
             // assert first bucket index remains the same
             assert(subcomm.rank() != 0 || first_bucket == border_bucket[0].B1);
 
@@ -1170,6 +1182,30 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
         if (_CONSTRUCT_LCP) {
             // time LCP separately!
             SAC_TIMER_START();
+            mxx::section_timer t;
+            if (_CONSTRUCT_LC) {
+                bulk_rmq_Lc(local_LCP, local_Lc, minqueries, comm);
+                t.end_section("resolve_next_lcp: bulk_rmq");
+
+
+                // update the new LCP values:
+                for (size_t i = 0; i < minqueries.size(); ++i) {
+                    local_LCP[minq_idx[i]-prefix] = shift_by + minqueries[i].second;
+                    local_Lc[minq_idx[i]-prefix] = minqueries[i].first;
+                }
+                t.end_section("resolve_next_lcp: set LCP");
+            } else {
+                bulk_rmq_v2(n, local_LCP, minqueries, comm);
+                t.end_section("resolve_next_lcp: bulk_rmq");
+
+
+                // update the new LCP values:
+                for (size_t i = 0; i < minqueries.size(); ++i) {
+                    local_LCP[minq_idx[i]-prefix] = shift_by + minqueries[i].second;
+                }
+                t.end_section("resolve_next_lcp: set LCP");
+            }
+            /*
             // get parallel-distributed RMQ for all queries, results are in `minqueries`
             bulk_rmq(n, local_LCP, minqueries, comm);
 
@@ -1177,6 +1213,7 @@ void construct_msgs(std::vector<index_t>& local_B, std::vector<index_t>& local_I
             for (auto min_lcp : minqueries) {
                 local_LCP[std::get<0>(min_lcp) - prefix] = shift_by + std::get<2>(min_lcp);
             }
+            */
             SAC_TIMER_END_SECTION("LCP update");
         }
 
@@ -1290,15 +1327,37 @@ void initial_kmer_lcp(unsigned int k, unsigned int bits_per_char,
         local_LCP[0] = 0;
     }
 
-    for_each_lpair_2vec(local_B, local_B2, [k, bits_per_char, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
-        if (left1 != right1
-            || (left1 == right1 && left2 != right2)) {
-            unsigned int lcp = lcp_bitwise(left1, right1, k, bits_per_char);
-            if (lcp == k)
-                lcp += lcp_bitwise(left2, right2, k, bits_per_char);
-            local_LCP[i] = lcp;
-        }
-    }, comm);
+    if (_CONSTRUCT_LC) {
+
+        local_Lc.resize(local_size);
+
+        for_each_lpair_2vec(local_B, local_B2, [k, bits_per_char, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+            if (left1 != right1
+                || (left1 == right1 && left2 != right2)) {
+                unsigned int lcp = lcp_bitwise(left1, right1, k, bits_per_char);
+                if (lcp == k) {
+                    unsigned int lcp2 = lcp_bitwise(left2, right2, k, bits_per_char);
+                    lcp += lcp2;
+                    // decode left-branching character
+                    local_Lc[i] = get_kmer_char(left2, k, alpha, lcp2);
+                } else {
+                    local_Lc[i] = get_kmer_char(left1, k, alpha, lcp);
+                }
+                local_LCP[i] = lcp;
+            }
+        }, comm);
+    } else {
+
+        for_each_lpair_2vec(local_B, local_B2, [k, bits_per_char, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+            if (left1 != right1
+                || (left1 == right1 && left2 != right2)) {
+                unsigned int lcp = lcp_bitwise(left1, right1, k, bits_per_char);
+                if (lcp == k)
+                    lcp += lcp_bitwise(left2, right2, k, bits_per_char);
+                local_LCP[i] = lcp;
+            }
+        }, comm);
+    }
 }
 
 
@@ -1350,16 +1409,19 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
 
     // find _new_ bucket boundaries and create associated parallel distributed
     // RMQ queries.
-    std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
+    mxx::section_timer t;
+    //std::vector<std::tuple<index_t, index_t, index_t> > minqueries;
+    std::vector<std::pair<index_t, index_t>> minqueries;
+    std::vector<index_t> req_idx;
     std::size_t prefix_size = part.eprefix_size();
 
-    for_each_lpair_2vec(local_B, local_B2, [dist, prefix_size, &minqueries, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
+    for_each_lpair_2vec(local_B, local_B2, [dist, prefix_size, &minqueries, &req_idx, this](const index_t left1, const index_t left2, const index_t right1, const index_t right2, size_t i) {
         if (left1 == right1) {
-            if (left2 == 0 || right2 == 0) {
+            if (left2 == 0 || right2 == 0) { /* TODO: what's the Lc here? */
                 if (local_LCP[i] == n)
                     local_LCP[i] = dist;
             } else if (left2 != right2) {
-                index_t left_b  = std::min(left2, right2);
+                index_t left_b  = std::min(left2, right2); // FIXME: the B2 is sorted, thus left is always smaller?
                 index_t right_b = std::max(left2, right2);
                 // we need the minumum LCP of all suffixes in buckets between
                 // these two buckets. Since the first element in the left bucket
@@ -1368,10 +1430,12 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
                 // (-1 each since buffer numbers are current index + 1)
                 index_t range_left = (left_b-1) + 1;
                 index_t range_right = (right_b-1) + 1; // +1 since exclusive index
-                minqueries.emplace_back(i + prefix_size, range_left, range_right);
+                minqueries.emplace_back(range_left, range_right);
+                req_idx.emplace_back(i);
             }
         }
     }, comm);
+    t.end_section("resolve_next_lcp: generate minqueries");
 
 #ifndef NDEBUG
     std::size_t nqueries = minqueries.size();
@@ -1379,15 +1443,29 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
 
     // get parallel-distributed RMQ for all queries, results are in
     // `minqueries`
-    // TODO: bulk updatable RMQs [such that we don't have to construct the
-    //       RMQ for the local_LCP in each iteration]
-    bulk_rmq(n, local_LCP, minqueries, comm);
-    assert(minqueries.size() == nqueries);
+    if (_CONSTRUCT_LC) {
+        bulk_rmq_Lc(local_LCP, local_Lc, minqueries, comm);
+        assert(minqueries.size() == nqueries);
+        t.end_section("resolve_next_lcp: bulk_rmq");
 
 
-    // update the new LCP values:
-    for (auto min_lcp : minqueries) {
-        local_LCP[std::get<0>(min_lcp) - prefix_size] = dist + std::get<2>(min_lcp);
+        // update the new LCP values:
+        for (size_t i = 0; i < minqueries.size(); ++i) {
+            local_LCP[req_idx[i]] = dist + minqueries[i].second;
+            local_Lc[req_idx[i]] = minqueries[i].first;
+        }
+        t.end_section("resolve_next_lcp: set LCP");
+    } else {
+        bulk_rmq_v2(n, local_LCP, minqueries, comm);
+        assert(minqueries.size() == nqueries);
+        t.end_section("resolve_next_lcp: bulk_rmq");
+
+
+        // update the new LCP values:
+        for (size_t i = 0; i < minqueries.size(); ++i) {
+            local_LCP[req_idx[i]] = dist + minqueries[i].second;
+        }
+        t.end_section("resolve_next_lcp: set LCP");
     }
 }
 
