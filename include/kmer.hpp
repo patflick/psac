@@ -22,8 +22,8 @@
 #include "alphabet.hpp"
 
 // get max-mer size for a given alphabet and local input size
-template<typename word_type, typename CharType>
-unsigned int get_optimal_k(const alphabet<CharType>& a, size_t local_size, const mxx::comm& comm, unsigned int k = 0) {
+template<typename word_type, typename Alphabet>
+unsigned int get_optimal_k(const Alphabet& a, size_t local_size, const mxx::comm& comm, unsigned int k = 0) {
     // number of characters per word => the `k` in `k-mer`
     unsigned int max_k = a.template chars_per_word<word_type>();
     if (k == 0 || k > max_k) {
@@ -62,16 +62,17 @@ std::vector<std::string> decode_kmers(const std::vector<word_type>& kmers, unsig
 }
 
 // TODO: function to get a specfic character from a kmer
-template <typename word_type, typename char_type>
-inline char_type get_kmer_char(const word_type kmer, unsigned int k, const alphabet<char_type>& alpha, unsigned int i) {
+template <typename word_type, typename Alphabet>
+inline typename Alphabet::char_type get_kmer_char(const word_type kmer, unsigned int k, const Alphabet& alpha, unsigned int i) {
     const unsigned int l = alpha.bits_per_char();
     return alpha.decode((kmer >> ((k-1-i)*l)) & ((1 << l) - 1));
 }
 
 /* sequential kmer generation on purely local sequence (no communication) */
 
-template <typename word_type, typename InputIterator, typename Func>
-void for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, Func func) {
+template <typename word_type, typename InputIterator, typename Alphabet, typename Func>
+void for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, const Alphabet& alpha, Func func) {
+    static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, typename Alphabet::char_type>::value, "alphbet character type has to match the input sequence");
     assert(k > 0);
     size_t size = std::distance(begin, end);
     unsigned int l = alpha.bits_per_char();
@@ -115,8 +116,9 @@ void for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, const
     }
 }
 
-template <typename word_type, typename InputIterator, typename Func>
-void par_for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm, Func func) {
+template <typename word_type, typename InputIterator, typename Alphabet, typename Func>
+void par_for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, const Alphabet& alpha, const mxx::comm& comm, Func func) {
+    static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, typename Alphabet::char_type>::value, "alphbet character type has to match the input sequence");
     unsigned int l = alpha.bits_per_char();
     // get k-mer mask
     word_type kmer_mask = ((static_cast<word_type>(1) << (l*k)) - static_cast<word_type>(1));
@@ -172,36 +174,49 @@ void par_for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, c
     }
 }
 
-template <typename word_type, typename InputIterator>
-std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha) {
+
+template <typename word_type, typename InputIterator, typename Alphabet>
+std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const Alphabet& alpha) {
+    static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, typename Alphabet::char_type>::value, "alphbet character type has to match the input sequence");
     assert(k > 0);
     size_t size = std::distance(begin, end);
 
     // init output
     std::vector<word_type> kmers(size);
-    auto buk_it = kmers.begin();
 
-    // create vector of all kmers
-    for_each_kmer<word_type>(begin, end, k, alpha, [&buk_it](word_type kmer) {
-        *buk_it = kmer;
-        ++buk_it;
-    });
+    if (k > 1) {
+        auto buk_it = kmers.begin();
+        // create vector of all kmers
+        for_each_kmer<word_type>(begin, end, k, alpha, [&buk_it](word_type kmer) {
+            *buk_it = kmer;
+            ++buk_it;
+        });
+    } else {
+        assert(k == 1);
+        std::copy(begin, end, kmers.begin());
+    }
 
     return kmers;
 }
 
-template <typename word_type, typename InputIterator>
-std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const alphabet<typename std::iterator_traits<InputIterator>::value_type>& alpha, const mxx::comm& comm) {
+template <typename word_type, typename InputIterator, typename Alphabet>
+std::vector<word_type> kmer_generation(InputIterator begin, InputIterator end, unsigned int k, const Alphabet& alpha, const mxx::comm& comm) {
+    static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, typename Alphabet::char_type>::value, "alphbet character type has to match the input sequence");
     size_t local_size = std::distance(begin, end);
     // init output
     std::vector<word_type> kmers(local_size);
-    auto buk_it = kmers.begin();
+    if (k > 1) {
+        auto buk_it = kmers.begin();
 
-    // create vector of local kmers
-    par_for_each_kmer<word_type>(begin, end, k, alpha, comm, [&buk_it](word_type kmer){
-        *buk_it = kmer;
-        ++buk_it;
-    });
+        // create vector of local kmers
+        par_for_each_kmer<word_type>(begin, end, k, alpha, comm, [&buk_it](word_type kmer){
+            *buk_it = kmer;
+            ++buk_it;
+        });
+    } else {
+        assert(k == 1);
+        std::copy(begin, end, kmers.begin());
+    }
 
     return kmers;
 }

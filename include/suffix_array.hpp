@@ -134,9 +134,6 @@ public:
     /// number of processes = size of the communicator
     int p;
 
-
-public:
-
     // The block decomposition for the suffix array
     mxx::blk_dist part;
 
@@ -144,24 +141,20 @@ public:
     using char_type = char_t;
     //using alphabet_type = alphabet<char_type>;
     using alphabet_type = typename alphabet_helper<char_type>::alphabet_type;
-
+    /// alphabet of underlying text
     alphabet_type alpha;
 
-public:
     /// The local suffix array
     std::vector<index_t> local_SA;
-    /// The local inverse suffix array (TODO: rename?)
+    /// The local inverse suffix array
     std::vector<index_t> local_B;
+
     /// The local LCP array (remains empty if no LCP is constructed)
     std::vector<index_t> local_LCP;
 
-    // left-branching character
+    // left-branching character (remains empty if `_CONSTRUCT_LC = false`)
     std::vector<char> local_Lc;
 
-private:
-
-    // MPI tags used in constructing the suffix array
-    static const int PSAC_TAG_SHIFT = 2;
 
 public:
 
@@ -908,58 +901,6 @@ std::vector<index_t> sparse_get_b2(const std::vector<index_t>& active, const std
     return b2;
 }
 
-/*
-std::vector<index_t> local_get_sparse_b2(const dist_seqs& ds, const std::vector<index_t>& B, const std::vector<size_t>& local_queries, size_t shift_by) {
-    // argsort the local_queries
-    std::vector<size_t> argsort(local_queries.size());
-    std::iota(argsort.begin(), argsort.end(), 0);
-    std::sort(argsort.begin(), argsort.end(), [&local_queries](size_t i, size_t j) { return local_queries[i] < local_queries[j]; });
-
-    // scan local queries in argsorted order and save the B2 if the string size permits
-    std::vector<index_t> results(local_queries.size(), 9999999999ull);
-    // each query is {SA[j] + shift_by}
-    size_t i = 0;
-    // linear in number of local strings + number of queries
-    ds.for_each_seq([&](size_t str_beg, size_t str_end) {
-        while (i < local_queries.size() && local_queries[argsort[i]] < str_end) {
-            size_t qi = argsort[i];
-            if (local_queries[qi] - shift_by >= str_beg) {
-                results[qi] = B[local_queries[qi] - part.eprefix_size()];
-            } else {
-                results[qi] = 0;
-            }
-            ++i;
-        }
-    });
-    for (size_t i = 0; i < results.size(); ++i) {
-        assert(results[i] <= n);
-    }
-    return results;
-}
-
-template <typename T>
-std::vector<T> sparse_doubling(const dist_seqs& ds, const std::vector<T>& vec, const std::vector<size_t>& rma_reqs, size_t shift_by, const mxx::comm& comm) {
-    size_t local_size = vec.size();
-    size_t global_size = mxx::allreduce(local_size, comm);
-    mxx::blk_dist part(global_size, comm.size(), comm.rank());
-
-    std::vector<size_t> original_pos;
-    std::vector<size_t> bucketed_rma;
-    std::vector<size_t> send_counts = idxbucketing(rma_reqs, [&part](size_t gidx) { return part.rank_of(gidx); }, comm.size(), bucketed_rma, original_pos);
-
-    std::vector<size_t> recv_counts = mxx::all2all(send_counts, comm);
-
-    // send all queries via all2all
-    std::vector<size_t> local_queries = mxx::all2allv(bucketed_rma, send_counts, recv_counts, comm);
-
-    std::vector<index_t> results = local_get_sparse_b2(ds, vec, local_queries, shift_by);
-    results = mxx::all2allv(results, recv_counts, send_counts, comm);
-
-    std::vector<index_t> rma_b2 = permute(results, original_pos);
-    return rma_b2;
-}
-*/
-
 std::vector<index_t> sparse_get_b2(const dist_seqs& ds, const std::vector<index_t>& active, const std::vector<index_t>& B, const std::vector<index_t>& SA, size_t shift_by, const mxx::comm& comm) {
     // create RMA requests for the doubled positions
     std::vector<size_t> rma_reqs;
@@ -1264,7 +1205,7 @@ void construct_msgs_gsa(const dist_seqs& ds, std::vector<index_t>& local_B, std:
 }
 
 /*********************************************************************
- *                         LCP construction                          *
+ *                       LCP & Lc construction                       *
  *********************************************************************/
 
 // for a single bucket array (one k-mer)
@@ -1469,7 +1410,7 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
     }
 }
 
-};
+}; // class suffix_array
 
 
 #endif // SUFFIX_ARRAY_HPP

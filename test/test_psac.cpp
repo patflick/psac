@@ -98,6 +98,36 @@ bool check_sa_eqdss(suffix_array<char_t, index_t, _LCP>& sa, const std::string& 
 }
 
 
+TEST(PSAC, Mississippi) {
+    mxx::comm c;
+
+
+    std::vector<uint32_t> exp = {10, 7, 4, 1, 0, 9, 8, 6, 3, 5, 2};
+    std::string str;
+    if (c.rank() == 0) {
+        // generate some random input string
+        str = "mississippi";
+    }
+    size_t size = 11;
+
+    bool correct = true;
+    c.with_subset((size_t)c.rank() < size, [&](const mxx::comm& subcomm) {
+        // distribute string equally
+        std::string local_str = mxx::stable_distribute(str, subcomm);
+
+        // create suffix array w/o LCP
+        suffix_array<char, uint32_t, false> sa(subcomm);
+        sa.construct(local_str.begin(), local_str.end());
+
+        //correct = check_sa_dss(sa, str, subcomm);
+        std::vector<uint32_t> glsa = mxx::gatherv(sa.local_SA, 0, subcomm);
+        if (subcomm.rank() == 0) {
+            correct = (glsa == exp);
+        }
+    });
+    ASSERT_TRUE(mxx::all_of(correct, c));
+}
+
 TEST(PSAC, RandAll) {
     mxx::comm c;
 
@@ -243,3 +273,32 @@ TEST(PSAC, Lcp1) {
     EXPECT_TRUE(check_lcp_eq(sa, local_str, c));
 }
 
+
+TEST(PSAC, IntAlphabetMiss) {
+    mxx::comm c;
+
+
+    std::vector<unsigned int> exp;
+    std::vector<int> str;
+    if (c.rank() == 0) {
+        // generate some random input string
+        // mississippi: i = 3, m = 128, p = 66000, s = 12345678
+        exp = {10, 7, 4, 1, 0, 9, 8, 6, 3, 5, 2};
+        str = std::vector<int>({128, 3, 12345678, 12345678, 3, 12345678, 12345678, 3, 66000, 66000, 3});
+    }
+    // distribute string equally
+    std::vector<int> local_str = mxx::stable_distribute(str, c);
+    std::vector<unsigned int> local_exp_sa = mxx::stable_distribute(exp, c);
+
+    // create suffix array with LCP
+    suffix_array<int, unsigned int, true> sa(c);
+
+    // construct suffix  and LCP array
+    sa.construct(local_str.begin(), local_str.end());
+
+    mxx::sync_cout(c) << "[" << c.rank() << "] local_SA=" << sa.local_SA << std::endl;
+    mxx::sync_cout(c) << "[" << c.rank() << "] local_LCP=" << sa.local_LCP << std::endl;
+
+    // check correctness
+    EXPECT_EQ(local_exp_sa, sa.local_SA);
+}

@@ -265,15 +265,16 @@ public:
     static constexpr char_type  MINLIM       = std::numeric_limits<char_type>::min();
     static constexpr char_type  MAXLIM       = std::numeric_limits<char_type>::max();
 
-    friend std::ostream& operator<<<>(std::ostream&, const int_alphabet<char_type>&);
+    template <typename CharType>
+    friend std::ostream& operator<<(std::ostream&, const int_alphabet<CharType>&);
 
 
 private:
     char_type min_char;
     char_type max_char;
+    char_type offset;
     uchar_type m_sigma;
     unsigned int m_bits_per_char;
-    char_type offset;
 
 
 public:
@@ -321,7 +322,7 @@ public:
                 maxval = *it;
             }
         }
-        return std::make_pair<char_type,char_type>(minval, maxval);
+        return std::pair<char_type,char_type>(minval, maxval);
     }
 
     /**
