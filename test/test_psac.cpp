@@ -277,7 +277,6 @@ TEST(PSAC, Lcp1) {
 TEST(PSAC, IntAlphabetMiss) {
     mxx::comm c;
 
-
     std::vector<unsigned int> exp;
     std::vector<int> str;
     if (c.rank() == 0) {
@@ -286,19 +285,23 @@ TEST(PSAC, IntAlphabetMiss) {
         exp = {10, 7, 4, 1, 0, 9, 8, 6, 3, 5, 2};
         str = std::vector<int>({128, 3, 12345678, 12345678, 3, 12345678, 12345678, 3, 66000, 66000, 3});
     }
-    // distribute string equally
-    std::vector<int> local_str = mxx::stable_distribute(str, c);
-    std::vector<unsigned int> local_exp_sa = mxx::stable_distribute(exp, c);
+    bool correct = true;
+    c.with_subset((size_t)c.rank() < 11, [&](const mxx::comm& subcomm) {
+        // distribute string equally
+        std::vector<int> local_str = mxx::stable_distribute(str, subcomm);
+        std::vector<unsigned int> local_exp_sa = mxx::stable_distribute(exp, subcomm);
 
-    // create suffix array with LCP
-    suffix_array<int, unsigned int, true> sa(c);
+        // create suffix array with LCP
+        suffix_array<int, unsigned int, true> sa(subcomm);
 
-    // construct suffix  and LCP array
-    sa.construct(local_str.begin(), local_str.end());
+        // construct suffix  and LCP array
+        sa.construct(local_str.begin(), local_str.end());
 
-    mxx::sync_cout(c) << "[" << c.rank() << "] local_SA=" << sa.local_SA << std::endl;
-    mxx::sync_cout(c) << "[" << c.rank() << "] local_LCP=" << sa.local_LCP << std::endl;
+        mxx::sync_cout(subcomm) << "[" << subcomm.rank() << "] local_SA=" << sa.local_SA << std::endl;
+        mxx::sync_cout(subcomm) << "[" << subcomm.rank() << "] local_LCP=" << sa.local_LCP << std::endl;
 
-    // check correctness
-    EXPECT_EQ(local_exp_sa, sa.local_SA);
+        // check correctness
+        correct = (local_exp_sa == sa.local_SA);
+    });
+    ASSERT_TRUE(mxx::all_of(correct, c));
 }
