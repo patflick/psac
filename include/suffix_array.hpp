@@ -109,9 +109,41 @@ class datatype_builder<mypair<T> > : public datatype_contiguous<T, 2> {};
 // implementation?
 
 
+// appends .uintXX or .intXX based on size of the type
+// e.g. basename.uint32, basename.int16 etc
+
+template <typename T>
+std::string get_int_ext() {
+    static_assert(std::is_integral<T>::value && !std::is_same<T,bool>::value, "This function works only for integral types excluding bool");
+
+    std::string ext = "";
+    if (std::is_unsigned<T>::value) {
+        ext += "u"
+    }
+    ext += "int";
+    ext += std::to_string(sizeof(T)*8);
+    return ext;
+}
+
+template <typename T>
+void write_dist_int_array(const std::string& basename, const std::vector<T>& vec, const mxx::comm& comm) {
+    static_assert(std::is_integral<T>::value && !std::is_same<T,bool>::value, "This function works only for integral types excluding bool");
+    std::string type_ext = get_int_ext<T>();
+    mxx::write_ordered(basename + type_ext, vec, comm);
+}
+
+// how to distinguish between types?
+template <typename T>
+void read_dist_int_array(const std::string& filename, const mxx::comm& comm) {
+    static_assert(std::is_integral<T>::value && !std::is_same<T,bool>::value, "This function works only for integral types excluding bool");
+
+    // TODO: make sure the file ending matches the type size?
+    mxx::read_
+}
+
 
 // distributed suffix array
-template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false, bool _CONSTRUCT_LC = false>
+template <typename char_t, typename index_t = std::size_t, typename lcp_t = std::size_t, bool _CONSTRUCT_LCP = false, bool _CONSTRUCT_LC = false>
 class suffix_array {
 private:
 public:
@@ -150,7 +182,7 @@ public:
     std::vector<index_t> local_B;
 
     /// The local LCP array (remains empty if no LCP is constructed)
-    std::vector<index_t> local_LCP;
+    std::vector<lcp_t> local_LCP;
 
     // left-branching character (remains empty if `_CONSTRUCT_LC = false`)
     std::vector<char> local_Lc;
@@ -170,6 +202,19 @@ void init_size(size_t lsize) {
     if (part.local_size() != local_size)
         throw std::runtime_error("The input string must be equally block decomposed accross all MPI processes.");
 }
+
+
+// store to file using parallel IO
+void store(const std::string& basename) {
+    std::string idxt = sizeof(index_t) == 8 ? "64" : "32";
+    mxx::write_ordered(basename + ".sa64", local_SA, comm);
+    mxx::write_ordered(basename + ".lcp", local_LCP, comm);
+}
+
+// load from file using parallel IO
+void load(const std::string& basename) {
+}
+
 
 //template <typename StringSet> TODO template later
 void construct_ss(simple_dstringset& ss, const alphabet_type& alpha) {
@@ -1302,6 +1347,10 @@ void initial_kmer_lcp(unsigned int k, unsigned int bits_per_char,
 }
 
 
+// TODO: compute lcp(kmer1, kmer2) in kmer.hpp and specialize by alphabet
+// TODO: also lcp(kmer1_a, kmer1_b, kmer2_a, kmer2_b)
+// TODO: and remove 0 trailing
+
 // for pairs of two buckets: pair[i] = (B1[i], B2[i])
 void initial_kmer_lcp_gsa(unsigned int k, unsigned int bits_per_char,
                           const std::vector<index_t>& local_B2) {
@@ -1388,7 +1437,6 @@ void resolve_next_lcp(int dist, const std::vector<index_t>& local_B2) {
         bulk_rmq_Lc(local_LCP, local_Lc, minqueries, comm);
         assert(minqueries.size() == nqueries);
         t.end_section("resolve_next_lcp: bulk_rmq");
-
 
         // update the new LCP values:
         for (size_t i = 0; i < minqueries.size(); ++i) {
