@@ -36,6 +36,7 @@
 #include <mxx/sort.hpp>
 #include <mxx/collective.hpp>
 #include <mxx/timer.hpp>
+#include <mxx/file.hpp>
 
 #include <prettyprint.hpp>
 
@@ -118,7 +119,7 @@ std::string get_int_ext() {
 
     std::string ext = "";
     if (std::is_unsigned<T>::value) {
-        ext += "u"
+        ext += "u";
     }
     ext += "int";
     ext += std::to_string(sizeof(T)*8);
@@ -128,22 +129,33 @@ std::string get_int_ext() {
 template <typename T>
 void write_dist_int_array(const std::string& basename, const std::vector<T>& vec, const mxx::comm& comm) {
     static_assert(std::is_integral<T>::value && !std::is_same<T,bool>::value, "This function works only for integral types excluding bool");
-    std::string type_ext = get_int_ext<T>();
-    mxx::write_ordered(basename + type_ext, vec, comm);
+    //std::string type_ext = get_int_ext<T>();
+    mxx::coll_file f(basename, comm);
+    f.open(MPI_MODE_WRONLY | MPI_MODE_CREATE);
+    f.write_ordered(vec.data(), vec.size());
 }
 
 // how to distinguish between types?
 template <typename T>
-void read_dist_int_array(const std::string& filename, const mxx::comm& comm) {
+std::vector<T> read_dist_int_array(const std::string& filename, const mxx::comm& comm) {
     static_assert(std::is_integral<T>::value && !std::is_same<T,bool>::value, "This function works only for integral types excluding bool");
-
     // TODO: make sure the file ending matches the type size?
-    mxx::read_
+
+    mxx::coll_file f(filename, comm);
+    f.open(MPI_MODE_RDONLY);
+
+    size_t nbytes = f.get_size();
+    size_t n = nbytes / sizeof(T);
+    mxx::blk_dist d(n, comm);
+
+    std::vector<T> data(d.local_size());
+    f.read_ordered(d.local_size(), data.data());
+    return data;
 }
 
 
 // distributed suffix array
-template <typename char_t, typename index_t = std::size_t, typename lcp_t = std::size_t, bool _CONSTRUCT_LCP = false, bool _CONSTRUCT_LC = false>
+template <typename char_t, typename index_t = std::size_t, bool _CONSTRUCT_LCP = false, bool _CONSTRUCT_LC = false>
 class suffix_array {
 private:
 public:
@@ -182,10 +194,10 @@ public:
     std::vector<index_t> local_B;
 
     /// The local LCP array (remains empty if no LCP is constructed)
-    std::vector<lcp_t> local_LCP;
+    std::vector<index_t> local_LCP;
 
     // left-branching character (remains empty if `_CONSTRUCT_LC = false`)
-    std::vector<char> local_Lc;
+    std::vector<char_t> local_Lc;
 
 
 public:
@@ -205,14 +217,37 @@ void init_size(size_t lsize) {
 
 
 // store to file using parallel IO
-void store(const std::string& basename) {
-    std::string idxt = sizeof(index_t) == 8 ? "64" : "32";
-    mxx::write_ordered(basename + ".sa64", local_SA, comm);
-    mxx::write_ordered(basename + ".lcp", local_LCP, comm);
+void write(const std::string& basename) {
+    write_dist_int_array(basename + ".sa", local_SA, comm);
+    if (_CONSTRUCT_LCP) {
+        write_dist_int_array(basename + ".lcp", local_LCP, comm);
+    }
+    if (_CONSTRUCT_LC) {
+        write_dist_int_array(basename + ".lc", local_Lc, comm);
+    }
 }
 
 // load from file using parallel IO
-void load(const std::string& basename) {
+void read(const std::string& basename) {
+    local_SA = read_dist_int_array<index_t>(basename + ".sa", comm);
+    // TODO: read different datatype for LCP?
+    if (_CONSTRUCT_LCP) {
+        local_LCP = read_dist_int_array<index_t>(basename + ".lcp", comm);
+        if (local_SA.size() != local_LCP.size()) {
+            throw std::runtime_error("SA and LCP have to have same size");
+        }
+    }
+    if (_CONSTRUCT_LC) {
+        local_Lc = read_dist_int_array<char_t>(basename + ".lc", comm);
+        /*
+        if (local_SA.size() != local_Lc.size()) {
+            throw std::runtime_error("SA and Lc have to have same size");
+        }
+        */
+    }
+
+    // initialize the rest
+    init_size(local_SA.size());
 }
 
 
