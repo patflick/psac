@@ -239,11 +239,9 @@ void read(const std::string& basename) {
     }
     if (_CONSTRUCT_LC) {
         local_Lc = read_dist_int_array<char_t>(basename + ".lc", comm);
-        /*
         if (local_SA.size() != local_Lc.size()) {
             throw std::runtime_error("SA and Lc have to have same size");
         }
-        */
     }
 
     // initialize the rest
