@@ -304,39 +304,41 @@ TEST(PSAC, IntAlphabetMiss) {
 }
 
 TEST(PSAC, FileIO) {
-    mxx::comm c;
+    mxx::comm gc;
     std::string s;
-    if (c.rank() == 0) {
+    if (gc.rank() == 0) {
         s = "mississippi";
     }
-    std::string local_s = mxx::stable_distribute(s, c);
+    gc.with_subset(gc.rank() < 11, [&](const mxx::comm& c) {
+        std::string local_s = mxx::stable_distribute(s, c);
 
-    suffix_array<char, size_t, true, true> sa(c);
-    sa.construct(local_s.begin(), local_s.end());
+        suffix_array<char, size_t, true, true> sa(c);
+        sa.construct(local_s.begin(), local_s.end());
 
-    sa.write("miss");
+        sa.write("miss");
 
-    suffix_array<char, size_t, true, true> sa2(c);
-    sa2.read("miss");
+        suffix_array<char, size_t, true, true> sa2(c);
+        sa2.read("miss");
 
-    EXPECT_EQ(sa.local_SA, sa2.local_SA);
-    EXPECT_EQ(sa.local_LCP, sa2.local_LCP);
-    EXPECT_EQ(sa.local_Lc, sa2.local_Lc);
+        EXPECT_EQ(sa.local_SA, sa2.local_SA);
+        EXPECT_EQ(sa.local_LCP, sa2.local_LCP);
+        EXPECT_EQ(sa.local_Lc, sa2.local_Lc);
 
-    std::vector<size_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
-    std::vector<size_t> glcp = mxx::gatherv(sa.local_LCP, 0, c);
-    std::vector<char> glc = mxx::gatherv(sa.local_Lc, 0, c);
+        std::vector<size_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
+        std::vector<size_t> glcp = mxx::gatherv(sa.local_LCP, 0, c);
+        std::vector<char> glc = mxx::gatherv(sa.local_Lc, 0, c);
 
-    if (c.size() > 2) {
-        c.with_subset(c.rank() < c.size() - 2, [&](const mxx::comm& sc) {
-            suffix_array<char, size_t, true, true> sa3(sc);
-            sa3.read("miss");
-            // gather and check
-            EXPECT_EQ(gsa, mxx::gatherv(sa3.local_SA, 0, sc));
-            EXPECT_EQ(glcp, mxx::gatherv(sa3.local_LCP, 0, sc));
-            EXPECT_EQ(glc, mxx::gatherv(sa3.local_Lc, 0, sc));
-        });
-    }
+        if (c.size() > 2) {
+            c.with_subset(c.rank() < c.size() - 2, [&](const mxx::comm& sc) {
+                suffix_array<char, size_t, true, true> sa3(sc);
+                sa3.read("miss");
+                // gather and check
+                EXPECT_EQ(gsa, mxx::gatherv(sa3.local_SA, 0, sc));
+                EXPECT_EQ(glcp, mxx::gatherv(sa3.local_LCP, 0, sc));
+                EXPECT_EQ(glc, mxx::gatherv(sa3.local_Lc, 0, sc));
+            });
+        }
+    });
 
     // try with different number of processors for write/read
 }
