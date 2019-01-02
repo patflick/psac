@@ -78,6 +78,7 @@ script:
     - ./bin/test-ansv
     - ./bin/test-suffixtree
     - ./bin/test-gsa
+    - ./bin/test-desa
     - mpiexec -np 4 ./bin/test-psac
     - mpiexec -np 13 ./bin/test-psac
     - mpiexec -np 4 ./bin/test-ansv
@@ -86,6 +87,8 @@ script:
     - mpiexec -np 13 ./bin/test-gsa
     - mpiexec -np 4 ./bin/test-gsa
     - mpiexec -np 4 ./bin/test-ss
+    - mpiexec -np 4 ./bin/test-desa
+
 
 after_success:
   # only collect coverage if compiled with gcc

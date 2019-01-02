@@ -30,8 +30,13 @@ int main(int argc, char** argv) {
     }
 
     // read file
-    std::vector<uint64_t> buf(size/8);
-    int bytes_read = fread(&buf[0], sizeof(uint64_t), size/8, f);
+    size_t count = size/sizeof(uint64_t);
+    std::vector<uint64_t> buf(count);
+    size_t read_count = fread(&buf[0], sizeof(uint64_t), count, f);
+    if (read_count != count) {
+        std::cerr << "Unexpected error reading file." << std::endl;
+        exit(EXIT_FAILURE);
+    }
 
     // output file in decimal format
     for (size_t i = 0; i < buf.size(); ++i) {
