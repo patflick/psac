@@ -324,6 +324,8 @@ TEST(PSAC, FileIO) {
         EXPECT_EQ(sa.local_LCP, sa2.local_LCP);
         EXPECT_EQ(sa.local_Lc, sa2.local_Lc);
 
+        EXPECT_EQ(sa.alpha, sa2.alpha);
+
         std::vector<size_t> gsa = mxx::gatherv(sa.local_SA, 0, c);
         std::vector<size_t> glcp = mxx::gatherv(sa.local_LCP, 0, c);
         std::vector<char> glc = mxx::gatherv(sa.local_Lc, 0, c);
@@ -332,6 +334,7 @@ TEST(PSAC, FileIO) {
             c.with_subset(c.rank() < c.size() - 2, [&](const mxx::comm& sc) {
                 suffix_array<char, size_t, true, true> sa3(sc);
                 sa3.read("miss");
+                EXPECT_EQ(sa.alpha, sa3.alpha);
                 // gather and check
                 EXPECT_EQ(gsa, mxx::gatherv(sa3.local_SA, 0, sc));
                 EXPECT_EQ(glcp, mxx::gatherv(sa3.local_LCP, 0, sc));

@@ -56,10 +56,9 @@ TYPED_TEST(SeqIndexTest, Locate_mississippi) {
     }
 }
 
-
 // TODO: test case for testing random string and random patterns
-// check correcness by checking left and right next SA suffixes
-//
+//       check correcness by checking left and right next SA suffixes
+
 
 
 TEST(Partition, part0) {

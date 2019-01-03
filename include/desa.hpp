@@ -29,6 +29,15 @@
 #include <mxx/file.hpp>
 
 
+/**
+ * @brief Redistribute a distributed vector `v`, so that the calling processor
+ *        contains global indexes [gbeg,gend).
+ *
+ * This is a collective call.
+ *
+ * @return The redistributed vector with `gend-gbeg` elements corresponding to
+ *          global elements [gbeg, gend).
+ */
 template <typename T>
 std::vector<T> redistr(const std::vector<T>& v, size_t gbeg, size_t gend, const mxx::comm& comm) {
     assert(gbeg <= gend);
@@ -38,43 +47,84 @@ std::vector<T> redistr(const std::vector<T>& v, size_t gbeg, size_t gend, const 
     return res;
 }
 
+/**
+ * @brief Redistribute the distributed suffix array `sa`,
+ *        such that the calling processor contains global indexes [gbeg,gend).
+ *
+ * This is a collective call.
+ */
 template <typename index_t, bool CONSTRUCT_LC>
 void redistr_sa(suffix_array<char, index_t, true, CONSTRUCT_LC>& sa, size_t gbeg, size_t gend, const mxx::comm& comm) {
     sa.local_SA = redistr(sa.local_SA, gbeg, gend, comm);
     sa.local_LCP = redistr(sa.local_LCP, gbeg, gend, comm);
-    sa.local_B = redistr(sa.local_B, gbeg, gend, comm);
+    if (!sa.local_B.empty()) {
+        sa.local_B = redistr(sa.local_B, gbeg, gend, comm);
+    }
     if (CONSTRUCT_LC) {
         sa.local_Lc = redistr(sa.local_Lc, gbeg, gend, comm);
     }
 }
 
+/**
+ * @brief Distributed Enhanced Suffix Array
+ *
+ * @tparam index_t  Index type used for SA, RMQ, TL-lookup-table.
+ */
 template <typename index_t>
 struct dist_desa {
+    /// Distributed Suffix Array & LCP array, and L_c array
     suffix_array<char, index_t, true, true> sa;
-    using it_t = typename std::vector<index_t>::const_iterator;
-    rmq<it_t, index_t> minq;
-    lookup_index<index_t> lt; // shared kmer lookup table
-    std::vector<char> local_Lc;
-    std::vector<size_t> part; // [partition] processor -> lt index
-    std::map<size_t, int> lt_proc; // map each processor start index -> processor index
 
+    /// LCP iterator type for RMQ
+    using it_t = typename std::vector<index_t>::const_iterator;
+
+    /// RMQ of local LCP
+    rmq<it_t, index_t> minq;
+
+    /// Top-Level lookup table (shared copy)
+    lookup_index<index_t> lt; // shared kmer lookup table
+
+    /// ?? do I still need this?
+    std::vector<char> local_Lc;
+
+    /// partition: assigns each processor it's lookup table index (shared copy)
+    std::vector<size_t> part;
+
+    /// inverse partition mapping
+    // map each processor start index -> processor index
+    std::map<size_t, int> lt_proc;
+
+    /// global size of input and arrays
     size_t n;
 
-    // TODO: save the string
+    // save the string
     std::string local_str;
-    size_t str_local_size;
+    // block distribution of string
     mxx::blk_dist str_dist;
 
+    // partition information:
+    // after partitioning subtrees, this processor now contains the following
+    // indeces:
 
+    // TODO: separate class for `arbitrary_distribution`:
+    //       containing also the `lt_proc` and `part` tables from above and the info below
+    //       and provide some useful functions
+
+    /// global index of first element on this processor
     size_t my_begin;
+    /// global index of first element on next processor
     size_t my_end;
+    /// = my_end - my_begin: number of elements on this processor
     size_t local_size;
 
+    /// type of query results: typeof [l,r)
     using range_t = std::pair<index_t,index_t>;
 
+    /// creates an empty DESA
     dist_desa(const mxx::comm& c) : sa(c) {}
 
-
+    /// naive implementation of L_c construciton
+    // (used only for runtime comparison with the better algorithm)
     void naive_construct_Lc() {
         sa.comm.with_subset(sa.local_SA.size() > 0, [&](const mxx::comm& comm) {
         // Note:
@@ -163,28 +213,15 @@ struct dist_desa {
         */
     }
 
-    template <typename Iterator>
-    void construct(Iterator begin, Iterator end, const mxx::comm& comm) {
-        mxx::section_timer t;
-        local_str = std::string(begin, end); // copy input string into data structure
-        n = mxx::allreduce(local_str.size(), comm);
-        str_dist = mxx::blk_dist(n, comm.size(), comm.rank());
-
-        t.end_section("desa_construct: cpy str");
-
-        // create SA/LCP
-        sa.construct(local_str.begin(), local_str.end()); // move comm from constructor into .construct !?
-        MXX_ASSERT(sa.local_SA.size() == str_dist.local_size());
-        t.end_section("desa_construct: SA/LCP construct");
-
+    void init_tllt(const mxx::comm& comm) {
         // choose a "good" `q`
         unsigned int l = sa.alpha.bits_per_char();
         unsigned int log_size = 24; // 2^24 = 16 M (*8 = 128 M)
         unsigned int q = log_size / l;
 
         // `q` might have to be choosen smaller if the input is very small
-        if (std::distance(begin,end) < q) {
-            q = std::distance(begin,end);
+        if (local_str.size() < q) {
+            q = local_str.size();
             q = std::max(q,1u);
         }
         q = mxx::allreduce(q, mxx::min<unsigned int>(), comm);
@@ -193,10 +230,13 @@ struct dist_desa {
         }
 
         // construct kmer lookup table
-        std::vector<uint64_t> hist = kmer_hist<uint64_t>(begin, end, q, sa.alpha, comm);
+        std::vector<uint64_t> hist = kmer_hist<uint64_t>(local_str.begin(), local_str.end(), q, sa.alpha, comm);
         lt.construct_from_hist(hist, q, sa.alpha);
-        t.end_section("desa_construct: q-mer hist");
+    }
 
+    void repartition(const mxx::comm& comm) {
+        assert(!lt.table.empty());
+        mxx::section_timer t;
         // partition the lookup index by processors
         part = partition(lt.table, comm.size());
         for (int i = 0; i < comm.size(); ++i) {
@@ -206,8 +246,6 @@ struct dist_desa {
         }
 
         // kmers from: [part[comm.rank()] .. part[comm.rank()+1])
-        //
-
         size_t my_kmer_l = part[comm.rank()];
         size_t my_kmer_r = (comm.rank()+1 == comm.size()) ? lt.table.size() : part[comm.rank()+1];
 
@@ -237,14 +275,39 @@ struct dist_desa {
           assert(my_end == sa.n);
         }
 #endif
-        t.end_section("desa_construct: partition");
+        t.end_section("repartition: 1D-partition");
 
 
         redistr_sa(sa, my_begin, my_end, comm);
         local_size = my_end - my_begin;
-        t.end_section("desa_construct: redistr");
+        t.end_section("repartition: redistribute");
 
         mxx::sync_cout(comm) << "[Rank " << comm.rank() << "] local_size (after part): " << local_size << std::endl;
+    }
+
+    /**
+     * @brief   Constructs the distributed DESA given the block
+     *          distributed string given by [begin,end).
+     */
+    template <typename Iterator>
+    void construct(Iterator begin, Iterator end, const mxx::comm& comm) {
+        mxx::section_timer t;
+        /// we need a copy of the input string for aligning queries
+        local_str = std::string(begin, end); // copy input string into data structure
+        n = mxx::allreduce(local_str.size(), comm);
+        str_dist = mxx::blk_dist(n, comm.size(), comm.rank());
+        t.end_section("desa_construct: cpy str");
+
+        // create SA/LCP
+        sa.construct(local_str.begin(), local_str.end()); // move comm from constructor into .construct !?
+        MXX_ASSERT(sa.local_SA.size() == str_dist.local_size());
+        t.end_section("desa_construct: SA/LCP construct");
+
+        init_tllt(comm);
+        t.end_section("desa_construct: q-mer hist");
+
+        repartition(comm);
+        t.end_section("desa_construct: repartition");
 
         // TODO: LCP might need some 1 element overlaps on boundaries (or different distribution??)
         // construct RMQ on local LCP
@@ -257,7 +320,39 @@ struct dist_desa {
         naive_construct_Lc();
         t.end_section("desa_construct: Lc naive construct");
         */
-        local_Lc.swap(sa.local_Lc);
+    }
+
+    /// write distributed DESA to files using parallel IO
+    void write(const std::string& basename, const mxx::comm& comm) {
+        // writes only the SA, the rest gets re-created from the SA and input string
+        sa.write(basename);
+    }
+
+    /// read and initialize the distributed DESA from file
+    void read(const std::string& string_file, const std::string& basename, const mxx::comm& comm) {
+        mxx::section_timer t;
+        // read input string
+        local_str = mxx::file_block_decompose(string_file.c_str(), comm);
+        n = mxx::allreduce(local_str.size(), comm);
+        str_dist = mxx::blk_dist(n, comm.size(), comm.rank());
+        t.end_section("desa_read: read str");
+        mxx::sync_cout(comm) << "local_str= " << local_str << std::endl;
+
+        // read SA
+        sa.read(basename);
+        t.end_section("desa_read: read SA");
+
+        init_tllt(comm);
+        t.end_section("desa_read: init q-mer hist");
+
+        repartition(comm);
+        t.end_section("desa_read: repartition");
+
+        // construct RMQ(LCP)
+        if (local_size > 0) {
+            minq = rmq<it_t,index_t>(sa.local_LCP.begin(), sa.local_LCP.end());
+        }
+        t.end_section("desa_read: RMQ construct");
     }
 
     // a ST node is virtually represented by it's interval [l,r] and it's first
@@ -269,7 +364,7 @@ struct dist_desa {
         assert(i1 <= r);
         do {
             // `i` is the lcp(SA[i-1],SA[i])
-            char lc = this->local_Lc[i1]; // == S[SA[l]+lcpv] for first iter
+            char lc = this->sa.local_Lc[i1]; // == S[SA[l]+lcpv] for first iter
             if (lc == c) {
                 r = i1-1;
                 break;
@@ -444,7 +539,7 @@ struct dist_desa {
 
         timer.end_section("Phase II: local_locate_possible");
 
-        // TODO: rule out false positives
+        // rule out false positives
         // - take first or first few !?, sent to SA[first] for string alignment and checks
         // - string is still equally block distributed!
         //std::vector<size_t> sa_idx;

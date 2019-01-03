@@ -225,6 +225,8 @@ void write(const std::string& basename) {
     if (_CONSTRUCT_LC) {
         write_dist_int_array(basename + ".lc", local_Lc, comm);
     }
+
+    alpha.write(basename + ".alpha", comm);
 }
 
 // load from file using parallel IO
@@ -243,6 +245,8 @@ void read(const std::string& basename) {
             throw std::runtime_error("SA and Lc have to have same size");
         }
     }
+
+    alpha.read(basename + ".alpha", comm);
 
     // initialize the rest
     init_size(local_SA.size());

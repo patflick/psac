@@ -19,6 +19,8 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <iostream>
+#include <fstream>
 #include <mxx/comm.hpp>
 #include <mxx/reduction.hpp>
 
@@ -42,6 +44,7 @@ std::string rand_dna(std::size_t size, int seed) {
     return str;
 }
 
+/// scans the input sequence and updates the given frequency histogram of characters
 template<typename T, typename Iterator>
 void update_histogram(Iterator begin, Iterator end, std::vector<T>& hist) {
     using char_type = typename std::iterator_traits<Iterator>::value_type;
@@ -55,6 +58,7 @@ void update_histogram(Iterator begin, Iterator end, std::vector<T>& hist) {
     }
 }
 
+/// Returns a frequency histogram of characters from a given input sequence
 template<typename T, typename Iterator>
 std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0) {
     if (size == 0)
@@ -64,6 +68,7 @@ std::vector<T> get_histogram(Iterator begin, Iterator end, std::size_t size = 0)
     return hist;
 }
 
+/// Returns a frequency histogram of characters from a given distributed stringset (collective call)
 template <typename index_t, typename StringSet>
 std::vector<index_t> alphabet_histogram(const StringSet& ss, const mxx::comm& comm) {
     std::vector<index_t> hist(256, 0);
@@ -75,6 +80,7 @@ std::vector<index_t> alphabet_histogram(const StringSet& ss, const mxx::comm& co
     return out_hist;
 }
 
+/// Returns a frequency histogram of characters from a given input sequence.
 template <typename index_t, typename InputIterator>
 std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end) {
     static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, char>::value, "Iterator must be of value type `char`.");
@@ -83,6 +89,7 @@ std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end) 
     return hist;
 }
 
+/// Returns a frequency histogram of characters from a given distributed input sequence (collective call)
 template <typename index_t, typename InputIterator>
 std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, const mxx::comm& comm) {
     static_assert(std::is_same<typename std::iterator_traits<InputIterator>::value_type, char>::value, "Iterator must be of value type `char`.");
@@ -93,15 +100,18 @@ std::vector<index_t> alphabet_histogram(InputIterator begin, InputIterator end, 
 }
 
 
-
-
+/**
+ * @brief Class representing an alphabet with character size <= 2 bytes.
+ */
 template<typename CharType>
 class alphabet {
     static_assert(sizeof(CharType) <= 2, "Dynamic alphabet supports at most 2-byte (16bits) alphabets");
 public:
-
+    /// the character type of the alphabet
     using char_type = CharType;
+    /// unsigned version of `char_type`
     using uchar_type = typename std::make_unsigned<char_type>::type;
+    /// limit of `uchar_type`, defines size of mapping table
     static constexpr uchar_type max_uchar = std::numeric_limits<uchar_type>::max();
 
     /// executes the given function on every char in the alphabet
@@ -110,7 +120,7 @@ public:
     inline void for_each_char(Func f) const {
         for (uchar_type c = 0; ; ++c) {
             if (chars_used[c]) {
-                f(c);
+                f(static_cast<char_type>(c));
             }
             if (c == max_uchar)
                 break;
@@ -119,25 +129,22 @@ public:
 
 private:
 
+    /// bitmap of characters in the alphabet
     std::vector<bool> chars_used;
 
     /// maps each unsigned char to a new integer using at most log(sigma+1) bits
     std::vector<uchar_type> mapping_table;
+    /// maps the encoded characters back to their original
     std::vector<char_type> inverse_mapping;
 
+    /// alphabet size (number of unique characters excl. '\0')
     unsigned int m_sigma;
+    /// number of bits each character can be represented/encoded as
     unsigned int m_bits_per_char;
 
-    inline void init_mapping_table() {
-        mapping_table.resize(max_uchar+1, 0);
-        uint16_t mapped = 1; // start with 1 to include special char '\0' ('$')
-        for_each_char([&](uchar_type c) {
-            mapping_table[c] = mapped;
-            ++mapped;
-        });
-    }
 
-    inline void init_sizes() {
+    /// initializes the alphabet size and bit sizes
+    void init_sizes() {
         unsigned int num_chars = 0;
         for_each_char([&](uchar_type) {
             ++num_chars;
@@ -146,13 +153,25 @@ private:
         m_bits_per_char = ceillog2(m_sigma+1);
     }
 
-    inline void init_inverse_mapping() {
+    /// initializes the alphabet mapping table
+    void init_mapping_table() {
+        mapping_table.resize(max_uchar+1, 0);
+        uint16_t mapped = 1; // start with 1 to include special char '\0' ('$')
+        for_each_char([&](uchar_type c) {
+            mapping_table[c] = mapped;
+            ++mapped;
+        });
+    }
+
+    /// initializes the inverse mapping table
+    void init_inverse_mapping() {
         inverse_mapping.push_back('\0');
         for_each_char([&](uchar_type c) {
             inverse_mapping.push_back(c);
         });
     }
 
+    /// constructs the alphabet from a given character frequency histogram
     template <typename count_type>
     alphabet(const std::vector<count_type>& hist) {
         assert(hist.size() == max_uchar+1);
@@ -174,14 +193,14 @@ public:
     alphabet& operator=(const alphabet&) = default;
     alphabet& operator=(alphabet&&) = default;
 
+    /// Constructs the alphabet from a given character frequency histogram
     template <typename index_t>
     static alphabet from_hist(const std::vector<index_t>& hist) {
         alphabet a(hist);
         return a;
     }
 
-
-    // sequential version
+    /// Constructs the alphabet from a given sequence
     template <typename Iterator>
     static alphabet from_sequence(Iterator begin, Iterator end) {
         static_assert(std::is_same<char_type, typename std::iterator_traits<Iterator>::value_type>::value, "Character type of alphabet must match the value type of input sequence");
@@ -189,8 +208,7 @@ public:
         return alphabet::from_hist(alphabet_hist);
     }
 
-
-    // MPI parallel version (performs reduction over histogram)
+    /// Constructs the alphabet from a given distributed sequence (collective call)
     template <typename Iterator>
     static alphabet from_sequence(Iterator begin, Iterator end, const mxx::comm& comm) {
         static_assert(std::is_same<char_type, typename std::iterator_traits<Iterator>::value_type>::value, "Character type of alphabet must match the value type of input sequence");
@@ -199,42 +217,51 @@ public:
         return alphabet::from_hist(alphabet_hist);
     }
 
-    static alphabet from_string(const std::string& str, const mxx::comm& comm) {
+    /// Constructs the alphabet from a given string
+    static alphabet from_string(const std::basic_string<char_type>& str) {
+        return alphabet::from_sequence(str.begin(), str.end());
+    }
+
+    /// Constructs the alphabet from a given distributed string (collective call)
+    static alphabet from_string(const std::basic_string<char_type>& str, const mxx::comm& comm) {
         return alphabet::from_sequence(str.begin(), str.end(), comm);
     }
 
+    /// Constructs the alphabet from a distributed stringset (collective call)
     template <typename StringSet>
     static alphabet from_stringset(const StringSet& ss, const mxx::comm& comm) {
         std::vector<size_t> alphabet_hist = alphabet_histogram<size_t>(ss, comm);
         return alphabet::from_hist(alphabet_hist);
     }
 
+    /// Returns the number of unique characters in the alphabet (i.e. the
+    //  alphabet size)
     inline unsigned int sigma() const {
         return m_sigma;
     }
 
+    /// Returns the alphabet size (same as .sigma())
+    inline unsigned int size() const {
+        return m_sigma;
+    }
+
+    /// Returns the number of bits a single character can be represented by
     inline unsigned int bits_per_char() const {
         return m_bits_per_char;
     }
 
+    /// Returns the number of characters that fit into the given word_type
     template <typename word_type>
     inline unsigned int chars_per_word() const {
         static_assert(sizeof(word_type) >= sizeof(char_type), "expecting the word_type to be larger than the char type");
         unsigned int bits_per_word = sizeof(word_type)*8;
-        // TODO: this is currently a "work-around": if the type is signed, we
-        //       can't use the msb, thus we need to subtract one
+        // if the type is signed, we can't use the msb, thus we need to subtract one
         if (std::is_signed<word_type>::value)
             --bits_per_word;
         return bits_per_word/bits_per_char();
     }
 
-    inline uchar_type encode(char_type c) const {
-        uchar_type uc = c;
-        assert(0 <= uc && uc < mapping_table.size());
-        return mapping_table[uc];
-    }
-
-
+    /// Returns the unique characters in this alphabet
     inline std::vector<char_type> unique_chars() const {
         std::vector<char_type> result;
         for_each_char([&](uchar_type c) {
@@ -243,8 +270,80 @@ public:
         return result;
     }
 
+    /// encodes the given character to use at most `bits_per_char` bits
+    inline uchar_type encode(char_type c) const {
+        uchar_type uc = c;
+        assert(0 <= uc && uc < mapping_table.size());
+        return mapping_table[uc];
+    }
+
+    /// Returns the decoded character from the encoded (compressed) character
     inline char_type decode(uchar_type c) const {
         return inverse_mapping[c];
+    }
+
+    /// equality check
+    bool operator==(const alphabet& o) const {
+        return o.chars_used == this->chars_used && o.m_sigma == this->m_sigma;
+    }
+
+    /// in-equality check
+    bool operator!=(const alphabet& o) const {
+        return !(*this == o);
+    }
+
+    /// write alphabet to file
+    void write_to(std::ostream& os) const {
+        for_each_char([&os](char_type c) {
+            os.write(&c,sizeof(c));
+        });
+    }
+
+    /// read alphabet from file
+    static alphabet read_from(std::istream& is) {
+        // read in everything
+        std::basic_string<char_type> s;
+        char_type c;
+        while (is.read(&c,sizeof(char_type))) {
+            s.push_back(c);
+        }
+        return from_string(s);
+    }
+
+    /// write alphabet to file
+    void write(const std::string& filename) const {
+        std::ofstream f(filename);
+        write_to(f);
+    }
+
+    /// write alphabet to file (collective call)
+    void write(const std::string& filename, const mxx::comm& comm) const {
+        // only one processor writes the file
+        if (comm.rank() == 0) {
+            write(filename);
+        }
+    }
+
+    /// read alphabet from file
+    void read(const std::string& filename) {
+        std::ifstream f(filename);
+        *this = alphabet::read_from(f);
+    }
+
+    /// read alphabet from file (collective call)
+    void read(const std::string& filename, const mxx::comm& comm) {
+        std::basic_string<char_type> s;
+        // only one processor reads the file and then broadcasts the alphabet
+        if (comm.rank() == 0) {
+            std::ifstream f(filename);
+            char_type c;
+            while (f.read(&c,sizeof(char_type))) {
+                s.push_back(c);
+            }
+        }
+        mxx::bcast(s, 0, comm);
+
+        *this = alphabet::from_string(s);
     }
 };
 
@@ -380,8 +479,7 @@ public:
     template <typename word_type>
     inline unsigned int chars_per_word() const {
         unsigned int bits_per_word = sizeof(word_type)*8;
-        // TODO: this is currently a "work-around": if the type is signed, we
-        //       can't use the msb, thus we need to subtract one
+        // if the type is signed, we can't use the msb, thus we need to subtract one
         if (std::is_signed<word_type>::value)
             --bits_per_word;
         return bits_per_word/bits_per_char();
@@ -398,6 +496,9 @@ public:
         // c + min_char - 1
         return c - offset;
     }
+
+    // TODO:
+    // write/read file IO
 };
 
 template <typename char_type>

@@ -79,6 +79,37 @@ TEST(DesaTest,MississippiLocatePossible) {
     }
 }
 
+TEST(DesaTest, FileIO) {
+    mxx::comm c;
+    ASSERT_TRUE(c.size() <= 7) << "the `mississippi` test shouldn't run with more processors than character pairs";
+
+    std::string s;
+    if (c.rank() == 0) {
+        s = "mississippi";
+        std::ofstream f("miss.str");
+        f.write(&s[0],s.size());
+    }
+    std::string input_str = mxx::stable_distribute(s, c);
+    // construct DESA
+    dist_desa<index_t> desa(c);
+    desa.construct(input_str.begin(), input_str.end(), c);
+
+    desa.write("desa_miss", c);
+
+    dist_desa<index_t> desa2(c);
+    desa2.read("miss.str", "desa_miss", c);
+    EXPECT_EQ(desa.sa.local_SA, desa2.sa.local_SA);
+    EXPECT_EQ(desa.sa.local_LCP, desa2.sa.local_LCP);
+    EXPECT_EQ(desa.sa.local_Lc, desa2.sa.local_Lc);
+    EXPECT_EQ(desa.lt.table, desa2.lt.table);
+    EXPECT_EQ(desa.lt.alpha, desa2.lt.alpha);
+
+    // TODO: implement test for loading with smaller/larger nuber of processors
+    // and still check that querying works correctly
+    // -> introduce function to test queries for a given desa
+}
+
+
 TEST(DesaTest,MississippiBulkLocatePossible) {
     mxx::comm c;
 
