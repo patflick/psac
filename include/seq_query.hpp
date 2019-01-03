@@ -12,6 +12,7 @@
 #include <rmq.hpp>
 #include <divsufsort_wrapper.hpp>
 #include <kmer.hpp>
+#include <lookup_table.hpp>
 
 #include <prettyprint.hpp>
 
@@ -543,90 +544,6 @@ struct desa_index : public esa_index<index_t> {
     }
 };
 
-// Top-Level Lookup-Table (small kmer index)
-// also
-// TODO: implement top level trie with dynamic growing (for inbalanced datasets)
-
-#include <alphabet.hpp>
-
-template <typename index_t>
-struct lookup_index {
-    std::vector<index_t> table;
-    unsigned int k;
-    alphabet<char> alpha;
-    using range_t = std::pair<index_t,index_t>;
-
-    template <typename word_type>
-    void construct_from_hist(const std::vector<word_type>& hist, unsigned int k, const alphabet<char>& a) {
-        this->alpha = a;
-        this->k = k;
-
-        if (table.size() != hist.size()) {
-            table.resize(hist.size());
-        }
-        std::partial_sum(hist.begin(), hist.end(), table.begin());
-    }
-
-    template <typename Iterator>
-    void construct(Iterator begin, Iterator end, unsigned int bits, const alphabet<char>& a) {
-        this->alpha = a;
-
-        unsigned int l = this->alpha.bits_per_char();
-        this->k = bits / l;
-        assert(k >= 1);
-
-        // scan through string to create kmer histogram
-        table = kmer_hist<index_t>(begin, end, k, alpha);
-
-        // prefix sum over hist
-        std::partial_sum(table.begin(), table.end(), table.begin());
-    }
-
-    template <typename Iterator>
-    void construct(Iterator begin, Iterator end, unsigned int bits) {
-        // get alphabet?
-        alphabet<char> a = alphabet<char>::from_sequence(begin, end);
-        this->construct(begin, end, bits, a);
-    }
-
-    template <typename String>
-    range_t lookup(const String& P) {
-        unsigned int l = alpha.bits_per_char();
-        assert(l*k < sizeof(index_t)*8);
-
-        if (P.size() >= k) {
-            // create kmer from P
-            index_t kmer = 0;
-            for (size_t i = 0; i < k; ++i) {
-                kmer <<= l;
-                kmer |= alpha.encode(P[i]);
-            }
-
-            if (kmer == 0) {
-                return range_t(0, table[0]);
-            } else {
-                return range_t(table[kmer-1],table[kmer]);
-            }
-        } else {
-            // create partial kmer
-            index_t kmer = 0;
-            for (size_t i = 0; i < P.size(); ++i) {
-                kmer <<= l;
-                kmer |= alpha.encode(P[i]);
-            }
-            size_t extra = k - P.size();
-            for (size_t i = P.size(); i < k; ++i) {
-                kmer <<= l;
-            }
-            if (kmer == 0) {
-                return range_t(0, table[kmer + (1 << (extra*l))-1]);
-            } else {
-                return range_t(table[kmer-1], table[kmer + (1 << (extra*l))-1]);
-            }
-        }
-    }
-};
-
 
 template <typename index_t>
 struct lookup_desa_index : public desa_index<index_t> {
@@ -678,74 +595,5 @@ struct lookup_desa_index : public desa_index<index_t> {
 };
 
 
-// 1D partition: f(lookup-table) -> (p_i -> [l_i, r_i))
-
-// [l, r)
-template <typename index_t>
-void rec_partition(const std::vector<index_t>& tl, size_t l, size_t r, int p0, int p, std::vector<size_t>& pstart) {
-    if (p == 1) {
-        return;
-    }
-
-    if (l == r) {
-        for (int i = p0+1; i < p0+p; ++i) {
-            pstart[i] = l;
-        }
-        return;
-    }
-
-    // p odd: (p+1)/2, (p-1)/2 weighted halfs (extreme case: 2,1)
-    size_t excl = l == 0 ? 0 : tl[l-1];
-    size_t num = tl[r-1] - excl;
-
-    // compute how many elements for each side would be optimal
-    size_t left_size;
-    int left_p;
-    if (p % 2 == 0) {
-        left_size = num/2;
-        left_p = p / 2;
-    } else {
-        // (p+1)/ 2 to the left, (p-1)/2 to the right
-        left_size = (num*(p+1))/(2*p);
-        left_p = (p+1)/2;
-    }
-
-    // find first index which is larger
-    auto it = std::lower_bound(tl.begin()+l, tl.begin()+r, excl+left_size);
-    size_t i = it - tl.begin();
-
-    // decide whether this or the previous split is better (closer to `left size`)
-    if (i > 0) {
-        if (tl[i] - (left_size+excl) > (left_size+excl) - tl[i-1]) {
-            --i;
-        }
-    }
-
-    // left partition is now [l, i], convert to [l, i)
-    ++i;
-
-    // save the result
-    pstart[p0+left_p] = i;
-
-    // p even: find i in tl closest to (tl[l]+tl[r])/2
-    rec_partition(tl, l, i, p0, left_p, pstart);
-    rec_partition(tl, i, r, p0 + left_p, p - left_p, pstart);
-}
-
-template <typename index_t>
-std::vector<size_t> partition(const std::vector<index_t>& tl, int p) {
-    // partition by recursive weighted bisection
-    std::vector<size_t> pstarts(p, 0);
-    rec_partition(tl, 0, tl.size(), 0, p, pstarts);
-    return pstarts;
-}
-
-
-// TODO: - create lookup table using MPI parallel (using the new parallel kmer_hist function)
-//       - then partition via lookup table (in paper mention also other approaches, but for now lookup table should be sufficient)
-//       - implement bottom up on partial trees
-//       - benchmark pizza&chilli with different query lenghts
-
-// create par_query classes with different query impelmeentations and use lookup table for distribution !?
 
 #endif // SEQ_QUERY_HPP

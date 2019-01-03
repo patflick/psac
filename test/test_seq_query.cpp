@@ -3,7 +3,8 @@
 
 #include <prettyprint.hpp>
 
-#include "seq_query.hpp"
+#include <seq_query.hpp>
+#include <partition.hpp> // TODO: move partition tests elsewhere
 
 
 /* type parameterized index test */

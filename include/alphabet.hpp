@@ -20,6 +20,7 @@
 #include <string>
 #include <algorithm>
 #include <mxx/comm.hpp>
+#include <mxx/reduction.hpp>
 
 #include "bitops.hpp"
 
