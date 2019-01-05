@@ -11,7 +11,6 @@
 #include <lcp.hpp>
 #include <rmq.hpp>
 #include <divsufsort_wrapper.hpp>
-#include <kmer.hpp>
 #include <lookup_table.hpp>
 
 #include <prettyprint.hpp>
