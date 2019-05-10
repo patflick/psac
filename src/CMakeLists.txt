@@ -44,6 +44,9 @@ add_executable(print64 print64.cpp)
 
 add_executable(mkpattern mkpattern.cpp)
 
+add_executable(kmer-stats kmer_partition.cpp)
+target_link_libraries(kmer-stats psac-dss-lib)
+
 
 ################
 #  divsufsort  #

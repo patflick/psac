@@ -97,12 +97,12 @@ void rec_partition(const std::vector<index_t>& tl, size_t l, size_t r, int p0, i
  * @param tl    Number of elements in each bin given as an incl. prefix sum
  *              (partial_sum) of bin sizes.
  * @param p     Number of partitions
- * @param pstart    Returns for each parititon, the assigned bins.
- *                  Each `pstart[i]` is the index (number) of the first
- *                  bin assigned to partition `i`.
- *                  I.e., each element is between [0,tl.size()].
- *                  Partition `i` is assigned bins `pstart[i],..,pstart[i+1]`
- *                  or `pstart[i],...,tl.size()` for the last partition.
+ * @return      Returns for each parititon, the assigned bins.
+ *              Each `pstart[i]` is the index (number) of the first
+ *              bin assigned to partition `i`.
+ *              I.e., each element is between [0,tl.size()].
+ *              Partition `i` is assigned bins `pstart[i],..,pstart[i+1]`
+ *              or `pstart[i],...,tl.size()` for the last partition.
  */
 template <typename index_t>
 std::vector<size_t> partition(const std::vector<index_t>& tl, int p) {

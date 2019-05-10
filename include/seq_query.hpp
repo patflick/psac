@@ -17,7 +17,7 @@
 
 #define RMQ_USE_SDSL 0
 
-#if RMQ_USE_SDLS
+#if RMQ_USE_SDSL
 #include <sdsl/rmq_succinct_sada.hpp>
 #endif
 
@@ -345,8 +345,6 @@ struct esa_index : public salcp_index<index_t> {
                 l = i;
                 if (l == r)
                     break;
-                //ii = minq.query(b+l+1, b+r+1);
-                //i = ii - b;
                 i = minq(l+1, r);
             } while (l < r && this->LCP[i] == lcpv);
 
@@ -476,8 +474,8 @@ struct desa_index : public esa_index<index_t> {
         assert(l <= i1);
         assert(i1 <= r);
         do {
-            // `i` is the lcp(SA[i-1],SA[i])
-            char lc = this->Lc[i1]; // == S[SA[l]+lcpv] for first iter
+            // `i` is the lcp(sa[i-1],sa[i])
+            char lc = this->lc[i1]; // == s[sa[l]+lcpv] for first iter
             if (lc == c) {
                 r = i1-1;
                 break;
@@ -489,9 +487,9 @@ struct desa_index : public esa_index<index_t> {
             this->rmqtimer.tic();
             i1 = this->minq(l+1, r);
             this->rmqtimer.toc();
-        } while (l < r && this->LCP[i1] == q);
+        } while (l < r && this->lcp[i1] == q);
 
-        if (this->LCP[i1] == q) {
+        if (this->lcp[i1] == q) {
             if (l+1 < r) {
                 this->rmqtimer.tic();
                 i1 = this->minq(l+1, r);
@@ -500,9 +498,10 @@ struct desa_index : public esa_index<index_t> {
                 i1 = l;
             }
         }
-        q = this->LCP[i1];
+        q = this->lcp[i1];
     }
 
+    /*
     std::pair<index_t,index_t> locate_possible(const std::string& P) {
         size_t n = this->n;
         size_t m = P.size();
@@ -541,6 +540,123 @@ struct desa_index : public esa_index<index_t> {
         }
         return res;
     }
+    */
+
+    /*
+    std::pair<index_t,index_t> locate(const std::string& P) {
+
+        size_t n = this->n;
+        size_t m = P.size();
+        size_t l = 0;
+        size_t r = n-1;
+
+        size_t q = 0; // size of current match
+
+        while (q < m && l < r) {
+
+            // NOTE: LCP[i] = lcp(SA[i-1],SA[i]), LCP[0] = 0
+            // using [l,r] as an inclusive SA range
+            // corresponding to LCP query range [l+1,r]
+
+            // get first child interval and depth
+            size_t i = this->minq(l+1, r);
+            index_t lcpv = this->LCP[i];
+            assert(lcpv >= q);
+
+            // check if we've reached the end of the pattern
+            if (lcpv >= m) {
+                break;
+            }
+
+            char c = P[lcpv];
+            do {
+                // `i` is the lcp(SA[i-1],SA[i])
+                char lc = this->Lc[i]; // == S[SA[l]+lcpv] for first iter
+                if (lc == c) {
+                    r = i-1;
+                    break;
+                }
+                l = i;
+                if (l == r)
+                    break;
+
+                i = this->minq(l+1, r);
+            } while (l < r && this->LCP[i] == lcpv);
+
+            if (this->strbegin[this->SA[l]+lcpv] == c) {
+                // found the interval we were looking for
+                q = lcpv+1;
+            } else {
+                return std::pair<index_t,index_t>(l,l);
+            }
+        }
+        // check if pattern matches
+        if (l <= r) {
+            int cmp = strncmp(&this->strbegin[this->SA[l]], &P[0], P.size());
+            if (cmp != 0) {
+                return std::pair<index_t,index_t>(l, l);
+            }
+        }
+        return std::pair<index_t,index_t>(l, r+1);
+    }
+    */
+
+    std::pair<index_t,index_t> locate(const std::string& P) {
+
+        size_t n = this->n;
+        size_t m = P.size();
+        size_t l = 0;
+        size_t r = n-1;
+
+        // get first child interval and depth
+        size_t i = this->minq(l+1, r);
+        index_t q = this->LCP[i];
+
+        // blind search
+        while (q < m && l < r) {
+
+            // NOTE: LCP[i] = lcp(SA[i-1],SA[i]), LCP[0] = 0
+            // using [l,r] as an inclusive SA range
+            // corresponding to LCP query range [l+1,r]
+
+            // check if we've reached the end of the pattern
+            if (q >= m) {
+                break;
+            }
+
+            do {
+                // `i` is the lcp(SA[i-1],SA[i])
+                char lc = this->Lc[i]; // == S[SA[l]+lcpv] for first iter
+                if (lc == P[q]) {
+                    r = i-1;
+                    break;
+                }
+                l = i;
+                if (l == r)
+                    break;
+
+                i = this->minq(l+1, r);
+            } while (l < r && this->LCP[i] == q);
+
+            if (this->LCP[i] == q) {
+                if (l+1 < r) {
+                    i = this->minq(l+1, r);
+                } else {
+                    i = l;
+                }
+            }
+            q = this->LCP[i];
+        }
+
+        // check if pattern matches the string
+        if (l <= r) {
+            int cmp = strncmp(&this->strbegin[this->SA[l]], &P[0], P.size());
+            if (cmp != 0) {
+                return std::pair<index_t,index_t>(l, l);
+            }
+        }
+        return std::pair<index_t,index_t>(l, r+1);
+    }
 };
 
 
@@ -551,9 +667,150 @@ struct lookup_desa_index : public desa_index<index_t> {
     template <typename Iterator>
     void construct(Iterator begin, Iterator end) {
         desa_index<index_t>::construct(begin, end);
-        tl.construct(begin, end, 5); // automatically size `k` given table size and use alphabet size
+        tl.construct(begin, end, 16); // automatically size `k` given table size and use alphabet size
     }
 
+    std::pair<index_t,index_t> locate(const std::string& P) {
+        size_t m = P.size();
+
+        index_t l, r;
+        std::tie(l, r) = tl.lookup(P);
+        if (l == r) {
+            return std::pair<index_t, index_t>(l,l);
+        }
+        --r; // convert [l,r) to [l,r]
+
+        if (P.size() > tl.k && l <= r) {
+            // further narrow down search space
+            if (l < r) {
+
+                size_t i = this->minq(l+1, r);
+                index_t q = this->LCP[i];
+                assert(q >= tl.k);
+
+                // blind search
+                while (q < m && l < r) {
+
+                    // NOTE: LCP[i] = lcp(SA[i-1],SA[i]), LCP[0] = 0
+                    // using [l,r] as an inclusive SA range
+                    // corresponding to LCP query range [l+1,r]
+
+                    // check if we've reached the end of the pattern
+                    if (q >= m) {
+                        break;
+                    }
+
+                    do {
+                        // `i` is the lcp(SA[i-1],SA[i])
+                        char lc = this->Lc[i]; // == S[SA[l]+q] for first iter
+                        if (lc == P[q]) {
+                            r = i-1;
+                            break;
+                        }
+                        l = i;
+                        if (l == r)
+                            break;
+                        i = this->minq(l+1, r);
+                    } while (l < r && this->LCP[i] == q);
+
+                    if (this->LCP[i] == q) {
+                        if (l+1 < r) {
+                            i = this->minq(l+1, r);
+                        } else {
+                            i = l;
+                        }
+                    }
+                    q = this->LCP[i];
+                }
+            }
+
+            // check if pattern matches
+            if (l <= r) {
+                int cmp = strncmp(&this->strbegin[this->SA[l]], &P[0], P.size());
+                if (cmp == 0) {
+                    return std::pair<index_t, index_t>(l, r+1);
+                } else {
+                    // no match
+                    return std::pair<index_t,index_t>(l, l);
+                }
+            }
+        }
+        return std::pair<index_t,index_t>(l, r+1);
+    }
+    /*
+    std::pair<index_t,index_t> locate(const std::string& P) {
+        size_t n = this->n;
+        size_t m = P.size();
+
+        index_t l, r;
+        std::tie(l, r) = tl.lookup(P);
+        if (l == r) {
+            return std::pair<index_t, index_t>(l,l);
+        }
+        --r; // convert [l,r) to [l,r]
+
+        if (P.size() > tl.k && l <= r) {
+            // further narrow down search space
+            if (l < r) {
+
+                size_t i = this->minq(l+1, r);
+                size_t q = this->LCP[i];
+                assert(q >= tl.k);
+
+                while (q < m && l < r) {
+
+                    // NOTE: LCP[i] = lcp(SA[i-1],SA[i]), LCP[0] = 0
+                    // using [l,r] as an inclusive SA range
+                    // corresponding to LCP query range [l+1,r]
+
+                    // get first child interval and depth
+                    size_t i = this->minq(l+1, r);
+                    index_t lcpv = this->LCP[i];
+                    assert(lcpv >= q);
+
+                    // check if we've reached the end of the pattern
+                    if (lcpv >= m) {
+                        break;
+                    }
+
+                    char c = P[lcpv];
+                    do {
+                        // `i` is the lcp(SA[i-1],SA[i])
+                        char lc = this->Lc[i]; // == S[SA[l]+lcpv] for first iter
+                        if (lc == c) {
+                            r = i-1;
+                            break;
+                        }
+                        l = i;
+                        if (l == r)
+                            break;
+                        i = this->minq(l+1, r);
+                    } while (l < r && this->LCP[i] == lcpv);
+
+                    if (this->strbegin[this->SA[l]+lcpv] == c) {
+                        // found the interval we were looking for
+                        q = lcpv+1;
+                    } else {
+                        return std::pair<index_t,index_t>(l,l);
+                    }
+                }
+            }
+
+            // check if pattern matches
+            if (l <= r) {
+                int cmp = strncmp(&this->strbegin[this->SA[l]], &P[0], P.size());
+                if (cmp == 0) {
+                    return std::pair<index_t, index_t>(l, r+1);
+                } else {
+                    // no match
+                    return std::pair<index_t,index_t>(l, l);
+                }
+            }
+        }
+        return std::pair<index_t,index_t>(l, r+1);
+    }
+    */
+    /*
     std::pair<index_t,index_t> locate(const std::string& P) {
         size_t m = P.size();
 
@@ -591,6 +848,7 @@ struct lookup_desa_index : public desa_index<index_t> {
         }
         return std::pair<index_t,index_t>(l, r+1);
     }
+    */
 };
 
 

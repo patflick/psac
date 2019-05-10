@@ -92,7 +92,7 @@ struct dist_desa {
 
     /// inverse partition mapping
     // map each processor start index -> processor index
-    std::map<size_t, int> lt_proc;
+    std::map<size_t, int> lt_proc; // XXX: possibly optimize: use vector and binary search
 
     /// global size of input and arrays
     size_t n;
@@ -336,7 +336,6 @@ struct dist_desa {
         n = mxx::allreduce(local_str.size(), comm);
         str_dist = mxx::blk_dist(n, comm.size(), comm.rank());
         t.end_section("desa_read: read str");
-        mxx::sync_cout(comm) << "local_str= " << local_str << std::endl;
 
         // read SA
         sa.read(basename);
@@ -386,9 +385,9 @@ struct dist_desa {
         q = sa.local_LCP[i1];
     }
 
-
+#if 0
     template <typename String>
-    range_t local_locate_possible(const String& P, size_t l, size_t r) {
+    inline range_t local_locate_possible(const String& P, size_t l, size_t r) {
         assert(my_begin <= l && r < my_end);
         size_t m = P.size();
 
@@ -413,6 +412,65 @@ struct dist_desa {
         }
         return range_t(l+my_begin, r+1+my_begin);
     }
+#else 
+
+    // manually in-lined version
+    template <typename String>
+    inline range_t local_locate_possible(const String& P, size_t l, size_t r) {
+        assert(my_begin <= l && r < my_end);
+        size_t m = P.size();
+
+        // convert to local coords
+        l -= my_begin;
+        r -= my_begin;
+        if (P.size() > lt.k && l <= r) {
+            // further narrow down search space
+            if (l < r) {
+
+                size_t i = this->minq(l+1, r);
+                size_t q = sa.local_LCP[i];
+                assert(q >= lt.k);
+
+                while (q < m && l < r && l < i) {
+
+                    // NOTE: LCP[i] = lcp(SA[i-1],SA[i]), LCP[0] = 0
+                    // using [l,r] as an inclusive SA range
+                    // corresponding to LCP query range [l+1,r]
+
+                    // check if we've reached the end of the pattern
+                    if (q >= m) {
+                        break;
+                    }
+
+                    char c = P[q];
+                    do {
+                        // `i` is the lcp(SA[i-1],SA[i])
+                        char lc = sa.local_Lc[i]; // == S[SA[l]+lcpv] for first iter
+                        if (lc == c) {
+                            r = i-1;
+                            break;
+                        }
+                        l = i;
+                        if (l == r)
+                            break;
+                        i = this->minq(l+1, r);
+                    } while (l < r && sa.local_LCP[i] == q);
+
+                    if (sa.local_LCP[i] == q) {
+                        if (l+1 < r) {
+                            i = this->minq(l+1, r);
+                        } else {
+                            i = l;
+                        }
+                    }
+                    q = sa.local_LCP[i];
+                }
+            }
+        }
+        return range_t(l+my_begin, r+1+my_begin);
+    }
+
+#endif
 
     template <typename String>
     range_t local_locate_possible(const String& P) {
@@ -426,19 +484,6 @@ struct dist_desa {
 
         return local_locate_possible(P, l, r);
     }
-
-        /* TODO:
-            // check if pattern matches
-            if (l <= r) {
-                int cmp = strncmp(&this->strbegin[this->SA[l]], &P[0], P.size());
-                if (cmp == 0) {
-                    return std::pair<index_t, index_t>(l, r+1);
-                } else {
-                    // no match
-                    return std::pair<index_t,index_t>(l, l);
-                }
-            }
-        */
 
     /// execute in parallel (each processor checks the lookup table) and
     /// proceeds only if it's the owner of the pattern
