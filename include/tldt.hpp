@@ -194,7 +194,7 @@ std::vector<T> send_vec_left(const std::vector<T>& vec, const mxx::comm& c) {
                  &recv_size, 1, size_dt.type(), src, 0, c, MPI_STATUS_IGNORE);
 
     std::vector<T> res(recv_size);
-    MPI_Sendrecv(vec.data(), send_size, dt.type(), dst, 0,
+    MPI_Sendrecv(const_cast<T*>(vec.data()), send_size, dt.type(), dst, 0,
                  res.data(), recv_size, dt.type(), src, 0, c, MPI_STATUS_IGNORE);
 
     return res;
