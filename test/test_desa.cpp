@@ -18,6 +18,7 @@
 
 #include "seq_query.hpp"
 #include "desa.hpp"
+#include "tldt.hpp"
 
 
 using index_t = uint64_t;
@@ -101,14 +102,15 @@ TEST(DesaTest, FileIO) {
     EXPECT_EQ(desa.sa.local_SA, desa2.sa.local_SA);
     EXPECT_EQ(desa.sa.local_LCP, desa2.sa.local_LCP);
     EXPECT_EQ(desa.sa.local_Lc, desa2.sa.local_Lc);
-    EXPECT_EQ(desa.lt.table, desa2.lt.table);
-    EXPECT_EQ(desa.lt.alpha, desa2.lt.alpha);
+    EXPECT_EQ(desa.tli.idx.table, desa2.tli.idx.table);
+    EXPECT_EQ(desa.tli.idx.alpha, desa2.tli.idx.alpha);
 
     // TODO: implement test for loading with smaller/larger nuber of processors
     // and still check that querying works correctly
     // -> introduce function to test queries for a given desa
 }
 
+#define PV(x, c) mxx::sync_cout(c) << "[" << c.rank() << "] " << "" # x  " = " << x << std::endl;
 
 TEST(DesaTest,MississippiBulkLocatePossible) {
     mxx::comm c;
@@ -121,8 +123,15 @@ TEST(DesaTest,MississippiBulkLocatePossible) {
     }
     std::string input_str = mxx::stable_distribute(s, c);
     // construct DESA
-    dist_desa<index_t> idx(c);
+    dist_desa<index_t, tldt<index_t>> idx(c);
     idx.construct(input_str.begin(), input_str.end(), c);
+
+    PV(input_str, c);
+    PV(idx.sa.local_LCP, c);
+    PV(idx.sa.local_SA, c);
+    PV(idx.tli.prefix(), c);
+    PV(idx.tli.idx.LCP, c);
+
 
     // create `strings` from patterns
     auto patterns = mississippi_testcase();

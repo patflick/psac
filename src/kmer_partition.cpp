@@ -33,6 +33,7 @@
 #include <partition.hpp>
 #include <seq_query.hpp>
 #include <rmq.hpp>
+#include <tldt.hpp>
 
 std::string file2string(const std::string& filename) {
     // read input file into in-memory string
@@ -43,6 +44,7 @@ std::string file2string(const std::string& filename) {
     input_str = buffer.str();
     return input_str;
 }
+
 
 template <typename index_t>
 struct tl_desa {
@@ -58,64 +60,16 @@ struct tl_desa {
 
     void construct(const std::vector<index_t>& LCP, const std::vector<char> Lc, index_t maxsize) {
         // local ansv !?
-        index_t n = LCP.size();
-        total_size = n;
+        off = sample_lcp(LCP, maxsize);
 
-        struct node {
-            index_t lcp;
-            index_t pos;
-            index_t l;
-        };
+        // create sampled DESA
+        std::cout << "creating TL DT with " << off.size() << " els" << std::endl;
+        lcp.resize(off.size());
+        lc.resize(off.size());
 
-        std::stack<node> st;
-        st.push(node{0,0,0});
-
-        index_t total_out = 1;
-        std::vector<bool> do_output(n, false);
-        do_output[0] = true;
-
-        for (index_t i = 1; i < n; ++i) {
-            if (LCP[i] == 0) {
-                do_output[i] = true;
-                ++total_out;
-                continue;
-            }
-            while (!st.empty() && st.top().lcp > LCP[i]) {
-                node u = st.top();
-                st.pop();
-                // u.pos has range [u.l, .. , i)
-                index_t parent_size = i - u.l;
-                if (parent_size > maxsize) {
-                    // output but in inverse order !?
-                    do_output[u.pos] = true;
-                    ++total_out;
-                }
-            }
-
-            if (st.empty()) {
-                // cant happen
-                assert(false);
-            } else if (st.top().lcp == LCP[i]) {
-                st.push(node{LCP[i], i, st.top().l});
-            } else {
-                assert(st.top().lcp < LCP[i]);
-                st.push(node{LCP[i], i, st.top().pos});
-            }
-        }
-
-        std::cout << "creating TL DT with " << total_out << " els" << std::endl;
-        lcp.resize(total_out);
-        lc.resize(total_out);
-        off.resize(total_out);
-
-        index_t j = 0;
-        for (index_t i = 0; i < n; ++i) {
-            if (do_output[i]) {
-                lcp[j] = LCP[i];
-                lc[j] = Lc[i];
-                off[j] = i;
-                ++j;
-            }
+        for (size_t i = 0; i < off.size(); ++i) {
+            lcp[i] = LCP[off[i]];
+            lc[i] = Lc[off[i]];
         }
 
         // constrct RMQ over new sampled LCP

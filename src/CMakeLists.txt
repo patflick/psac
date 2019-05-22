@@ -18,6 +18,8 @@ target_link_libraries(gsac psac-dss-lib)
 add_executable(desa-main desa_main.cpp)
 target_link_libraries(desa-main psac-dss-lib)
 
+add_executable(test-slcp test_slcp.cpp)
+target_link_libraries(test-slcp psac-dss-lib)
 
 ################
 #  benchmarks  #

@@ -293,7 +293,7 @@ struct esa_index : public salcp_index<index_t> {
 #endif
     }
 
-    std::pair<index_t,index_t> locate(const std::string& P) {
+    std::pair<index_t,index_t> locate(const std::string& P) const {
 
         size_t n = this->n;
         size_t m = P.size();
@@ -369,7 +369,7 @@ template <typename index_t>
 struct bs_esa_index : public esa_index<index_t> {
     using it_t = typename std::vector<index_t>::const_iterator;
 
-    std::pair<index_t, index_t> locate(const std::string& P) {
+    std::pair<index_t, index_t> locate(const std::string& P) const {
         size_t n = this->n;
         size_t m = P.size();
         size_t l = 0;
@@ -469,7 +469,7 @@ struct desa_index : public esa_index<index_t> {
     // a ST node is virtually represented by it's interval [l,r] and it's first
     // child split point `i1`, where LCP[i1] = minLCP[l..r] is the string
     // depths `q` of the node. `c` is P[q], the (q+1)th char in P
-    inline void find_child(size_t& l, size_t& i1, size_t& r, size_t& q, char c) {
+    inline void find_child(size_t& l, size_t& i1, size_t& r, size_t& q, char c) const {
         assert(l < r);
         assert(l <= i1);
         assert(i1 <= r);
@@ -601,7 +601,59 @@ struct desa_index : public esa_index<index_t> {
     }
     */
 
-    std::pair<index_t,index_t> locate(const std::string& P) {
+
+    template <typename String>
+    inline std::pair<index_t,index_t> locate_possible(const String& P) const {
+
+        size_t n = this->n;
+        size_t m = P.size();
+        size_t l = 0;
+        size_t r = n-1;
+
+        // get first child interval and depth
+        size_t i = this->minq(l+1, r);
+        index_t q = this->LCP[i];
+
+        // blind search
+        while (q < m && l < r) {
+
+            // NOTE: LCP[i] = lcp(SA[i-1],SA[i]), LCP[0] = 0
+            // using [l,r] as an inclusive SA range
+            // corresponding to LCP query range [l+1,r]
+
+            // check if we've reached the end of the pattern
+            if (q >= m) {
+                break;
+            }
+
+            do {
+                // `i` is the lcp(SA[i-1],SA[i])
+                char lc = this->Lc[i]; // == S[SA[l]+lcpv] for first iter
+                if (lc == P[q]) {
+                    r = i-1;
+                    break;
+                }
+                l = i;
+                if (l == r)
+                    break;
+
+                i = this->minq(l+1, r);
+            } while (l < r && this->LCP[i] == q);
+
+            if (this->LCP[i] == q) {
+                if (l+1 < r) {
+                    i = this->minq(l+1, r);
+                } else {
+                    i = l;
+                }
+            }
+            q = this->LCP[i];
+        }
+        return std::pair<index_t,index_t>(l, r+1);
+    }
+
+
+    std::pair<index_t,index_t> locate(const std::string& P) const {
 
         size_t n = this->n;
         size_t m = P.size();
@@ -670,7 +722,7 @@ struct lookup_desa_index : public desa_index<index_t> {
         tl.construct(begin, end, 16); // automatically size `k` given table size and use alphabet size
     }
 
-    std::pair<index_t,index_t> locate(const std::string& P) {
+    std::pair<index_t,index_t> locate(const std::string& P) const {
         size_t m = P.size();
 
         index_t l, r;

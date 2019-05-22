@@ -111,7 +111,7 @@ struct lookup_index {
      * @return  Range [l,r) of sorted suffixes where `P[0..k-1]` occurs.
      */
     template <typename String>
-    range_t lookup(const String& P) {
+    range_t lookup(const String& P) const {
         unsigned int l = alpha.bits_per_char();
         assert(l*k < sizeof(index_t)*8);
 

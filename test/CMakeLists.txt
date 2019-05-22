@@ -10,6 +10,9 @@ target_link_libraries(test-bitops psaclib mxx-gtest-main)
 add_executable(test-rmq test_rmq.cpp)
 target_link_libraries(test-rmq psaclib mxx-gtest-main)
 
+add_executable(test-samplelcp test_samplelcp.cpp)
+target_link_libraries(test-samplelcp psac-dss-lib mxx-gtest-main)
+
 # Parallel tests
 add_executable(test-ansv test_ansv.cpp)
 target_link_libraries(test-ansv psaclib mxx-gtest-main)
