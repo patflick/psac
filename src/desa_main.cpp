@@ -20,7 +20,13 @@
 
 #include "seq_query.hpp"
 #include "desa.hpp"
+#include "tldt.hpp"
 
+// define index and TLI types for experiment
+using index_t = uint64_t;
+using TLI_t = tldt<index_t>;
+//using TLI_t = tllt<index_t>;
+using desa_t = dist_desa<index_t, TLI_t>;
 
 int main(int argc, char *argv[]) {
     // set up mxx / MPI
@@ -55,9 +61,8 @@ int main(int argc, char *argv[]) {
         mxx::section_timer t;
 
         // create distributed DESA class
-        using index_t = uint64_t;
-        using range_t = dist_desa<index_t>::range_t;
-        dist_desa<index_t> idx(c);
+        using range_t = desa_t::range_t;
+        desa_t idx(c);
 
         if (constructArg.getValue()) {
             if (c.rank() == 0) {
