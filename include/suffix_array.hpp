@@ -139,17 +139,29 @@ void write_dist_int_array(const std::string& basename, const std::vector<T>& vec
 template <typename T>
 std::vector<T> read_dist_int_array(const std::string& filename, const mxx::comm& comm) {
     static_assert(std::is_integral<T>::value && !std::is_same<T,bool>::value, "This function works only for integral types excluding bool");
-    // TODO: make sure the file ending matches the type size?
 
-    mxx::coll_file f(filename, comm);
-    f.open(MPI_MODE_RDONLY);
-
-    size_t nbytes = f.get_size();
-    size_t n = nbytes / sizeof(T);
+    std::ifstream f(filename, std::ios::binary | std::ios::ate);
+    size_t n = f.tellg() / sizeof(T);
     mxx::blk_dist d(n, comm);
 
+    // Use C++ fileIO if local size is larger than INT_MAX
+    // because some MPI implementations will silently fail to load the input
+    // file otherwise
     std::vector<T> data(d.local_size());
-    f.read_ordered(d.local_size(), data.data());
+    if ((n + comm.size())*sizeof(T) / comm.size() >= std::numeric_limits<int>::max()) {
+        if (comm.rank() == 0) {
+            std::cerr << "[WARNING] local size is larger than INT_MAX, using C++ file IO instead of MPI IO" << std::endl;
+        }
+        f.seekg(d.eprefix_size(), std::ios::beg);
+        f.read((char*)data.data(), d.local_size()*sizeof(T));
+    } else {
+        // use MPI File IO
+        f.close();
+        mxx::coll_file f2(filename, comm);
+        f2.open(MPI_MODE_RDONLY);
+        f2.read_ordered(d.local_size(), data.data());
+    }
+
     return data;
 }
 

@@ -254,8 +254,11 @@ struct dist_desa {
 
     /// naive implementation of L_c construciton
     // (used only for runtime comparison with the better algorithm)
-#if 0
+#if 1
+    std::vector<char> local_Lc;
+
     void naive_construct_Lc() {
+        size_t local_size = sa.local_SA.size();
         sa.comm.with_subset(sa.local_SA.size() > 0, [&](const mxx::comm& comm) {
         // Note:
         //  LCP[i] = lcp(SA[i-1],SA[i])
@@ -311,36 +314,6 @@ struct dist_desa {
             }
         }
         });
-
-        // TODO: sometimes the very first element of the redistributed Lc array
-        //       doesn't match with the naive version. This doesn't make a difference
-        //       in querying, bc we never need the first character in the local array
-        //       (it's getting skipped by the top level table)
-        // TODO: eventually figure out why!? not really necessary tho
-        /*
-        if (sa.local_Lc != local_Lc) {
-            //std::cerr << "rank " << comm.rank() << ": local Lc arrays are different" << std::endl;
-            fprintf(stderr, "rank %i: local Lc arrays are different!\n", comm.rank()); fflush(stderr);
-            if (sa.local_Lc.size() == local_Lc.size()) {
-                size_t tot = 0;
-                for (size_t i = 0; i < sa.local_Lc.size(); ++i) {
-                    if (sa.local_Lc[i] != local_Lc[i]) {
-                        if (tot < 5) {
-                            fprintf(stderr, "rank %i: sa.lc[%lu]=%c != lc[%lu]=%c\n", comm.rank(), i, sa.local_Lc[i], i, local_Lc[i]); fflush(stdout);
-                            //std::cerr << "rank " << comm.rank() <<  ": sa.lc[" << i << "=" << sa.local_Lc[i] << " != " << local_Lc[i] << "=lc[" << i << "]" << std::endl;
-                        }
-                        ++tot;
-                    }
-                }
-                fprintf(stderr, "rank %i: total diff %lu\n", comm.rank(), tot); fflush(stderr);
-                //std::cerr << "rank " << comm.rank() << ": total diff " << tot << std::endl;
-            } else {
-            std::cerr << "SIZES DON'T MATCH" << std::endl;
-            }
-        } else {
-            std::cerr << "YAYAYAYAYAYAY the Lc array works!!!!!" << std::endl;
-        }
-        */
     }
 #endif
 
@@ -369,9 +342,10 @@ struct dist_desa {
         t.end_section("desa_construct: SA/LCP construct");
 
         tli.construct(sa, local_str, comm);
-        t.end_section("desa_construct: q-mer hist");
+        t.end_section("desa_construct: TLI construct");
 
         subtree_dist = gen_dist::from_prefix_sizes(tli.prefix(), comm);
+        t.end_section("desa_construct: 1-D partition");
         repartition(comm);
         subtree_dist.print_imbalance_stats(comm);
         t.end_section("desa_construct: repartition");
@@ -383,10 +357,8 @@ struct dist_desa {
         }
         t.end_section("desa_construct: RMQ construct");
 
-        /*
         naive_construct_Lc();
         t.end_section("desa_construct: Lc naive construct");
-        */
     }
 
     /// write distributed DESA to files using parallel IO

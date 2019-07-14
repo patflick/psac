@@ -208,7 +208,7 @@ std::vector<T> send_vec_left(const std::vector<T>& vec, const mxx::comm& c) {
 #define ASSERT_LT(x, y) ASSERT_TRUE((x) < (y))
 #endif
 
-//#define PV(x, c) mxx::sync_cout(c) << "[" << c.rank() << "] " << "" # x  " = " << x << std::endl;
+#define PV(x, c) mxx::sync_cout(c) << "[" << c.rank() << "] " << "" # x  " = " << x << std::endl;
 
 template <typename index_t>
 void seq_check_sample(const std::vector<index_t>& LCP, const std::vector<index_t>& off, index_t maxsize) {
@@ -466,7 +466,7 @@ struct tldt {
     template <typename String>
     inline range_t lookup(const String& P) const {
         range_t r = idx.locate_possible(P);
-        return range_t(offsets[r.first], r.second == offsets.size() ? n : offsets[r.second]);
+        return range_t(offsets[r.first], r.first+1 == offsets.size() ? n : offsets[r.first+1]);
     }
 };
 
