@@ -28,6 +28,8 @@
 #include <mxx/bcast.hpp>
 #include <mxx/file.hpp>
 
+#define DESA_CONSTR_NAIVE_LC 0
+
 
 /**
  * @brief Redistribute a distributed vector `v`, so that the calling processor
@@ -232,9 +234,6 @@ struct dist_desa {
     //lookup_index<index_t> lt; // shared kmer lookup table
     TLI tli;
 
-    /// ?? do I still need this?
-    //std::vector<char> local_Lc;
-
     /// global size of input and arrays
     size_t n;
 
@@ -254,7 +253,7 @@ struct dist_desa {
 
     /// naive implementation of L_c construciton
     // (used only for runtime comparison with the better algorithm)
-#if 1
+#if DESA_CONSTR_NAIVE_LC
     std::vector<char> local_Lc;
 
     void naive_construct_Lc() {
@@ -357,8 +356,10 @@ struct dist_desa {
         }
         t.end_section("desa_construct: RMQ construct");
 
+#if DESA_CONSTR_NAIVE_LC
         naive_construct_Lc();
         t.end_section("desa_construct: Lc naive construct");
+#endif
     }
 
     /// write distributed DESA to files using parallel IO

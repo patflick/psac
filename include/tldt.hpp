@@ -466,7 +466,7 @@ struct tldt {
     template <typename String>
     inline range_t lookup(const String& P) const {
         range_t r = idx.locate_possible(P);
-        return range_t(offsets[r.first], r.first+1 == offsets.size() ? n : offsets[r.first+1]);
+        return range_t(offsets[r.first], r.second == offsets.size() ? n : offsets[r.second]);
     }
 };
 
