@@ -4,6 +4,7 @@ Parallel Suffix Array and Tree Construction
 [![Build Status](https://travis-ci.org/patflick/psac.svg?branch=master)](https://travis-ci.org/patflick/psac)
 [![Test Coverage](https://img.shields.io/codecov/c/github/patflick/psac.svg)](http://codecov.io/github/patflick/psac?branch=master)
 [![Apache 2.0 License](https://img.shields.io/badge/license-Apache%20v2.0-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/31983841.svg)](https://zenodo.org/badge/latestdoi/31983841)
 
 This library implements a distributed-memory parallel algorithm for the
 construction of suffix arrays, LCP arrays, and suffix trees. The algorithm is implemented in `C++11`
