@@ -10,8 +10,13 @@ This library implements a distributed-memory parallel algorithm for the
 construction of suffix arrays, LCP arrays, and suffix trees. The algorithm is implemented in `C++11`
 and `MPI`.
 
-The algorithm implemented by this codebase is described in the following peer-reviewed publication. Please cite this paper, when using our code for academic purposes:
+The algorithms implemented by this codebase are described in the following peer-reviewed publications. Please cite these papers, when using our code for academic purposes:
 > **Flick, Patrick, and Srinivas Aluru.** "Parallel distributed memory construction of suffix and longest common prefix arrays." *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis*, ACM, 2015. [![dx.doi.org/10.1145/2807591.2807609](https://img.shields.io/badge/doi-10.1145%2F2807591.2807609-blue.svg)](http://dx.doi.org/10.1145/2807591.2807609)
+
+> **Flick, Patrick, and Srinivas Aluru.** "Parallel Construction of Suffix Trees and the All-Nearest-Smaller-Values Problem." *2017 IEEE International Parallel and Distributed Processing Symposium (IPDPS)*, IEEE, 2017. 
+[![https://doi.org/10.1109/IPDPS.2017.62](https://img.shields.io/badge/doi-10.1109%2FIPDPS.2017.62-blue)](https://doi.org/10.1109/IPDPS.2017.62)
+
+> **Flick, Patrick, and Srinivas Aluru.** "Distributed Enhanced Suffix Arrays: Efficient Algorithms for Construction and Querying." *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis*, ACM, 2019. ![paper-accepted](https://img.shields.io/badge/doi-paper--accepted-blue)
 
 ## Code organization
 
