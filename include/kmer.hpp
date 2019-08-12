@@ -125,6 +125,8 @@ void par_for_each_kmer(InputIterator begin, InputIterator end, unsigned int k, c
     if (kmer_mask == 0)
         kmer_mask = ~static_cast<word_type>(0);
 
+    MXX_ASSERT(std::distance(begin,end) >= k-1);
+
     // fill first k-mer (until k-1 positions) and send to left processor
     // filling k-mer with first character = MSBs for lexicographical ordering
     InputIterator str_it = begin;
